@@ -73,6 +73,12 @@ TEXTS = {
         "🚫 Вы отклонили исправление. Пост не опубликован.",
         "",
     ),
+    "sub_required": (
+        "Просьба подписаться",
+        "Чтобы пользоваться ботом, подпишитесь на каналы/чаты ниже и нажмите «Я подписался»:",
+        "",
+    ),
+    "sub_not_yet": ("Подписка не найдена", "Вы ещё не подписались на все каналы/чаты.", ""),
     "closed": ("Приём закрыт", "Приём заявок временно закрыт.", ""),
 }
 
@@ -99,6 +105,8 @@ async def init_db():
             mod_chat_id BIGINT, mod_msg_id BIGINT);
         CREATE TABLE IF NOT EXISTS pending(
             admin_id BIGINT PRIMARY KEY, request_id INT NOT NULL, action TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS subs(
+            id SERIAL PRIMARY KEY, chat_id BIGINT UNIQUE NOT NULL, title TEXT, link TEXT NOT NULL);
         """
     )
     if await pool.fetchval("SELECT count(*) FROM topics") == 0:
@@ -222,22 +230,81 @@ class AdminFlow(StatesGroup):
     edit_text = State()
     add_admin = State()
     add_topic = State()
+    add_sub = State()
+    welcome_photo = State()
 
 
 # ---------------------------------------------------------------- commands
-@router.message(CommandStart(), F.chat.type == "private")
-async def cmd_start(m: Message, state: FSMContext):
-    await state.clear()
-    await m.answer(await get_text("welcome"))
+async def not_subscribed(bot: Bot, uid):
+    """Список обязательных чатов, на которые пользователь НЕ подписан."""
+    missing = []
+    for s in await pool.fetch("SELECT * FROM subs ORDER BY id"):
+        try:
+            mem = await bot.get_chat_member(s["chat_id"], uid)
+            if mem.status in ("left", "kicked"):
+                missing.append(s)
+            elif mem.status == "restricted" and not getattr(mem, "is_member", True):
+                missing.append(s)
+        except Exception as e:
+            # бот не видит чат (выгнали / не админ) — не блокируем пользователей
+            log.warning("sub check failed for %s: %s", s["chat_id"], e)
+    return missing
+
+
+async def send_sub_prompt(bot: Bot, chat_id, missing):
+    b = InlineKeyboardBuilder()
+    for s in missing:
+        b.button(text=f"📢 {s['title'] or 'Подписаться'}", url=s["link"])
+    b.button(text="✅ Я подписался", callback_data="sub:check")
+    b.adjust(1)
+    await bot.send_message(chat_id, await get_text("sub_required"), reply_markup=b.as_markup())
+
+
+async def send_welcome(bot: Bot, chat_id):
+    text = await get_text("welcome")
+    photo = await get_setting("welcome_photo")
+    if photo:
+        try:
+            if len(text) <= 1024:
+                await bot.send_photo(chat_id, photo, caption=text)
+                return
+            await bot.send_photo(chat_id, photo)
+        except Exception:
+            log.exception("welcome photo failed")
+    await bot.send_message(chat_id, text)
+
+
+async def start_flow(bot: Bot, chat_id, uid):
+    missing = await not_subscribed(bot, uid)
+    if missing:
+        return await send_sub_prompt(bot, chat_id, missing)
+    await send_welcome(bot, chat_id)
     rows = await pool.fetch("SELECT * FROM topics WHERE thread_id IS NOT NULL ORDER BY sort, id")
     if not rows:
-        await m.answer(await get_text("closed"))
-        return
+        return await bot.send_message(chat_id, await get_text("closed"))
     b = InlineKeyboardBuilder()
     for t in rows:
         b.button(text=t["name"], callback_data=f"t:{t['id']}")
     b.adjust(2)
-    await m.answer(await get_text("choose_topic"), reply_markup=b.as_markup())
+    await bot.send_message(chat_id, await get_text("choose_topic"), reply_markup=b.as_markup())
+
+
+@router.message(CommandStart(), F.chat.type == "private")
+async def cmd_start(m: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    await start_flow(bot, m.chat.id, m.from_user.id)
+
+
+@router.callback_query(F.data == "sub:check")
+async def cb_sub_check(cb: CallbackQuery, bot: Bot):
+    if await not_subscribed(bot, cb.from_user.id):
+        return await cb.answer(await get_text("sub_not_yet"), show_alert=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    await cb.answer()
+    await start_flow(bot, cb.message.chat.id, cb.from_user.id)
 
 
 @router.message(Command("cancel"))
@@ -283,7 +350,11 @@ async def cb_bind(cb: CallbackQuery):
 
 # ---------------------------------------------------------------- user flow
 @router.callback_query(F.data.startswith("t:"))
-async def cb_topic(cb: CallbackQuery, state: FSMContext):
+async def cb_topic(cb: CallbackQuery, state: FSMContext, bot: Bot):
+    missing = await not_subscribed(bot, cb.from_user.id)
+    if missing:
+        await send_sub_prompt(bot, cb.message.chat.id, missing)
+        return await cb.answer()
     t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", int(cb.data[2:]))
     if not t or t["thread_id"] is None:
         return await cb.answer("Эта тема недоступна", show_alert=True)
@@ -447,6 +518,8 @@ def panel_kb(main: bool):
         b.button(text="📝 Тексты", callback_data="a:texts")
         b.button(text="📂 Темы", callback_data="a:topics")
         b.button(text="👮 Админы", callback_data="a:admins")
+        b.button(text="🔔 Подписка", callback_data="a:subs")
+        b.button(text="🖼 Картинка приветствия", callback_data="a:pic")
         b.button(text="ℹ️ Статус", callback_data="a:status")
         b.adjust(2)
     return b.as_markup()
@@ -515,6 +588,29 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
         b.button(text="⬅️ В панель", callback_data="a:home")
         b.adjust(1)
         await cb.message.edit_text("\n".join(lines), reply_markup=b.as_markup())
+    elif act == "subs":
+        rows = await pool.fetch("SELECT * FROM subs ORDER BY id")
+        b = InlineKeyboardBuilder()
+        b.button(text="➕ Добавить канал/чат", callback_data="sb:add")
+        for s in rows:
+            b.button(text="🗑 " + (s["title"] or str(s["chat_id"])), callback_data=f"sb:del:{s['id']}")
+        b.button(text="⬅️ В панель", callback_data="a:home")
+        b.adjust(1)
+        lines = "\n".join("• " + (s["title"] or str(s["chat_id"])) for s in rows)
+        await cb.message.edit_text(
+            "Обязательная подписка.\n\n" + (lines or "Список пуст — проверка выключена.") +
+            "\n\nБот должен быть админом в канале (в группе достаточно участника).",
+            reply_markup=b.as_markup())
+    elif act == "pic":
+        has = bool(await get_setting("welcome_photo"))
+        b = InlineKeyboardBuilder()
+        b.button(text="📤 Загрузить/заменить", callback_data="pic:set")
+        if has:
+            b.button(text="🗑 Убрать картинку", callback_data="pic:del")
+        b.button(text="⬅️ В панель", callback_data="a:home")
+        b.adjust(1)
+        await cb.message.edit_text(
+            "Картинка приветствия: " + ("есть ✅" if has else "нет"), reply_markup=b.as_markup())
     elif act == "status":
         mod = await get_setting("mod_chat")
         pub = await get_setting("pub_chat")
@@ -645,6 +741,96 @@ async def save_admin(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"Готово ✅ {uid} теперь {'главный' if r == 'main' else 'младший'} админ.",
                    reply_markup=back_kb())
+
+
+@router.callback_query(F.data.startswith("sb:"))
+async def cb_subs_admin(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    parts = cb.data.split(":")
+    if parts[1] == "add":
+        await state.set_state(AdminFlow.add_sub)
+        await cb.message.edit_text(
+            "Перешлите сюда любое сообщение из нужного канала/группы, либо отправьте @username "
+            "или ID чата. Бот должен быть добавлен туда (в канал — админом). Отмена — /cancel.")
+    else:
+        await pool.execute("DELETE FROM subs WHERE id=$1", int(parts[2]))
+        await cb.message.edit_text("Удалено ✅", reply_markup=back_kb())
+    await cb.answer()
+
+
+@router.message(AdminFlow.add_sub, F.chat.type == "private")
+async def save_sub(m: Message, state: FSMContext, bot: Bot):
+    if m.text and m.text.startswith("/"):
+        return
+    ref = None
+    fo = m.forward_origin
+    if fo is not None:
+        ftype = getattr(fo, "type", None)
+        if ftype == "channel":
+            ref = fo.chat.id
+        elif ftype == "chat":
+            ref = fo.sender_chat.id
+    elif m.text:
+        s = m.text.strip()
+        if s.lstrip("-").isdigit():
+            ref = int(s)
+        else:
+            s = s.replace("https://t.me/", "").replace("t.me/", "").lstrip("@")
+            if s:
+                ref = "@" + s
+    if ref is None:
+        return await m.answer("Не удалось определить чат. Перешлите сообщение из него, "
+                              "или пришлите @username / ID.")
+    try:
+        chat = await bot.get_chat(ref)
+        me = await bot.get_chat_member(chat.id, bot.id)
+    except Exception:
+        return await m.answer("Не вижу такой чат. Добавьте бота туда (в канал — админом) и повторите.")
+    if me.status not in ("administrator", "creator", "member"):
+        return await m.answer("Бот не состоит в этом чате. Добавьте его и повторите.")
+    if chat.type == "channel" and me.status not in ("administrator", "creator"):
+        return await m.answer("В канале бот должен быть админом, иначе он не сможет проверять подписку.")
+    link = f"https://t.me/{chat.username}" if chat.username else None
+    if not link:
+        try:
+            link = await bot.export_chat_invite_link(chat.id)
+        except Exception:
+            return await m.answer("Чат приватный, а бот не может создать ссылку. "
+                                  "Дайте боту право приглашать участников и повторите.")
+    await pool.execute(
+        "INSERT INTO subs(chat_id, title, link) VALUES($1,$2,$3) "
+        "ON CONFLICT(chat_id) DO UPDATE SET title=EXCLUDED.title, link=EXCLUDED.link",
+        chat.id, chat.title or chat.username, link)
+    await state.clear()
+    await m.answer(f"Добавлено ✅ {chat.title or chat.username}", reply_markup=back_kb())
+
+
+@router.callback_query(F.data.startswith("pic:"))
+async def cb_pic(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    if cb.data == "pic:set":
+        await state.set_state(AdminFlow.welcome_photo)
+        await cb.message.edit_text("Отправьте картинку (как фото, не файлом). Отмена — /cancel.")
+    else:
+        await pool.execute("DELETE FROM settings WHERE key='welcome_photo'")
+        await cb.message.edit_text("Картинка убрана ✅", reply_markup=back_kb())
+    await cb.answer()
+
+
+@router.message(AdminFlow.welcome_photo, F.photo, F.chat.type == "private")
+async def save_pic(m: Message, state: FSMContext):
+    await set_setting("welcome_photo", m.photo[-1].file_id)
+    await state.clear()
+    await m.answer("Картинка сохранена ✅", reply_markup=back_kb())
+
+
+@router.message(AdminFlow.welcome_photo, F.chat.type == "private")
+async def save_pic_bad(m: Message):
+    if m.text and m.text.startswith("/"):
+        return
+    await m.answer("Нужна именно картинка (фото). Отмена — /cancel.")
 
 
 # ---------------------------------------------------------------- web + keep-alive
