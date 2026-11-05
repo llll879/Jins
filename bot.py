@@ -29,6 +29,11 @@ from aiogram.types import (
     ReplyKeyboardMarkup, WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+try:
+    from telegram_premium_emojis import CommonIcons, build_inline_button
+except ImportError:
+    CommonIcons = None
+    build_inline_button = None
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("birzha")
@@ -47,22 +52,33 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 WEBAPP_URL = (os.getenv("WEBAPP_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+INDEX_FILE = Path(__file__).parent / "index.html"
+if not INDEX_FILE.exists():
+    INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 MAX_POST = 3000  # длина поста в HTML-разметке
 GROUPS = {"group", "supergroup"}
 
-# Премиум-эмодзи: {"star": "5368324170671202286", ...} в переменной EMOJI_IDS (JSON).
-# Узнать ID можно в админ-панели: «🆔 ID эмодзи».
-try:
-    EMOJI_IDS = json.loads(os.getenv("EMOJI_IDS", "{}"))
-except Exception:
-    EMOJI_IDS = {}
-
-
+# Премиум-эмодзи из встроенной библиотеки; отдельная переменная окружения не нужна.
+_PREMIUM = {
+    "star": getattr(CommonIcons, "SPARKLES", None) if CommonIcons else None,
+    "ok": getattr(CommonIcons, "SUCCESS", None) if CommonIcons else None,
+}
 def ce(name, fallback):
-    i = EMOJI_IDS.get(name)
-    return f'<tg-emoji emoji-id="{i}">{fallback}</tg-emoji>' if i else fallback
+    emoji_id = _PREMIUM.get(name)
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>' if emoji_id else fallback
+
+
+def styled_button(builder, text, callback_data, icon=None, style=None):
+    if build_inline_button and icon:
+        try:
+            builder.add(build_inline_button(
+                text=text, callback_data=callback_data,
+                icon_custom_emoji_id=icon, style=style))
+            return
+        except Exception:
+            log.warning("Premium inline button fallback", exc_info=True)
+    builder.button(text=text, callback_data=callback_data)
 
 
 DEFAULT_TOPICS = [
@@ -79,6 +95,7 @@ BTN_BROWSE = "📋 Посмотреть объявления"
 BTN_SEARCH = "🔍 Поиск объявлений"
 BTN_SUBMIT = "📝 Отправить своё объявление"
 BTN_RECS = "⭐ Рекомендации"
+BTN_FAV = "☆ Избранное"
 BTN_ADMIN = "🙋 Хочу стать админом"
 
 # key: (название, значение по умолчанию (HTML), подсказка про переменные)
@@ -273,6 +290,23 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS activity_user_idx ON activity(user_id, id DESC);
         CREATE TABLE IF NOT EXISTS feeds(
             user_id BIGINT PRIMARY KEY, ids INT[] NOT NULL, pos INT NOT NULL DEFAULT 0, title TEXT);
+        CREATE TABLE IF NOT EXISTS users(
+            user_id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(), last_seen TIMESTAMPTZ DEFAULT now());
+        CREATE TABLE IF NOT EXISTS favorites(
+            user_id BIGINT NOT NULL, post_id INT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY(user_id, post_id));
+        CREATE TABLE IF NOT EXISTS reports(
+            id BIGSERIAL PRIMARY KEY, post_id INT NOT NULL, reporter_id BIGINT NOT NULL,
+            reason TEXT NOT NULL DEFAULT 'Жалоба из приложения', status TEXT NOT NULL DEFAULT 'new',
+            created_at TIMESTAMPTZ DEFAULT now(), UNIQUE(post_id, reporter_id));
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS bumped_at TIMESTAMPTZ;
+        ALTER TABLE posts ALTER COLUMN expires_at SET DEFAULT (now() + interval '30 days');
+        UPDATE posts SET expires_at = created_at + interval '30 days' WHERE expires_at IS NULL;
+        UPDATE posts SET bumped_at = created_at WHERE bumped_at IS NULL;
+        CREATE INDEX IF NOT EXISTS posts_expiry_idx ON posts(expires_at) WHERE active;
+        CREATE INDEX IF NOT EXISTS favorites_user_idx ON favorites(user_id, created_at DESC);
         CREATE TABLE IF NOT EXISTS questions(
             id SERIAL PRIMARY KEY, text TEXT NOT NULL, sort INT DEFAULT 0);
         CREATE TABLE IF NOT EXISTS applications(
@@ -296,6 +330,14 @@ async def init_db():
             "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
             r["user_id"], r["username"], r["full_name"], r["topic_id"], r["topic_name"],
             esc(txt), r["created_at"], r["id"])
+    await pool.execute("""
+        INSERT INTO users(user_id, username, first_name)
+        SELECT user_id, max(username), max(full_name) FROM (
+            SELECT user_id, username, full_name FROM requests
+            UNION ALL SELECT user_id, username, full_name FROM posts
+            UNION ALL SELECT user_id, username, full_name FROM applications
+        ) u GROUP BY user_id ON CONFLICT(user_id) DO NOTHING
+    """)
 
 
 async def get_setting(key):
@@ -333,7 +375,7 @@ async def get_questions():
 async def topics_with_counts():
     return await pool.fetch(
         "SELECT t.id, t.name, t.thread_id, COUNT(p.id) AS c FROM topics t "
-        "LEFT JOIN posts p ON p.topic_id=t.id AND p.active GROUP BY t.id ORDER BY t.sort, t.id")
+        "LEFT JOIN posts p ON p.topic_id=t.id AND p.active AND p.expires_at>now() GROUP BY t.id ORDER BY t.sort, t.id")
 
 
 async def log_activity(uid, kind, query=None, topic_id=None, post_id=None):
@@ -439,8 +481,8 @@ def kw_rank(query, posts, limit=40):
 
 async def candidate_posts(limit=300):
     return await pool.fetch(
-        "SELECT id, user_id, topic_id, topic_name, text FROM posts WHERE active "
-        "ORDER BY id DESC LIMIT $1", limit)
+        "SELECT id, user_id, topic_id, topic_name, text FROM posts WHERE active AND expires_at > now() "
+        "ORDER BY bumped_at DESC NULLS LAST, id DESC LIMIT $1", limit)
 
 
 def posts_for_ai(posts):
@@ -593,7 +635,7 @@ async def publish_group(bot: Bot, topic_id, text) -> bool:
 
 
 def contact_url(p):
-    return f"https://t.me/{p['username']}" if p["username"] else None
+    return f"https://t.me/{p['username']}" if p["username"] else f"tg://user?id={p['user_id']}"
 
 
 def render_post(p, i, total, title):
@@ -604,13 +646,22 @@ def render_post(p, i, total, title):
     )
 
 
-def feed_kb(p, staff):
+def feed_kb(p, staff, uid=None):
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ Назад", callback_data="f:prev")
     b.button(text="Далее ➡️", callback_data="f:next")
     n = [2]
     if contact_url(p):
-        b.button(text="✉️ Написать автору", url=contact_url(p))
+        b.button(text="✉️ Профиль автора", url=contact_url(p))
+        n.append(1)
+    styled_button(b, "В избранное", f"fav:add:{p['id']}",
+                  getattr(CommonIcons, "SPARKLES", None) if CommonIcons else None, "success")
+    styled_button(b, "Пожаловаться", f"rep:{p['id']}",
+                  getattr(CommonIcons, "WARNING", None) if CommonIcons else None, "danger")
+    n.extend([1, 1])
+    if uid is not None and p["user_id"] == uid:
+        styled_button(b, "Поднять", f"bump:{p['id']}",
+                      getattr(CommonIcons, "UPLOAD", None) if CommonIcons else None, "primary")
         n.append(1)
     if staff:
         b.button(text="🗑 Удалить", callback_data=f"f:del:{p['id']}")
@@ -626,12 +677,12 @@ async def feed_step(uid, pos, step):
     ids = f["ids"]
     i = pos
     while 0 <= i < len(ids):
-        p = await pool.fetchrow("SELECT * FROM posts WHERE id=$1 AND active", ids[i])
+        p = await pool.fetchrow("SELECT * FROM posts WHERE id=$1 AND active AND expires_at > now()", ids[i])
         if p:
             await pool.execute("UPDATE feeds SET pos=$2 WHERE user_id=$1", uid, i)
             await log_activity(uid, "view", topic_id=p["topic_id"], post_id=p["id"])
             staff = await role(uid) is not None
-            return render_post(p, i, len(ids), f["title"] or ""), feed_kb(p, staff)
+            return render_post(p, i, len(ids), f["title"] or ""), feed_kb(p, staff, uid)
         i += step
     return None
 
@@ -853,7 +904,7 @@ class AdminFlow(StatesGroup):
     add_sub = State()
     welcome_photo = State()
     add_question = State()
-    emoji_id = State()
+    broadcast = State()
 
 
 # ---------------------------------------------------------------- menu & gate
@@ -861,6 +912,7 @@ async def main_kb():
     rows = [
         [KeyboardButton(text=BTN_BROWSE), KeyboardButton(text=BTN_SEARCH)],
         [KeyboardButton(text=BTN_SUBMIT), KeyboardButton(text=BTN_RECS)],
+        [KeyboardButton(text=BTN_FAV)],
     ]
     if await get_setting("recruit_open") == "1":
         rows.append([KeyboardButton(text=BTN_ADMIN)])
@@ -921,7 +973,7 @@ def webapp_kb():
     if not WEBAPP_URL.startswith("https://"):
         return None
     b = InlineKeyboardBuilder()
-    b.button(text="🌌 Открыть мини-апп", web_app=WebAppInfo(url=WEBAPP_URL + "/app"))
+    b.button(text="Открыть мини-апп", web_app=WebAppInfo(url=WEBAPP_URL + "/app"))
     return b.as_markup()
 
 
@@ -934,10 +986,19 @@ async def start_flow(bot: Bot, chat_id, uid):
         await bot.send_message(chat_id, "✨ То же самое — в красивом мини-апп:", reply_markup=kb)
 
 
+async def register_user(user):
+    await pool.execute(
+        "INSERT INTO users(user_id,username,first_name,last_name,last_seen) VALUES($1,$2,$3,$4,now()) "
+        "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
+        "last_name=EXCLUDED.last_name, last_seen=now()",
+        user.id, user.username, user.first_name, user.last_name)
+
+
 # ---------------------------------------------------------------- commands
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(m: Message, state: FSMContext, bot: Bot):
     await state.clear()
+    await register_user(m.from_user)
     await start_flow(bot, m.chat.id, m.from_user.id)
 
 
@@ -1023,11 +1084,11 @@ async def cb_browse_cat(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     tid = int(cb.data[3:])
     if tid:
-        rows = await pool.fetch("SELECT id FROM posts WHERE active AND topic_id=$1 ORDER BY id DESC", tid)
+        rows = await pool.fetch("SELECT id FROM posts WHERE active AND expires_at > now() AND topic_id=$1 ORDER BY id DESC", tid)
         name = await pool.fetchval("SELECT name FROM topics WHERE id=$1", tid) or "Категория"
         await log_activity(cb.from_user.id, "topic", topic_id=tid)
     else:
-        rows = await pool.fetch("SELECT id FROM posts WHERE active ORDER BY id DESC")
+        rows = await pool.fetch("SELECT id FROM posts WHERE active AND expires_at>now() ORDER BY bumped_at DESC NULLS LAST, id DESC")
         name = "Все объявления"
     await cb.answer()
     ok = await start_feed(bot, cb.message.chat.id, cb.from_user.id, [r["id"] for r in rows], f"📋 <b>{esc(name)}</b>")
@@ -1062,6 +1123,18 @@ async def do_search(m: Message, state: FSMContext, bot: Bot):
     if mode == "kw":
         await m.answer("ℹ️ ИИ сейчас перегружен — показываю результаты простого поиска.")
     await start_feed(bot, m.chat.id, m.from_user.id, ids, f"🔍 <b>{esc(q[:40])}</b>")
+
+
+@router.message(F.text == BTN_FAV, F.chat.type == "private")
+async def user_favorites(m: Message, bot: Bot):
+    if not await gate(bot, m.chat.id, m.from_user.id):
+        return
+    rows = await pool.fetch(
+        "SELECT p.id FROM favorites f JOIN posts p ON p.id=f.post_id "
+        "WHERE f.user_id=$1 AND p.active AND p.expires_at>now() ORDER BY f.created_at DESC", m.from_user.id)
+    if not rows:
+        return await m.answer("☆ В избранном пока нет объявлений.")
+    await start_feed(bot, m.chat.id, m.from_user.id, [r["id"] for r in rows], "☆ <b>Избранное</b>")
 
 
 @router.message(F.text == BTN_RECS, F.chat.type == "private")
@@ -1168,6 +1241,39 @@ async def cb_feed(cb: CallbackQuery):
     except Exception:
         log.exception("feed edit failed")
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("fav:"))
+async def cb_favorite(cb: CallbackQuery):
+    _, action, raw_id = cb.data.split(":")
+    pid = int(raw_id)
+    if action == "add":
+        await pool.execute("INSERT INTO favorites(user_id,post_id) SELECT $1,id FROM posts WHERE id=$2 AND active ON CONFLICT DO NOTHING", cb.from_user.id, pid)
+        await cb.answer("Добавлено в избранное")
+    else:
+        await pool.execute("DELETE FROM favorites WHERE user_id=$1 AND post_id=$2", cb.from_user.id, pid)
+        await cb.answer("Убрано из избранного")
+
+
+@router.callback_query(F.data.startswith("rep:"))
+async def cb_report(cb: CallbackQuery):
+    pid = int(cb.data.split(":")[1])
+    exists = await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND active", pid)
+    if not exists:
+        return await cb.answer("Объявление уже недоступно", show_alert=True)
+    row = await pool.fetchrow(
+        "INSERT INTO reports(post_id,reporter_id) VALUES($1,$2) ON CONFLICT(post_id,reporter_id) DO NOTHING RETURNING id",
+        pid, cb.from_user.id)
+    await cb.answer("Жалоба отправлена админам" if row else "Вы уже жаловались на это объявление", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("bump:"))
+async def cb_bump(cb: CallbackQuery):
+    pid = int(cb.data.split(":")[1])
+    row = await pool.fetchrow(
+        "UPDATE posts SET created_at=now(), bumped_at=now(), expires_at=now()+interval '30 days' "
+        "WHERE id=$1 AND user_id=$2 AND active RETURNING id", pid, cb.from_user.id)
+    await cb.answer("Объявление поднято ещё на 30 дней" if row else "Можно поднять только своё объявление", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("f:del:"))
@@ -1296,7 +1402,9 @@ def panel_kb():
     b.button(text="🔔 Подписка", callback_data="a:subs")
     b.button(text="🙋 Набор в админы", callback_data="a:recruit")
     b.button(text="🖼 Картинка приветствия", callback_data="a:pic")
-    b.button(text="🆔 ID эмодзи", callback_data="a:emoji")
+    b.button(text="⚑ Жалобы", callback_data="a:reports")
+    b.button(text="📊 Статистика", callback_data="a:stats")
+    b.button(text="📣 Рассылка", callback_data="a:broadcast")
     b.button(text="ℹ️ Статус", callback_data="a:status")
     b.adjust(2)
     return b.as_markup()
@@ -1407,12 +1515,41 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
         b.adjust(1)
         await cb.message.edit_text(
             "Картинка приветствия: " + ("есть ✅" if has else "нет"), reply_markup=b.as_markup())
-    elif act == "emoji":
-        await state.set_state(AdminFlow.emoji_id)
+    elif act == "reports":
+        rows = await pool.fetch("SELECT id,post_id,reporter_id,reason,created_at FROM reports WHERE status='new' ORDER BY id DESC LIMIT 20")
+        if not rows:
+            await cb.message.edit_text("⚑ Новых жалоб нет.", reply_markup=back_kb())
+        else:
+            txt = "\\n\\n".join(
+                f"#{r['id']} · объявление #{r['post_id']}\\nОт: <code>{r['reporter_id']}</code>\\n"
+                f"{esc(r['reason'])} · {fmt_dt(r['created_at'])}" for r in rows)
+            b = InlineKeyboardBuilder()
+            for r in rows:
+                b.button(text=f"✓ Закрыть #{r['id']}", callback_data=f"rp:done:{r['id']}")
+            b.button(text="⬅️ В панель", callback_data="a:home")
+            b.adjust(1)
+            await cb.message.edit_text("⚑ <b>Жалобы</b>\\n\\n" + txt, reply_markup=b.as_markup())
+    elif act == "stats":
+        stats = await pool.fetchrow("""
+            SELECT (SELECT count(*) FROM users) users,
+                   (SELECT count(*) FROM users WHERE last_seen > now()-interval '7 days') active7,
+                   (SELECT count(*) FROM posts WHERE active AND expires_at>now()) posts,
+                   (SELECT count(*) FROM posts WHERE active AND expires_at<=now()) expired,
+                   (SELECT count(*) FROM reports WHERE status='new') reports,
+                   (SELECT count(*) FROM favorites) favorites,
+                   (SELECT count(*) FROM activity WHERE created_at>now()-interval '7 days') actions7
+        """)
         await cb.message.edit_text(
-            "Пришлите сообщение с премиум-эмодзи — я покажу их ID. Затем занесите их в переменную "
-            "<code>EMOJI_IDS</code> (JSON) или просто вставляйте премиум-эмодзи прямо в тексты "
-            "(📝 Тексты) — они сохраняются. Выход — /cancel.", reply_markup=back_kb())
+            "📊 <b>Статистика биржи</b>\\n\\n"
+            f"Пользователей: <b>{stats['users']}</b>\\nАктивных за 7 дней: <b>{stats['active7']}</b>\\n"
+            f"Активных объявлений: <b>{stats['posts']}</b>\\nИстекших: <b>{stats['expired']}</b>\\n"
+            f"Жалоб на рассмотрении: <b>{stats['reports']}</b>\\nДобавлений в избранное: <b>{stats['favorites']}</b>\\n"
+            f"Действий за 7 дней: <b>{stats['actions7']}</b>", reply_markup=back_kb())
+    elif act == "broadcast":
+        await state.set_state(AdminFlow.broadcast)
+        await cb.message.edit_text(
+            "📣 <b>Рассылка всем пользователям</b>\\nОтправьте следующим сообщением текст рассылки. "
+            "Поддерживается Telegram HTML. Для отмены — /cancel.", reply_markup=back_kb())
     elif act == "status":
         mod = await get_setting("mod_chat")
         pub = await get_setting("pub_chat")
@@ -1425,8 +1562,43 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
             f"Объявлений в каталоге: {nposts}\n"
             f"Gemini: {'ключ задан, модели ' + ', '.join(GEMINI_MODELS) if GEMINI_KEY else 'ключ НЕ задан (работает простой поиск)'}\n"
             f"Мини-апп: {esc(WEBAPP_URL + '/app') if WEBAPP_URL else 'WEBAPP_URL не задан'}\n"
-            f"Премиум-эмодзи в EMOJI_IDS: {len(EMOJI_IDS)}", reply_markup=back_kb())
+            f"Премиум-эмодзи: {'встроенная библиотека подключена' if CommonIcons else 'обычные эмодзи (библиотека не установлена)'}", reply_markup=back_kb())
     await cb.answer()
+
+
+@router.message(AdminFlow.broadcast, F.chat.type == "private")
+async def admin_broadcast(m: Message, state: FSMContext, bot: Bot):
+    if not await is_main(m.from_user.id):
+        await state.clear()
+        return await m.answer("Нет доступа.")
+    if m.text and m.text.startswith("/cancel"):
+        await state.clear()
+        return await m.answer("Рассылка отменена.", reply_markup=panel_kb())
+    content = m.html_text or (m.caption or "")
+    if not content.strip():
+        return await m.answer("Пришлите текстовое сообщение.")
+    ids = await pool.fetch("SELECT user_id FROM users ORDER BY user_id")
+    sent = failed = 0
+    await m.answer(f"Начинаю рассылку для {len(ids)} пользователей…")
+    for row in ids:
+        try:
+            await bot.send_message(row["user_id"], content)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+    await state.clear()
+    await m.answer(f"Рассылка завершена.\\nДоставлено: {sent}\\nНе доставлено: {failed}", reply_markup=panel_kb())
+
+
+@router.callback_query(F.data.startswith("rp:done:"))
+async def cb_report_done(cb: CallbackQuery):
+    if not await role(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    rid = int(cb.data.rsplit(":", 1)[1])
+    await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", rid)
+    await cb.answer("Жалоба закрыта")
+    await cb.message.edit_text("Жалоба закрыта.", reply_markup=back_kb())
 
 
 @router.callback_query(F.data.startswith("rc:"))
@@ -1461,150 +1633,6 @@ async def save_question(m: Message, state: FSMContext):
         m.text.strip()[:100])
     await state.clear()
     await m.answer("Вопрос добавлен ✅", reply_markup=back_kb())
-
-
-@router.message(AdminFlow.emoji_id, F.chat.type == "private")
-async def emoji_ids(m: Message):
-    if m.text and m.text.startswith("/"):
-        return
-    found = []
-    text = m.text or m.caption or ""
-    for e in (m.entities or m.caption_entities or []):
-        if e.type == "custom_emoji":
-            found.append((e.custom_emoji_id, e.extract_from(text)))
-    if m.sticker and m.sticker.custom_emoji_id:
-        found.append((m.sticker.custom_emoji_id, m.sticker.emoji or "?"))
-    if not found:
-        return await m.answer("Премиум-эмодзи не найдено. Пришлите сообщение с ними.")
-    await m.answer("\n".join(f"{esc(ch)} — <code>{i}</code>" for i, ch in found))
-
-
-@router.callback_query(F.data.startswith("tx:"))
-async def cb_text_pick(cb: CallbackQuery, state: FSMContext):
-    if not await is_main(cb.from_user.id):
-        return await cb.answer("Нет доступа", show_alert=True)
-    key = cb.data[3:]
-    if key not in TEXTS:
-        return await cb.answer()
-    await state.set_state(AdminFlow.edit_text)
-    await state.update_data(key=key)
-    title, _, hint = TEXTS[key]
-    b = InlineKeyboardBuilder()
-    b.button(text="↩️ Сбросить к стандартному", callback_data=f"txr:{key}")
-    b.button(text="⬅️ Назад", callback_data="a:texts")
-    b.adjust(1)
-    await cb.message.edit_text(
-        f"{esc(title)}\n{('Переменные: ' + esc(hint)) if hint else ''}\n\n"
-        f"Сейчас:\n{await get_text(key)}\n\n"
-        "Отправьте новый текст — можно с форматированием и премиум-эмодзи (отмена — /cancel).",
-        reply_markup=b.as_markup())
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith("txr:"))
-async def cb_text_reset(cb: CallbackQuery, state: FSMContext):
-    if not await is_main(cb.from_user.id):
-        return await cb.answer("Нет доступа", show_alert=True)
-    await pool.execute("DELETE FROM texts WHERE key=$1", cb.data[4:])
-    await state.clear()
-    await cb.message.edit_text("Текст сброшен ✅", reply_markup=back_kb())
-    await cb.answer()
-
-
-@router.message(AdminFlow.edit_text, F.text, F.chat.type == "private")
-async def save_text(m: Message, state: FSMContext):
-    if m.text.startswith("/"):
-        return
-    key = (await state.get_data())["key"]
-    await pool.execute(
-        "INSERT INTO texts(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
-        key, m.html_text)
-    await state.clear()
-    await m.answer("Сохранено ✅", reply_markup=back_kb())
-
-
-@router.callback_query(F.data.startswith("tp:"))
-async def cb_topic_admin(cb: CallbackQuery, state: FSMContext):
-    if not await is_main(cb.from_user.id):
-        return await cb.answer("Нет доступа", show_alert=True)
-    parts = cb.data.split(":")
-    if parts[1] == "add":
-        await state.set_state(AdminFlow.add_topic)
-        await cb.message.edit_text("Отправьте название новой темы (отмена — /cancel).")
-    else:
-        await pool.execute("DELETE FROM topics WHERE id=$1", int(parts[2]))
-        await cb.message.edit_text("Тема удалена ✅", reply_markup=back_kb())
-    await cb.answer()
-
-
-@router.message(AdminFlow.add_topic, F.text, F.chat.type == "private")
-async def save_topic(m: Message, state: FSMContext):
-    if m.text.startswith("/"):
-        return
-    await pool.execute(
-        "INSERT INTO topics(name, sort) VALUES($1, COALESCE((SELECT max(sort)+1 FROM topics),0))",
-        m.text.strip()[:60])
-    await state.clear()
-    await m.answer("Тема добавлена ✅ Она уже видна в боте. Чтобы дублировать посты в чат — "
-                   "зайдите в тему чата и отправьте /bind.", reply_markup=back_kb())
-
-
-@router.callback_query(F.data.startswith("ad:"))
-async def cb_admins(cb: CallbackQuery, state: FSMContext):
-    if not await is_main(cb.from_user.id):
-        return await cb.answer("Нет доступа", show_alert=True)
-    parts = cb.data.split(":")
-    owner = cb.from_user.id == OWNER_ID
-    if parts[1] == "add":
-        if parts[2] == "main" and not owner:
-            return await cb.answer("Главных админов добавляет только владелец", show_alert=True)
-        await state.set_state(AdminFlow.add_admin)
-        await state.update_data(role=parts[2])
-        await cb.message.edit_text(
-            "Перешлите сюда любое сообщение этого человека или отправьте его числовой ID "
-            "(узнать можно, например, в @userinfobot). Отмена — /cancel.")
-    else:
-        uid = int(parts[2])
-        target = await pool.fetchval("SELECT role FROM admins WHERE user_id=$1", uid)
-        if target == "main" and not owner:
-            return await cb.answer("Главных админов убирает только владелец", show_alert=True)
-        await pool.execute("DELETE FROM admins WHERE user_id=$1", uid)
-        await cb.message.edit_text("Админ удалён ✅", reply_markup=back_kb())
-    await cb.answer()
-
-
-@router.message(AdminFlow.add_admin, F.chat.type == "private")
-async def save_admin(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/"):
-        return
-    r = (await state.get_data())["role"]
-    if r == "main" and m.from_user.id != OWNER_ID:
-        return await m.answer("Главных админов добавляет только владелец.")
-    uid, label = None, ""
-    fo = m.forward_origin
-    if fo is not None and getattr(fo, "type", None) == "user":
-        uid = fo.sender_user.id
-        label = label_of(fo.sender_user)
-    elif m.text and m.text.strip().isdigit():
-        uid = int(m.text.strip())
-    if uid is None:
-        return await m.answer("Не удалось определить пользователя. Пришлите ID цифрами "
-                              "или перешлите сообщение (если у человека скрыта пересылка — нужен ID).")
-    if uid == OWNER_ID:
-        return await m.answer("Это владелец, он и так главный.")
-    await pool.execute(
-        "INSERT INTO admins(user_id, role, label) VALUES($1,$2,$3) "
-        "ON CONFLICT(user_id) DO UPDATE SET role=EXCLUDED.role, label=COALESCE(NULLIF(EXCLUDED.label,''), admins.label)",
-        uid, r, label)
-    await state.clear()
-    await m.answer(f"Готово ✅ {uid} теперь {'главный' if r == 'main' else 'младший'} админ.",
-                   reply_markup=back_kb())
-
-
-@router.callback_query(F.data.startswith("sb:"))
-async def cb_subs_admin(cb: CallbackQuery, state: FSMContext):
-    if not await is_main(cb.from_user.id):
-        return await cb.answer("Нет доступа", show_alert=True)
     parts = cb.data.split(":")
     if parts[1] == "add":
         await state.set_state(AdminFlow.add_sub)
@@ -1705,6 +1733,11 @@ async def api_mw(request, handler):
     if not u:
         return jr({"error": "unauthorized"}, 401)
     request["u"] = u
+    await pool.execute(
+        "INSERT INTO users(user_id,username,first_name,last_name,last_seen) VALUES($1,$2,$3,$4,now()) "
+        "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
+        "last_name=EXCLUDED.last_name, last_seen=now()",
+        u["id"], u.get("username"), u.get("first_name"), u.get("last_name"))
     try:
         return await handler(request)
     except web.HTTPException:
@@ -1745,14 +1778,17 @@ def post_json(p, uid=None):
         "id": p["id"], "topic_id": p["topic_id"], "topic": p["topic_name"], "text": p["text"],
         "created": fmt_dt(p["created_at"]),
         "author": ("@" + p["username"]) if p["username"] else (p["full_name"] or "без имени"),
-        "contact": contact_url(p), "mine": uid is not None and p["user_id"] == uid,
+        "contact": contact_url(p),
+        "author_url": contact_url(p) or f"tg://user?id={p['user_id']}",
+        "mine": uid is not None and p["user_id"] == uid,
+        "expires": fmt_dt(p["expires_at"]) if p["expires_at"] else None,
     }
 
 
 async def posts_by_ids(ids):
     if not ids:
         return []
-    rows = await pool.fetch("SELECT * FROM posts WHERE id = ANY($1::int[]) AND active", ids)
+    rows = await pool.fetch("SELECT * FROM posts WHERE id = ANY($1::int[]) AND active AND expires_at>now()", ids)
     m = {r["id"]: r for r in rows}
     return [m[i] for i in ids if i in m]
 
@@ -1801,13 +1837,13 @@ async def api_posts(request):
     limit = min(max(int(q.get("limit", 15) or 15), 1), 30)
     if topic:
         rows = await pool.fetch(
-            "SELECT * FROM posts WHERE active AND topic_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3",
+            "SELECT * FROM posts WHERE active AND expires_at>now() AND topic_id=$1 ORDER BY bumped_at DESC NULLS LAST, id DESC LIMIT $2 OFFSET $3",
             topic, limit + 1, offset)
         if offset == 0:
             await log_activity(uid, "topic", topic_id=topic)
     else:
         rows = await pool.fetch(
-            "SELECT * FROM posts WHERE active ORDER BY id DESC LIMIT $1 OFFSET $2", limit + 1, offset)
+            "SELECT * FROM posts WHERE active AND expires_at>now() ORDER BY bumped_at DESC NULLS LAST, id DESC LIMIT $1 OFFSET $2", limit + 1, offset)
     return jr({"posts": [post_json(p, uid) for p in rows[:limit]], "has_more": len(rows) > limit})
 
 
@@ -1896,6 +1932,53 @@ async def api_apply(request):
 
 
 # ---- admin API
+async def api_favorites(request):
+    uid = request["u"]["id"]
+    rows = await pool.fetch(
+        "SELECT p.* FROM favorites f JOIN posts p ON p.id=f.post_id "
+        "WHERE f.user_id=$1 AND p.active AND p.expires_at>now() ORDER BY f.created_at DESC", uid)
+    return jr({"posts": [post_json(p, uid) for p in rows]})
+
+
+async def api_favorite_toggle(request):
+    uid = request["u"]["id"]
+    pid = int((await body(request)).get("post_id", 0) or 0)
+    exists = await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND active AND expires_at>now()", pid)
+    if not exists:
+        raise ApiError(404, "stale")
+    saved = await pool.fetchval("SELECT 1 FROM favorites WHERE user_id=$1 AND post_id=$2", uid, pid)
+    if saved:
+        await pool.execute("DELETE FROM favorites WHERE user_id=$1 AND post_id=$2", uid, pid)
+        return jr({"saved": False})
+    await pool.execute("INSERT INTO favorites(user_id,post_id) VALUES($1,$2) ON CONFLICT DO NOTHING", uid, pid)
+    return jr({"saved": True})
+
+
+async def api_report(request):
+    uid = request["u"]["id"]
+    d = await body(request)
+    pid = int(d.get("post_id", 0) or 0)
+    reason = (d.get("reason") or "Жалоба из мини-приложения").strip()[:500]
+    exists = await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND active AND expires_at>now()", pid)
+    if not exists:
+        raise ApiError(404, "stale")
+    row = await pool.fetchrow(
+        "INSERT INTO reports(post_id,reporter_id,reason) VALUES($1,$2,$3) "
+        "ON CONFLICT(post_id,reporter_id) DO NOTHING RETURNING id", pid, uid, reason)
+    return jr({"ok": True, "duplicate": row is None})
+
+
+async def api_bump(request):
+    uid = request["u"]["id"]
+    pid = int((await body(request)).get("post_id", 0) or 0)
+    row = await pool.fetchrow(
+        "UPDATE posts SET bumped_at=now(), created_at=now(), expires_at=now()+interval '30 days' "
+        "WHERE id=$1 AND user_id=$2 AND active RETURNING id", pid, uid)
+    if not row:
+        raise ApiError(403, "forbidden")
+    return jr({"ok": True})
+
+
 async def api_admin_overview(request):
     await need_staff(request)
     mod = await get_setting("mod_chat")
@@ -1906,11 +1989,63 @@ async def api_admin_overview(request):
         "posts": await pool.fetchval("SELECT count(*) FROM posts WHERE active"),
         "pending_requests": await pool.fetchval("SELECT count(*) FROM requests WHERE status='pending'"),
         "pending_apps": await pool.fetchval("SELECT count(*) FROM applications WHERE status='pending'"),
-        "gemini": bool(GEMINI_KEY), "models": GEMINI_MODELS, "emoji_ids": len(EMOJI_IDS),
+        "gemini": bool(GEMINI_KEY), "models": GEMINI_MODELS,
         "recruit_open": await get_setting("recruit_open") == "1",
         "has_photo": bool(await get_setting("welcome_photo")),
         "owner": request["u"]["id"] == OWNER_ID,
     })
+
+
+async def api_admin_stats(request):
+    await need_staff(request)
+    r = await pool.fetchrow("""
+        SELECT (SELECT count(*) FROM users) users,
+               (SELECT count(*) FROM users WHERE last_seen>now()-interval '7 days') active7,
+               (SELECT count(*) FROM posts WHERE active AND expires_at>now()) active_posts,
+               (SELECT count(*) FROM posts WHERE active AND expires_at<=now()) expired_posts,
+               (SELECT count(*) FROM reports WHERE status='new') new_reports,
+               (SELECT count(*) FROM favorites) favorites,
+               (SELECT count(*) FROM activity WHERE created_at>now()-interval '7 days') activity7
+    """)
+    return jr(dict(r))
+
+
+async def api_admin_reports(request):
+    await need_staff(request)
+    rows = await pool.fetch("""
+        SELECT r.id,r.post_id,r.reporter_id,r.reason,r.created_at,p.topic_name,p.text
+        FROM reports r LEFT JOIN posts p ON p.id=r.post_id
+        WHERE r.status='new' ORDER BY r.created_at DESC LIMIT 100
+    """)
+    return jr({"reports": [{
+        "id": r["id"], "post_id": r["post_id"], "reporter": r["reporter_id"],
+        "reason": r["reason"], "created": fmt_dt(r["created_at"]),
+        "topic": r["topic_name"] or "Объявление удалено", "text": r["text"] or ""
+    } for r in rows]})
+
+
+async def api_admin_report_done(request):
+    await need_staff(request)
+    rid = int((await body(request)).get("id", 0) or 0)
+    await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", rid)
+    return jr({"ok": True})
+
+
+async def api_admin_broadcast(request):
+    await need_main(request)
+    msg = ((await body(request)).get("text") or "").strip()
+    if not msg or len(msg) > 4000:
+        raise ApiError(400, "bad_text")
+    users = await pool.fetch("SELECT user_id FROM users ORDER BY user_id")
+    sent = failed = 0
+    for row in users:
+        try:
+            await request.app["bot"].send_message(row["user_id"], msg)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+    return jr({"sent": sent, "failed": failed, "total": len(users)})
 
 
 async def api_admin_queue(request):
@@ -2144,6 +2279,10 @@ def build_web(bot: Bot):
     r.add_get("/api/me", api_me)
     r.add_get("/api/photo", api_photo)
     r.add_get("/api/posts", api_posts)
+    r.add_get("/api/favorites", api_favorites)
+    r.add_post("/api/favorite", api_favorite_toggle)
+    r.add_post("/api/report", api_report)
+    r.add_post("/api/bump", api_bump)
     r.add_post("/api/view", api_view)
     r.add_post("/api/search", api_search)
     r.add_get("/api/recs", api_recs)
@@ -2152,6 +2291,10 @@ def build_web(bot: Bot):
     r.add_post("/api/user_choice", api_user_choice)
     r.add_post("/api/apply", api_apply)
     r.add_get("/api/admin/overview", api_admin_overview)
+    r.add_get("/api/admin/stats", api_admin_stats)
+    r.add_get("/api/admin/reports", api_admin_reports)
+    r.add_post("/api/admin/report_done", api_admin_report_done)
+    r.add_post("/api/admin/broadcast", api_admin_broadcast)
     r.add_get("/api/admin/queue", api_admin_queue)
     r.add_post("/api/admin/review", api_admin_review)
     r.add_post("/api/admin/app_decide", api_admin_app_decide)
