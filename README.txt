@@ -186,3 +186,10 @@ KMBP EXCHANGE — Telegram-бот и мини-приложение
   гаранта, храните базу в закрытом доступе. Переменная USERBOT_SESSION_STRING осталась как запасной вариант.
 - connect_userbot.py, LOCAL_CONNECT_SECRET, RENDER_API_KEY и RENDER_SERVICE_ID больше не нужны.
 - Бесплатный Render может засыпать: вместе с сервисом остановится и воркер.
+
+
+=== Mini App status / zero Stars balance update ===
+- Mini App now distinguishes a saved/authorized userbot session from the live worker state.
+- A zero Stars balance alone no longer marks the guarantor offline and no longer blocks deal creation. The worker still must be connected and the guarantor must be enabled.
+- The Mini App API no longer returns the userbot Stars balance; the UI does not display it.
+- Telegram may still require Stars for particular paid transfer operations. Such an operation must not be marked completed unless Telegram confirms it.

@@ -3643,12 +3643,14 @@ async def escrow_member(deal_id, uid):
 
 
 async def api_escrow_status(request):
-    c = await pool.fetchrow("SELECT enabled,reserve_min,reserve_balance,userbot_online,userbot_balance FROM escrow_config WHERE id=1")
-    online = bool(c and c["enabled"] and c["userbot_online"] and c["userbot_balance"] >= c["reserve_min"])
-    return jr({"online": online, "reserve_sufficient": bool(c and c["userbot_balance"] >= c["reserve_min"]),
-               "userbot_online": bool(c and c["userbot_online"]), "reserve_min": c["reserve_min"] if c else 0,
-               "reserve_balance": c["userbot_balance"] if c else 0,
-               "notice": "Операции с подарками выполняются только если Telegram разрешает конкретную конвертацию или передачу."})
+    c = await pool.fetchrow("SELECT enabled,userbot_online FROM escrow_config WHERE id=1")
+    # Session presence and live worker state are separate: the Mini App can show
+    # that the account is linked even while the worker is restarting.
+    connected = bool(await pool.fetchval("SELECT EXISTS(SELECT 1 FROM userbot_session WHERE id=1)"))
+    worker_online = bool(c and c["userbot_online"])
+    online = bool(c and c["enabled"] and connected and worker_online)
+    return jr({"online": online, "connected": connected, "userbot_online": worker_online,
+               "notice": "Нулевой баланс Stars не отключает подключение. Отдельные операции могут требовать оплаты по правилам Telegram."})
 
 
 async def api_escrow_list(request):
@@ -3676,7 +3678,8 @@ async def api_escrow_create(request):
     if not seller:
         raise ApiError(404, "seller_not_found")
     cfg = await pool.fetchrow("SELECT * FROM escrow_config WHERE id=1")
-    if not cfg or not cfg["enabled"] or not cfg["userbot_online"] or cfg["userbot_balance"] < cfg["reserve_min"]:
+    session_exists = bool(await pool.fetchval("SELECT EXISTS(SELECT 1 FROM userbot_session WHERE id=1)"))
+    if not cfg or not cfg["enabled"] or not cfg["userbot_online"] or not session_exists:
         raise ApiError(503, "escrow_offline")
     fee = escrow_fee(amount, float(cfg["fee_percent"]))
     timeout_m = max(5, min(180, int(cfg["payment_timeout_minutes"])))
@@ -3771,8 +3774,13 @@ async def api_escrow_seller_confirm(request):
 async def api_admin_escrow(request):
     await need_main(request)
     cfg=await pool.fetchrow("SELECT * FROM escrow_config WHERE id=1")
+    config=dict(cfg) if cfg else {}
+    # Never expose the userbot's private Stars balance in Mini App responses.
+    config.pop("userbot_balance", None)
+    config.pop("reserve_balance", None)
+    config["userbot_connected"] = bool(await pool.fetchval("SELECT EXISTS(SELECT 1 FROM userbot_session WHERE id=1)"))
     rows=await pool.fetch("SELECT id,buyer_id,seller_id,amount,fee,status,created_at,asset_ref,last_error FROM escrow_deals ORDER BY id DESC LIMIT 100")
-    return jr({"config":dict(cfg),"deals":[dict(r) for r in rows]})
+    return jr({"config":config,"deals":[dict(r) for r in rows]})
 
 
 async def api_admin_escrow_action(request):

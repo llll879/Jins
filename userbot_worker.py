@@ -254,7 +254,7 @@ async def main():
                     await pool.execute("UPDATE escrow_config SET userbot_online=TRUE,userbot_balance=$1,updated_at=now() WHERE id=1", balance)
                 cfg = await pool.fetchrow("SELECT reserve_min FROM escrow_config WHERE id=1")
                 if cfg and balance < cfg["reserve_min"] and not low_alerted:
-                    await notify(http, OWNER_ID, f"⚠️ Резерв Stars юзербота низкий: {balance} ⭐. Новые сделки будут заблокированы.")
+                    await notify(http, OWNER_ID, f"⚠️ Резерв Stars юзербота низкий: {balance} ⭐. Проверка резерва: некоторые платные операции могут быть недоступны.")
                     low_alerted = True
                 elif cfg and balance >= cfg["reserve_min"]:
                     low_alerted = False
