@@ -9,7 +9,7 @@ import os
 import random
 import re
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
@@ -21,12 +21,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile, CallbackQuery, KeyboardButton, MenuButtonWebApp, Message,
-    ReplyKeyboardMarkup, WebAppInfo,
+    ReplyKeyboardMarkup, ReplyParameters, WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 try:
@@ -36,7 +36,7 @@ except ImportError:
     build_inline_button = None
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("birzha")
+log = logging.getLogger("kmbp_exchange")
 
 # ---------------------------------------------------------------- config
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -102,7 +102,7 @@ BTN_ADMIN = "🙋 Хочу стать админом"
 TEXTS = {
     "welcome": (
         "Приветствие (/start)",
-        f"Привет! {ce('hello', '👋')} Это <b>Лесная биржа кмбп</b> {ce('star', '🌲')}\n"
+        f"Привет! {ce('hello', '👋')} Это <b>KMBP EXCHANGE</b> {ce('star', '🌲')}\n"
         "Смотрите объявления, ищите нужное с помощью ИИ, получайте рекомендации "
         "и публикуйте свои — заявку проверит админ.",
         "",
@@ -111,7 +111,8 @@ TEXTS = {
     "choose_cat": ("Выбор категории для просмотра", f"{ce('search', '📂')} Выберите категорию:", ""),
     "ask_post": (
         "Просьба прислать пост",
-        "Тема: <b>{topic}</b>\n\nОтправьте текст вашего поста одним сообщением.",
+        "Тема: <b>{topic}</b>\n\nОтправьте текст вашего поста одним сообщением.\n"
+        "📷 Хотите с картинкой? Отправьте одно фото, а текст объявления напишите в подписи к нему.",
         "{topic} — название темы",
     ),
     "sent_ok": (
@@ -314,6 +315,9 @@ async def init_db():
             answers JSONB NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created_at TIMESTAMPTZ DEFAULT now(), handled_by BIGINT, handler_label TEXT,
             mod_chat_id BIGINT, mod_msg_id BIGINT);
+        ALTER TABLE requests ADD COLUMN IF NOT EXISTS photo_id TEXT;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS photo_id TEXT;
+        ALTER TABLE feeds ADD COLUMN IF NOT EXISTS photo_msg_id BIGINT;
         """
     )
     if await pool.fetchval("SELECT count(*) FROM topics") == 0:
@@ -615,19 +619,28 @@ async def notify_user(bot: Bot, uid, text, markup=None):
 
 async def add_post(r, text):
     await pool.execute(
-        "INSERT INTO posts(user_id,username,full_name,topic_id,topic_name,text,request_id) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7)",
-        r["user_id"], r["username"], r["full_name"], r["topic_id"], r["topic_name"], text, r["id"])
+        "INSERT INTO posts(user_id,username,full_name,topic_id,topic_name,text,request_id,photo_id) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        r["user_id"], r["username"], r["full_name"], r["topic_id"], r["topic_name"], text, r["id"],
+        r["photo_id"])
 
 
-async def publish_group(bot: Bot, topic_id, text) -> bool:
-    """Дублирование поста в чат-биржу (если чат и тема привязаны). Не критично при сбое."""
+async def publish_group(bot: Bot, topic_id, text, photo_id=None) -> bool:
+    """Дублирование поста в чат KMBP EXCHANGE (если чат и тема привязаны). Не критично при сбое."""
     pub = await get_setting("pub_chat")
     t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", topic_id)
     if not pub or not t or t["thread_id"] is None:
         return False
+    thread = t["thread_id"] or None
     try:
-        await bot.send_message(int(pub), text, message_thread_id=t["thread_id"] or None)
+        if photo_id:
+            if len(text) <= 1024:
+                await bot.send_photo(int(pub), photo_id, caption=text, message_thread_id=thread)
+            else:
+                await bot.send_photo(int(pub), photo_id, message_thread_id=thread)
+                await bot.send_message(int(pub), text, message_thread_id=thread)
+        else:
+            await bot.send_message(int(pub), text, message_thread_id=thread)
         return True
     except Exception:
         log.exception("publish to group failed")
@@ -682,22 +695,44 @@ async def feed_step(uid, pos, step):
             await pool.execute("UPDATE feeds SET pos=$2 WHERE user_id=$1", uid, i)
             await log_activity(uid, "view", topic_id=p["topic_id"], post_id=p["id"])
             staff = await role(uid) is not None
-            return render_post(p, i, len(ids), f["title"] or ""), feed_kb(p, staff, uid)
+            return render_post(p, i, len(ids), f["title"] or ""), feed_kb(p, staff, uid), p["photo_id"]
         i += step
     return None
+
+
+async def send_feed_item(bot: Bot, chat_id, uid, res):
+    """Новое сообщение ленты. Если у объявления есть картинка — сначала она, затем текст с кнопками."""
+    text, kb, photo = res
+    pmid = None
+    if photo:
+        try:
+            pm = await bot.send_photo(chat_id, photo)
+            pmid = pm.message_id
+        except Exception:
+            log.warning("feed photo send failed", exc_info=True)
+    await pool.execute("UPDATE feeds SET photo_msg_id=$2 WHERE user_id=$1", uid, pmid)
+    return await bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def drop_feed_photo(bot: Bot, chat_id, mid):
+    if mid:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
 
 
 async def start_feed(bot: Bot, chat_id, uid, ids, title):
     if not ids:
         return False
     await pool.execute(
-        "INSERT INTO feeds(user_id,ids,pos,title) VALUES($1,$2,0,$3) "
-        "ON CONFLICT(user_id) DO UPDATE SET ids=EXCLUDED.ids, pos=0, title=EXCLUDED.title",
+        "INSERT INTO feeds(user_id,ids,pos,title,photo_msg_id) VALUES($1,$2,0,$3,NULL) "
+        "ON CONFLICT(user_id) DO UPDATE SET ids=EXCLUDED.ids, pos=0, title=EXCLUDED.title, photo_msg_id=NULL",
         uid, ids, title)
     res = await feed_step(uid, 0, 1)
     if not res:
         return False
-    await bot.send_message(chat_id, res[0], reply_markup=res[1])
+    await send_feed_item(bot, chat_id, uid, res)
     return True
 
 
@@ -713,22 +748,67 @@ async def release_pending(bot: Bot, admin_id):
 
 
 # ---------------------------------------------------------------- shared operations (бот + мини-апп)
-async def create_request(bot: Bot, uid, username, full_name, topic_id, text_html):
-    t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", topic_id)
+class PhotoError(Exception):
+    """Не удалось принять/отправить картинку объявления."""
+
+
+async def deliver_card(bot: Bot, text, markup, photo=None):
+    """Отправляет карточку (заявку/анкету) на проверку.
+    Сначала — в группу модерации; если она не задана или недоступна (бот не в группе, чат
+    переехал и т.п.) — в личку владельцу и главным админам, чтобы заявка не терялась.
+    photo — file_id (str) или BufferedInputFile; картинка уходит отдельным сообщением,
+    карточка — ответом на неё. Возвращает (первое_сообщение | None, file_id | None)."""
+    st = {"photo": photo, "fid": photo if isinstance(photo, str) else None}
+
+    async def send(cid):
+        reply = None
+        if st["photo"] is not None:
+            pm = await bot.send_photo(cid, st["photo"])
+            if st["fid"] is None:
+                st["fid"] = pm.photo[-1].file_id
+                st["photo"] = st["fid"]
+            reply = ReplyParameters(message_id=pm.message_id, allow_sending_without_reply=True)
+        return await bot.send_message(cid, text, reply_markup=markup, reply_parameters=reply)
+
+    first = None
     mod = await get_setting("mod_chat")
-    if not t or not mod:
+    if mod:
+        try:
+            first = await send(int(mod))
+        except Exception as e:
+            log.warning("mod chat %s unavailable (%s) — шлём в личку админам", mod, e)
+    if first is None:
+        staff = [OWNER_ID] + [r["user_id"] for r in await pool.fetch(
+            "SELECT user_id FROM admins WHERE role='main' ORDER BY user_id") if r["user_id"] != OWNER_ID]
+        for cid in staff:
+            try:
+                msg = await send(cid)
+                first = first or msg
+            except Exception as e:
+                log.warning("cannot DM staff %s: %s", cid, e)
+    return first, st["fid"]
+
+
+async def create_request(bot: Bot, uid, username, full_name, topic_id, text_html, photo=None):
+    t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", topic_id)
+    if not t:
         return None
     r = await pool.fetchrow(
-        "INSERT INTO requests(user_id, username, full_name, topic_id, topic_name, text) "
-        "VALUES($1,$2,$3,$4,$5,$6) RETURNING *", uid, username, full_name, t["id"], t["name"], text_html)
-    try:
-        msg = await bot.send_message(int(mod), render_review(r), reply_markup=review_kb(r["id"]))
-    except Exception:
-        log.exception("cannot send to mod chat")
+        "INSERT INTO requests(user_id, username, full_name, topic_id, topic_name, text, photo_id) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+        uid, username, full_name, t["id"], t["name"], text_html, photo if isinstance(photo, str) else None)
+    msg, fid = await deliver_card(bot, render_review(r), review_kb(r["id"]), photo)
+    if photo is not None and not fid:
         await pool.execute("DELETE FROM requests WHERE id=$1", r["id"])
-        return None
-    await pool.execute(
-        "UPDATE requests SET mod_chat_id=$2, mod_msg_id=$3 WHERE id=$1", r["id"], msg.chat.id, msg.message_id)
+        raise PhotoError()
+    if fid and fid != r["photo_id"]:
+        r = await pool.fetchrow("UPDATE requests SET photo_id=$2 WHERE id=$1 RETURNING *", r["id"], fid)
+    if msg:
+        await pool.execute(
+            "UPDATE requests SET mod_chat_id=$2, mod_msg_id=$3 WHERE id=$1", r["id"], msg.chat.id, msg.message_id)
+    else:
+        # заявка сохранена и видна в очереди мини-апп; никому из админов в личку написать не удалось
+        log.error("request #%s saved, but no staff chat is reachable (/setmod в группе, владелец должен нажать /start)", r["id"])
     return r
 
 
@@ -739,7 +819,7 @@ async def op_approve(bot: Bot, rid, uid, label):
     if not r:
         return False, "Заявка уже обрабатывается"
     await add_post(r, r["text"])
-    sent = await publish_group(bot, r["topic_id"], r["text"])
+    sent = await publish_group(bot, r["topic_id"], r["text"], r["photo_id"])
     await refresh_review(bot, r, f"✅ Одобрено: {esc(label)}")
     await notify_user(bot, r["user_id"], await get_text("approved"))
     return True, "Опубликовано" if sent else "Добавлено в каталог бота"
@@ -779,7 +859,7 @@ async def op_user_choice(bot: Bot, rid, uid, accept):
         return None
     if accept:
         await add_post(r, r["edited_text"])
-        await publish_group(bot, r["topic_id"], r["edited_text"])
+        await publish_group(bot, r["topic_id"], r["edited_text"], r["photo_id"])
     who = esc(r["handler_label"] or "админ")
     await refresh_review(
         bot, r,
@@ -789,15 +869,22 @@ async def op_user_choice(bot: Bot, rid, uid, accept):
 
 
 def render_app(a, footer=""):
-    lines = [
-        f"🙋 <b>Анкета в админы #{a['id']}</b>",
-        f"👤 {sender_link(a)} (<code>{a['user_id']}</code>)",
-        f"🕒 {fmt_dt(a['created_at'])}", "",
-    ]
-    for i, qa in enumerate(a["answers"], 1):
-        lines.append(f"<b>{i}. {esc(qa['q'])}</b>\n{esc(qa['a'])}\n")
-    t = "\n".join(lines)
-    return t + (f"\n{footer}" if footer else "")
+    t = ""
+    for lim in (500, 250, 100):  # если не влезает в 4096 знаков — укорачиваем ответы
+        lines = [
+            f"🙋 <b>Анкета в админы #{a['id']}</b>",
+            f"👤 {sender_link(a)} (<code>{a['user_id']}</code>)",
+            f"🕒 {fmt_dt(a['created_at'])}", "",
+        ]
+        for i, qa in enumerate(a["answers"], 1):
+            ans = str(qa["a"])
+            if len(ans) > lim:
+                ans = ans[:lim] + "…"
+            lines.append(f"<b>{i}. {esc(qa['q'])}</b>\n{esc(ans)}\n")
+        t = "\n".join(lines) + (f"\n{footer}" if footer else "")
+        if len(t) <= 4000:
+            break
+    return t
 
 
 def app_kb(aid):
@@ -809,21 +896,18 @@ def app_kb(aid):
 
 
 async def create_application(bot: Bot, uid, username, full_name, qs, answers):
-    mod = await get_setting("mod_chat")
-    if not mod:
-        return None
+    """Анкета сохраняется всегда. Доставка: группа модерации → запасной вариант — личка
+    владельцу и главным админам. Анкета в любом случае видна в очереди мини-апп."""
     data = [{"q": q, "a": a} for q, a in zip(qs, answers)]
     a = await pool.fetchrow(
         "INSERT INTO applications(user_id, username, full_name, answers) VALUES($1,$2,$3,$4) RETURNING *",
         uid, username, full_name, data)
-    try:
-        msg = await bot.send_message(int(mod), render_app(a), reply_markup=app_kb(a["id"]))
-    except Exception:
-        log.exception("cannot send application")
-        await pool.execute("DELETE FROM applications WHERE id=$1", a["id"])
-        return None
-    await pool.execute(
-        "UPDATE applications SET mod_chat_id=$2, mod_msg_id=$3 WHERE id=$1", a["id"], msg.chat.id, msg.message_id)
+    msg, _ = await deliver_card(bot, render_app(a), app_kb(a["id"]))
+    if msg:
+        await pool.execute(
+            "UPDATE applications SET mod_chat_id=$2, mod_msg_id=$3 WHERE id=$1", a["id"], msg.chat.id, msg.message_id)
+    else:
+        log.error("application #%s saved, but no staff chat is reachable (/setmod в группе, владелец должен нажать /start)", a["id"])
     return a
 
 
@@ -1157,8 +1241,6 @@ async def menu_submit(m: Message, state: FSMContext, bot: Bot):
     await state.clear()
     if not await gate(bot, m.chat.id, m.from_user.id):
         return
-    if not await get_setting("mod_chat"):
-        return await m.answer(await get_text("closed"))
     rows = await pool.fetch("SELECT * FROM topics ORDER BY sort, id")
     if not rows:
         return await m.answer(await get_text("closed"))
@@ -1181,8 +1263,6 @@ async def menu_apply(m: Message, state: FSMContext, bot: Bot):
         return await m.answer("Вы уже в команде админов 😉")
     if await pool.fetchval("SELECT 1 FROM applications WHERE user_id=$1 AND status='pending'", uid):
         return await m.answer(await get_text("apply_exists"))
-    if not await get_setting("mod_chat"):
-        return await m.answer(await get_text("closed"))
     qs = [q["text"] for q in await get_questions()]
     await state.set_state(ApplyFlow.answering)
     await state.update_data(qs=qs, answers=[])
@@ -1201,8 +1281,8 @@ async def apply_answer(m: Message, state: FSMContext, bot: Bot):
         await state.update_data(answers=answers)
         return await m.answer(f"<b>Вопрос {len(answers) + 1}/{len(qs)}</b>\n{esc(qs[len(answers)])}")
     await state.clear()
-    a = await create_application(bot, m.from_user.id, m.from_user.username, m.from_user.full_name, qs, answers)
-    await m.answer(await get_text("apply_sent" if a else "closed"))
+    await create_application(bot, m.from_user.id, m.from_user.username, m.from_user.full_name, qs, answers)
+    await m.answer(await get_text("apply_sent"), reply_markup=await main_kb())
 
 
 @router.message(ApplyFlow.answering, F.chat.type == "private")
@@ -1221,7 +1301,7 @@ async def cb_app_decide(cb: CallbackQuery, bot: Bot):
 
 # ---------------------------------------------------------------- feed callbacks
 @router.callback_query(F.data.in_({"f:next", "f:prev"}))
-async def cb_feed(cb: CallbackQuery):
+async def cb_feed(cb: CallbackQuery, bot: Bot):
     uid = cb.from_user.id
     f = await pool.fetchrow("SELECT * FROM feeds WHERE user_id=$1", uid)
     if not f:
@@ -1236,10 +1316,20 @@ async def cb_feed(cb: CallbackQuery):
             await cb.answer()
             return await cb.message.answer(await get_text("feed_end"))
         return await cb.answer("Это первое объявление")
-    try:
-        await cb.message.edit_text(res[0], reply_markup=res[1])
-    except Exception:
-        log.exception("feed edit failed")
+    chat_id = cb.message.chat.id
+    if res[2] or f["photo_msg_id"]:
+        # между текстовым и фото-сообщением редактированием не переключиться — пересоздаём
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await drop_feed_photo(bot, chat_id, f["photo_msg_id"])
+        await send_feed_item(bot, chat_id, uid, res)
+    else:
+        try:
+            await cb.message.edit_text(res[0], reply_markup=res[1])
+        except Exception:
+            log.exception("feed edit failed")
     await cb.answer()
 
 
@@ -1277,10 +1367,14 @@ async def cb_bump(cb: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("f:del:"))
-async def cb_feed_del(cb: CallbackQuery):
+async def cb_feed_del(cb: CallbackQuery, bot: Bot):
     if await role(cb.from_user.id) is None:
         return await cb.answer("Нет доступа", show_alert=True)
     await pool.execute("UPDATE posts SET active=FALSE WHERE id=$1", int(cb.data.split(":")[2]))
+    fr = await pool.fetchrow("SELECT photo_msg_id FROM feeds WHERE user_id=$1", cb.from_user.id)
+    if fr and fr["photo_msg_id"]:
+        await drop_feed_photo(bot, cb.message.chat.id, fr["photo_msg_id"])
+        await pool.execute("UPDATE feeds SET photo_msg_id=NULL WHERE user_id=$1", cb.from_user.id)
     b = InlineKeyboardBuilder()
     b.button(text="Далее ➡️", callback_data="f:next")
     try:
@@ -1313,14 +1407,32 @@ async def got_post(m: Message, state: FSMContext, bot: Bot):
         return await m.answer(f"Слишком длинный пост (максимум {MAX_POST} символов с разметкой).")
     data = await state.get_data()
     r = await create_request(
-        bot, m.from_user.id, m.from_user.username, m.from_user.full_name, data.get("topic_id", 0), body)
+        bot, m.from_user.id, m.from_user.username, m.from_user.full_name, data.get("topic_id", 0), body,
+        data.get("photo_id"))
+    await state.clear()
+    await m.answer(await get_text("sent_ok" if r else "closed"))
+
+
+@router.message(UserFlow.post, F.photo, F.chat.type == "private")
+async def got_post_photo(m: Message, state: FSMContext, bot: Bot):
+    file_id = m.photo[-1].file_id
+    body = m.html_text if m.caption else ""
+    if not body or not body.strip():
+        # картинка без подписи — запоминаем и просим текст отдельным сообщением
+        await state.update_data(photo_id=file_id)
+        return await m.answer("📷 Картинку получил. Теперь отправьте текст объявления одним сообщением.")
+    if len(body) > MAX_POST:
+        return await m.answer(f"Слишком длинный пост (максимум {MAX_POST} символов с разметкой).")
+    data = await state.get_data()
+    r = await create_request(
+        bot, m.from_user.id, m.from_user.username, m.from_user.full_name, data.get("topic_id", 0), body, file_id)
     await state.clear()
     await m.answer(await get_text("sent_ok" if r else "closed"))
 
 
 @router.message(UserFlow.post)
 async def got_post_bad(m: Message):
-    await m.answer("Отправьте пост текстом.")
+    await m.answer("Отправьте текст объявления или одно фото с подписью (именно как фото, не файлом).")
 
 
 @router.callback_query(F.data.startswith("u:"))
@@ -1375,11 +1487,8 @@ async def cb_review(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
-@router.message(F.text, F.chat.type.in_(GROUPS))
-async def mod_text(m: Message, bot: Bot):
-    mod = await get_setting("mod_chat")
-    if not mod or m.chat.id != int(mod) or not m.from_user:
-        return
+async def handle_pending_text(m: Message, bot: Bot):
+    """Админ нажал «Отклонить»/«Подправить» и теперь присылает причину или исправленный текст."""
     p = await pool.fetchrow("SELECT * FROM pending WHERE admin_id=$1", m.from_user.id)
     if not p or m.text.startswith("/"):
         return
@@ -1391,6 +1500,14 @@ async def mod_text(m: Message, bot: Bot):
     else:
         if await op_edit(bot, p["request_id"], m.from_user.id, label, m.html_text):
             await m.reply("Исправленный пост отправлен пользователю на согласование.")
+
+
+@router.message(F.text, F.chat.type.in_(GROUPS))
+async def mod_text(m: Message, bot: Bot):
+    mod = await get_setting("mod_chat")
+    if not mod or m.chat.id != int(mod) or not m.from_user:
+        return
+    await handle_pending_text(m, bot)
 
 
 # ---------------------------------------------------------------- admin panel
@@ -1520,15 +1637,15 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
         if not rows:
             await cb.message.edit_text("⚑ Новых жалоб нет.", reply_markup=back_kb())
         else:
-            txt = "\\n\\n".join(
-                f"#{r['id']} · объявление #{r['post_id']}\\nОт: <code>{r['reporter_id']}</code>\\n"
+            txt = "\n\n".join(
+                f"#{r['id']} · объявление #{r['post_id']}\nОт: <code>{r['reporter_id']}</code>\n"
                 f"{esc(r['reason'])} · {fmt_dt(r['created_at'])}" for r in rows)
             b = InlineKeyboardBuilder()
             for r in rows:
                 b.button(text=f"✓ Закрыть #{r['id']}", callback_data=f"rp:done:{r['id']}")
             b.button(text="⬅️ В панель", callback_data="a:home")
             b.adjust(1)
-            await cb.message.edit_text("⚑ <b>Жалобы</b>\\n\\n" + txt, reply_markup=b.as_markup())
+            await cb.message.edit_text("⚑ <b>Жалобы</b>\n\n" + txt, reply_markup=b.as_markup())
     elif act == "stats":
         stats = await pool.fetchrow("""
             SELECT (SELECT count(*) FROM users) users,
@@ -1540,23 +1657,30 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
                    (SELECT count(*) FROM activity WHERE created_at>now()-interval '7 days') actions7
         """)
         await cb.message.edit_text(
-            "📊 <b>Статистика биржи</b>\\n\\n"
-            f"Пользователей: <b>{stats['users']}</b>\\nАктивных за 7 дней: <b>{stats['active7']}</b>\\n"
-            f"Активных объявлений: <b>{stats['posts']}</b>\\nИстекших: <b>{stats['expired']}</b>\\n"
-            f"Жалоб на рассмотрении: <b>{stats['reports']}</b>\\nДобавлений в избранное: <b>{stats['favorites']}</b>\\n"
+            "📊 <b>Статистика KMBP EXCHANGE</b>\n\n"
+            f"Пользователей: <b>{stats['users']}</b>\nАктивных за 7 дней: <b>{stats['active7']}</b>\n"
+            f"Активных объявлений: <b>{stats['posts']}</b>\nИстекших: <b>{stats['expired']}</b>\n"
+            f"Жалоб на рассмотрении: <b>{stats['reports']}</b>\nДобавлений в избранное: <b>{stats['favorites']}</b>\n"
             f"Действий за 7 дней: <b>{stats['actions7']}</b>", reply_markup=back_kb())
     elif act == "broadcast":
         await state.set_state(AdminFlow.broadcast)
         await cb.message.edit_text(
-            "📣 <b>Рассылка всем пользователям</b>\\nОтправьте следующим сообщением текст рассылки. "
+            "📣 <b>Рассылка всем пользователям</b>\nОтправьте следующим сообщением текст рассылки. "
             "Поддерживается Telegram HTML. Для отмены — /cancel.", reply_markup=back_kb())
     elif act == "status":
         mod = await get_setting("mod_chat")
         pub = await get_setting("pub_chat")
         unbound = await pool.fetchval("SELECT count(*) FROM topics WHERE thread_id IS NULL")
         nposts = await pool.fetchval("SELECT count(*) FROM posts WHERE active")
+        mod_state = "не задана — заявки приходят вам в личку (/setmod в группе)"
+        if mod:
+            try:
+                await cb.bot.get_chat(int(mod))
+                mod_state = f"{mod} ✅"
+            except Exception:
+                mod_state = f"{mod} ⚠️ бот не видит группу — заявки идут в личку (добавьте бота и снова /setmod)"
         await cb.message.edit_text(
-            f"Группа модерации: {mod or 'не задана (/setmod в группе)'}\n"
+            f"Группа модерации: {mod_state}\n"
             f"Чат публикации: {pub or 'не задан (/bind в теме) — необязательно'}\n"
             f"Непривязанных тем: {unbound}\n"
             f"Объявлений в каталоге: {nposts}\n"
@@ -1588,7 +1712,7 @@ async def admin_broadcast(m: Message, state: FSMContext, bot: Bot):
             failed += 1
         await asyncio.sleep(0.04)
     await state.clear()
-    await m.answer(f"Рассылка завершена.\\nДоставлено: {sent}\\nНе доставлено: {failed}", reply_markup=panel_kb())
+    await m.answer(f"Рассылка завершена.\nДоставлено: {sent}\nНе доставлено: {failed}", reply_markup=panel_kb())
 
 
 @router.callback_query(F.data.startswith("rp:done:"))
@@ -1633,6 +1757,12 @@ async def save_question(m: Message, state: FSMContext):
         m.text.strip()[:100])
     await state.clear()
     await m.answer("Вопрос добавлен ✅", reply_markup=back_kb())
+
+
+@router.callback_query(F.data.startswith("sb:"))
+async def cb_subs(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
     parts = cb.data.split(":")
     if parts[1] == "add":
         await state.set_state(AdminFlow.add_sub)
@@ -1669,6 +1799,117 @@ async def save_sub(m: Message, state: FSMContext, bot: Bot):
     await m.answer(f"Добавлено ✅ {esc(msg)}", reply_markup=back_kb())
 
 
+@router.callback_query(F.data.startswith("tx:"))
+async def cb_text_pick(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    key = cb.data[3:]
+    if key not in TEXTS:
+        return await cb.answer()
+    title, _, hint = TEXTS[key]
+    await state.set_state(AdminFlow.edit_text)
+    await state.update_data(key=key)
+    await cb.message.edit_text(
+        f"<b>{esc(title)}</b>\nСейчас:\n<pre>{esc(strip_emoji(await get_text(key)))}</pre>\n"
+        + (f"Переменные: {esc(hint)}\n" if hint else "")
+        + "\nОтправьте новый текст (Telegram-форматирование и премиум-эмодзи сохранятся). "
+          "Вернуть стандартный — /reset. Отмена — /cancel.")
+    await cb.answer()
+
+
+@router.message(AdminFlow.edit_text, F.chat.type == "private")
+async def save_text(m: Message, state: FSMContext):
+    if not await is_main(m.from_user.id):
+        await state.clear()
+        return await m.answer("Нет доступа.")
+    key = (await state.get_data()).get("key")
+    if key not in TEXTS:
+        await state.clear()
+        return await m.answer("Что-то пошло не так, откройте /admin заново.")
+    if m.text and m.text.strip().lower() == "/reset":
+        await pool.execute("DELETE FROM texts WHERE key=$1", key)
+        await state.clear()
+        return await m.answer("Вернул стандартный текст ✅", reply_markup=back_kb())
+    if m.text and m.text.startswith("/"):
+        return
+    val = (m.html_text or "").strip()
+    if not m.text or not val or len(val) > 3500:
+        return await m.answer("Нужен текст до 3500 знаков. Отмена — /cancel.")
+    await pool.execute(
+        "INSERT INTO texts(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", key, val)
+    await state.clear()
+    await m.answer("Текст сохранён ✅", reply_markup=back_kb())
+
+
+@router.callback_query(F.data.startswith("tp:"))
+async def cb_topics(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    parts = cb.data.split(":")
+    if parts[1] == "add":
+        await state.set_state(AdminFlow.add_topic)
+        await cb.message.edit_text("Отправьте название новой темы (до 60 символов). Отмена — /cancel.")
+    else:
+        await pool.execute("DELETE FROM topics WHERE id=$1", int(parts[2]))
+        await cb.message.edit_text("Тема удалена ✅", reply_markup=back_kb())
+    await cb.answer()
+
+
+@router.message(AdminFlow.add_topic, F.text, F.chat.type == "private")
+async def save_topic(m: Message, state: FSMContext):
+    if m.text.startswith("/"):
+        return
+    name = m.text.strip()[:60]
+    await pool.execute(
+        "INSERT INTO topics(name, sort) VALUES($1, COALESCE((SELECT max(sort)+1 FROM topics),0))", name)
+    await state.clear()
+    await m.answer("Тема добавлена ✅", reply_markup=back_kb())
+
+
+@router.callback_query(F.data.startswith("ad:"))
+async def cb_admins(cb: CallbackQuery, state: FSMContext):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Нет доступа", show_alert=True)
+    owner = cb.from_user.id == OWNER_ID
+    parts = cb.data.split(":")
+    if parts[1] == "add":
+        if parts[2] == "main" and not owner:
+            return await cb.answer("Главных админов добавляет только владелец", show_alert=True)
+        await state.set_state(AdminFlow.add_admin)
+        await state.update_data(role=parts[2])
+        await cb.message.edit_text(
+            "Отправьте числовой Telegram ID нового админа (узнать можно у @userinfobot). Отмена — /cancel.")
+    else:
+        uid = int(parts[2])
+        target = await pool.fetchval("SELECT role FROM admins WHERE user_id=$1", uid)
+        if target == "main" and not owner:
+            return await cb.answer("Главного админа убирает только владелец", show_alert=True)
+        await pool.execute("DELETE FROM admins WHERE user_id=$1", uid)
+        await cb.message.edit_text("Админ удалён ✅", reply_markup=back_kb())
+    await cb.answer()
+
+
+@router.message(AdminFlow.add_admin, F.text, F.chat.type == "private")
+async def save_admin(m: Message, state: FSMContext):
+    if m.text.startswith("/"):
+        return
+    role_ = (await state.get_data()).get("role", "junior")
+    if role_ == "main" and m.from_user.id != OWNER_ID:
+        await state.clear()
+        return await m.answer("Главных админов добавляет только владелец.")
+    try:
+        uid = int(m.text.strip())
+    except ValueError:
+        return await m.answer("Нужен числовой ID. Отмена — /cancel.")
+    if uid == OWNER_ID:
+        return await m.answer("Это владелец — он уже главный.")
+    await pool.execute(
+        "INSERT INTO admins(user_id, role, label) VALUES($1,$2,$3) "
+        "ON CONFLICT(user_id) DO UPDATE SET role=EXCLUDED.role", uid, role_, str(uid))
+    await state.clear()
+    await m.answer("Админ добавлен ✅", reply_markup=back_kb())
+
+
 @router.callback_query(F.data.startswith("pic:"))
 async def cb_pic(cb: CallbackQuery, state: FSMContext):
     if not await is_main(cb.from_user.id):
@@ -1694,6 +1935,13 @@ async def save_pic_bad(m: Message):
     if m.text and m.text.startswith("/"):
         return
     await m.answer("Нужна именно картинка (фото). Отмена — /cancel.")
+
+
+@router.message(StateFilter(None), F.text, F.chat.type == "private")
+async def pending_text_private(m: Message, bot: Bot):
+    """Причина отклонения / правка поста, когда заявки приходят админу в личку (нет группы модерации)."""
+    if await role(m.from_user.id) is not None:
+        await handle_pending_text(m, bot)
 
 
 # ================================================================ MINI APP API
@@ -1773,9 +2021,53 @@ async def need_sub(request):
         raise ApiError(403, "subscribe")
 
 
+_IMG_KEY = hashlib.sha256(b"kmbp-img:" + BOT_TOKEN.encode()).digest()
+_img_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+MAX_PHOTO = 8 * 1024 * 1024
+
+
+def img_url(kind, ident):
+    sig = hmac.new(_IMG_KEY, f"{kind}:{ident}".encode(), hashlib.sha256).hexdigest()[:24]
+    return f"/img/{kind}/{ident}?t={sig}"
+
+
+async def api_img(request):
+    """Картинка объявления/заявки по подписанной ссылке (<img> не умеет слать заголовки авторизации)."""
+    kind = request.match_info["kind"]
+    try:
+        ident = int(request.match_info["id"])
+    except ValueError:
+        raise web.HTTPNotFound()
+    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r") else ""
+    if not want or not hmac.compare_digest(request.query.get("t", ""), want):
+        raise web.HTTPNotFound()
+    data = _img_cache.get((kind, ident))
+    if data is None:
+        fid = await pool.fetchval(
+            "SELECT photo_id FROM posts WHERE id=$1" if kind == "p" else "SELECT photo_id FROM requests WHERE id=$1",
+            ident)
+        if not fid:
+            raise web.HTTPNotFound()
+        buf = io.BytesIO()
+        try:
+            await request.app["bot"].download(fid, destination=buf)
+        except Exception:
+            log.warning("cannot download photo %s/%s", kind, ident, exc_info=True)
+            raise web.HTTPNotFound()
+        data = buf.getvalue()
+        _img_cache[(kind, ident)] = data
+        while len(_img_cache) > 120:
+            _img_cache.popitem(last=False)
+    else:
+        _img_cache.move_to_end((kind, ident))
+    return web.Response(body=data, content_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400, immutable"})
+
+
 def post_json(p, uid=None):
     return {
         "id": p["id"], "topic_id": p["topic_id"], "topic": p["topic_name"], "text": p["text"],
+        "photo": img_url("p", p["id"]) if p["photo_id"] else None,
         "created": fmt_dt(p["created_at"]),
         "author": ("@" + p["username"]) if p["username"] else (p["full_name"] or "без имени"),
         "contact": contact_url(p),
@@ -1877,14 +2169,30 @@ async def api_recs(request):
 async def api_submit(request):
     await need_sub(request)
     u = request["u"]
-    d = await body(request)
-    text = (d.get("text") or "").strip()
+    photo = None
+    if (request.content_type or "").startswith("multipart/"):
+        form = await request.post()
+        d = {"text": form.get("text") or "", "topic_id": form.get("topic_id") or 0}
+        f = form.get("photo")
+        if f is not None and hasattr(f, "file"):
+            data = f.file.read()
+            if len(data) > MAX_PHOTO:
+                raise ApiError(400, "bad_size")
+            if data:
+                photo = BufferedInputFile(data, "ad.jpg")
+    else:
+        d = await body(request)
+    text = str(d.get("text") or "").strip()
     if not text:
         raise ApiError(400, "empty")
     if len(text) > MAX_POST - 300:
         raise ApiError(400, "too_long")
-    r = await create_request(
-        request.app["bot"], u["id"], u.get("username"), full_name_d(u), int(d.get("topic_id", 0) or 0), esc(text))
+    try:
+        r = await create_request(
+            request.app["bot"], u["id"], u.get("username"), full_name_d(u),
+            int(d.get("topic_id", 0) or 0), esc(text), photo)
+    except PhotoError:
+        raise ApiError(400, "bad_image")
     if not r:
         raise ApiError(409, "closed")
     return jr({"ok": True})
@@ -1896,6 +2204,7 @@ async def api_my_requests(request):
     return jr({"requests": [{
         "id": r["id"], "topic": r["topic_name"], "text": r["text"], "status": r["status"],
         "edited_text": r["edited_text"], "created": fmt_dt(r["created_at"]),
+        "photo": img_url("r", r["id"]) if r["photo_id"] else None,
     } for r in rows]})
 
 
@@ -1983,8 +2292,15 @@ async def api_admin_overview(request):
     await need_staff(request)
     mod = await get_setting("mod_chat")
     pub = await get_setting("pub_chat")
+    mod_ok = False
+    if mod:
+        try:
+            await request.app["bot"].get_chat(int(mod))
+            mod_ok = True
+        except Exception:
+            pass
     return jr({
-        "mod_chat": mod, "pub_chat": pub,
+        "mod_chat": mod, "mod_ok": mod_ok, "pub_chat": pub,
         "unbound": await pool.fetchval("SELECT count(*) FROM topics WHERE thread_id IS NULL"),
         "posts": await pool.fetchval("SELECT count(*) FROM posts WHERE active"),
         "pending_requests": await pool.fetchval("SELECT count(*) FROM requests WHERE status='pending'"),
@@ -2054,6 +2370,7 @@ async def api_admin_queue(request):
     out = {"requests": [{
         "id": r["id"], "from": ("@" + r["username"]) if r["username"] else (r["full_name"] or str(r["user_id"])),
         "topic": r["topic_name"], "text": r["text"], "created": fmt_dt(r["created_at"]),
+        "photo": img_url("r", r["id"]) if r["photo_id"] else None,
     } for r in reqs], "apps": []}
     if await is_main(request["u"]["id"]):
         apps = await pool.fetch("SELECT * FROM applications WHERE status='pending' ORDER BY id LIMIT 50")
@@ -2276,6 +2593,7 @@ def build_web(bot: Bot):
     r.add_get("/", health)
     r.add_get("/health", health)
     r.add_get("/app", app_page)
+    r.add_get("/img/{kind}/{id}", api_img)
     r.add_get("/api/me", api_me)
     r.add_get("/api/photo", api_photo)
     r.add_get("/api/posts", api_posts)

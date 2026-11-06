@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#e8eaef">
-<title>Лесная биржа</title>
+<title>KMBP EXCHANGE</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
@@ -220,12 +220,18 @@ nav.bar button.on{color:var(--txt);font-weight:600}
 details.card summary{cursor:pointer;font-weight:700;list-style:none}details.card summary::-webkit-details-marker{display:none}
 hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* --- картинки объявлений --- */
+.ad-img{display:block;width:100%;max-height:300px;object-fit:cover;border-radius:14px;margin:12px 0 0;background:var(--line)}
+.upl{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.upl .thumb{width:84px;height:84px;border-radius:14px;object-fit:cover;box-shadow:var(--sh);background:var(--line)}
+.req-img{display:block;width:100%;max-height:220px;object-fit:cover;border-radius:12px;margin:8px 0}
 </style>
 </head>
 <body>
 <div id="toast"></div>
 <div id="app">
-  <header class="top"><img class="logo-av" id="logoAv" alt=""><span class="logo">Лесная биржа</span><button class="btn ghost small back" id="backBtn">← Назад</button></header>
+  <header class="top"><img class="logo-av" id="logoAv" alt=""><span class="logo">KMBP EXCHANGE</span><button class="btn ghost small back" id="backBtn">← Назад</button></header>
   <main id="main"></main>
   <nav class="bar" id="nav">
     <div id="ind"></div>
@@ -274,7 +280,7 @@ const ic = (n, f) => `<svg class="i${(f === undefined ? FILLED.has(n) : f) ? ' f
 
 /* ============================================================ utils */
 const tg = window.Telegram && Telegram.WebApp;
-const savedTheme = (()=>{try{return localStorage.getItem('forest-theme')||'light'}catch(e){return 'light'}})();
+const savedTheme = (()=>{try{return localStorage.getItem('kmbp-theme')||localStorage.getItem('forest-theme')||'light'}catch(e){return 'light'}})();
 document.documentElement.dataset.theme = savedTheme;
 try { tg && (tg.ready(), tg.expand(), tg.setHeaderColor && tg.setHeaderColor(savedTheme==='dark'?'#0d0f13':'#e8eaef'), tg.setBackgroundColor && tg.setBackgroundColor(savedTheme==='dark'?'#0d0f13':'#e8eaef'), tg.disableVerticalSwipes && tg.disableVerticalSwipes()); } catch (e) {}
 const $ = (s, r = document) => r.querySelector(s);
@@ -305,13 +311,28 @@ function safe(src) {
   })(doc.body.firstChild, out);
   return out.innerHTML;
 }
+// уменьшаем фото перед отправкой (до 1600px, JPEG) — быстрее грузится и всегда принимается
+function shrinkImage(file, max = 1600, q = 0.85) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h);
+      c.toBlob(b => { URL.revokeObjectURL(url); b ? res(b) : rej(Object.assign(new Error('bad_image'), { code: 'bad_image' })); }, 'image/jpeg', q);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(Object.assign(new Error('bad_image'), { code: 'bad_image' })); };
+    img.src = url;
+  });
+}
 const plain = src => new DOMParser().parseFromString(safe(src).replace(/<br\s*\/?>/g, '\n'), 'text/html').body.textContent;
 
 const ERR = {
   unauthorized: 'Откройте мини-апп из Telegram', forbidden: 'Нет доступа', slow: 'Не так быстро, подождите пару секунд',
   closed: 'Приём сейчас закрыт', exists: 'Анкета уже на рассмотрении', already_admin: 'Вы уже админ', empty: 'Заполните все поля',
   too_long: 'Слишком длинный текст', stale: 'Это уже неактуально', limit: 'Достигнут лимит', bad_id: 'Неверный ID',
-  bad_image: 'Не удалось принять картинку', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
+  bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
 };
 let toastT;
 function toast(msg, kind = '') {
@@ -337,7 +358,7 @@ async function fail(e) {
 }
 const confirmBox = msg => new Promise(res => { if (tg && tg.showConfirm) tg.showConfirm(msg, res); else res(confirm(msg)); });
 function openLink(u) { if (!u) return; if ((/^https:\/\/t\.me\//.test(u) || /^tg:\/\//.test(u)) && tg && tg.openTelegramLink) tg.openTelegramLink(u); else if (tg && tg.openLink) tg.openLink(u); else window.open(u, '_blank'); }
-function setTheme(theme){document.documentElement.dataset.theme=theme;try{localStorage.setItem('forest-theme',theme)}catch(e){};try{tg&&tg.setHeaderColor&&tg.setHeaderColor(theme==='light'?'#e8eaef':'#0d0f13');tg&&tg.setBackgroundColor&&tg.setBackgroundColor(theme==='light'?'#e8eaef':'#0d0f13')}catch(e){}}
+function setTheme(theme){document.documentElement.dataset.theme=theme;try{localStorage.setItem('kmbp-theme',theme)}catch(e){};try{tg&&tg.setHeaderColor&&tg.setHeaderColor(theme==='light'?'#e8eaef':'#0d0f13');tg&&tg.setBackgroundColor&&tg.setBackgroundColor(theme==='light'?'#e8eaef':'#0d0f13')}catch(e){}}
 
 /* ripple (only buttons) + haptics */
 document.addEventListener('pointerdown', e => {
@@ -400,6 +421,7 @@ function Feed(el, o) {
     const p = items[idx];
     const card = document.createElement('article'); card.className = 'post glass' + (dir < 0 ? ' l' : '');
     card.innerHTML = `<div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span></div>
+      ${p.photo ? `<img class="ad-img" src="${esc(p.photo)}" alt="" loading="lazy">` : ''}
       <div class="body rich">${safe(p.text)}</div>
       <div class="foot"><span class="author">Автор: ${esc(p.author)}</span>
       ${p.author_url ? '<button class="btn small contact">Профиль автора</button>' : ''}
@@ -437,7 +459,7 @@ function Feed(el, o) {
 
 /* ============================================================ views */
 views.gate = async el => {
-  el.innerHTML = `<div class="card glass stagger"><h2 class="page">🔔 Подпишитесь</h2><p class="sub" style="margin-top:0">Чтобы пользоваться биржей, подпишитесь на каналы и чаты ниже.</p>
+  el.innerHTML = `<div class="card glass stagger"><h2 class="page">🔔 Подпишитесь</h2><p class="sub" style="margin-top:0">Чтобы пользоваться KMBP EXCHANGE, подпишитесь на каналы и чаты ниже.</p>
     <div class="chips" id="subs"></div><div style="height:14px"></div><button class="btn block" id="chk">✅ Я подписался</button></div>`;
   const list = $('#subs', el);
   const draw = () => { list.innerHTML = ''; S.me.missing.forEach(s => { const b = document.createElement('span'); b.className = 'chip'; b.textContent = '📢 ' + s.title; b.onclick = () => openLink(s.link); list.appendChild(b); }); };
@@ -471,7 +493,7 @@ views.home = async el => {
     <img class="statue" src="${IMG.st}" alt="">
     <div class="hero">
       <img class="av" src="${IMG.av}" alt="">
-      <div class="ht"><h1>Лесная биржа</h1><p>Объявления • Общение • Возможности</p></div>
+      <div class="ht"><h1>KMBP EXCHANGE</h1><p>Объявления • Общение • Возможности</p></div>
       <div class="btns"><button class="iconbtn" id="thm" aria-label="Тема">${ic(light ? 'moon' : 'sun', false)}</button><button class="iconbtn" id="gr" aria-label="Настройки">${ic('gear', false)}</button></div>
     </div>
     <div class="searchbar" id="sb">${ic('search', false)}<span>Поиск объявлений…</span><div class="fl" id="fl">${ic('sliders', false)}</div></div>
@@ -494,7 +516,7 @@ views.home = async el => {
   pop.posts.forEach((p, i) => {
     const price = priceOf(p.text);
     const c = document.createElement('div'); c.className = 'pcard glass';
-    c.innerHTML = `<div class="pimg" style="background-image:url(${IMG.c[i % 3]})"><span class="pill"><i></i>Активно</span></div>
+    c.innerHTML = `<div class="pimg" style="background-image:url(${p.photo ? esc(p.photo) : IMG.c[i % 3]})"><span class="pill"><i></i>Активно</span></div>
       <div class="pbody"><div class="ptop"><div class="ptitle">${esc(titleOf(p.text))}</div><button class="heart ${favIds.has(p.id) ? 'on' : ''}">${ic('heart', favIds.has(p.id))}</button></div>
         ${price ? `<div class="pprice">${esc(price)}</div>` : `<div class="pprice t">${esc(p.topic)}</div>`}
         <div class="pfoot"><span class="pclock">${ic('clock', false)}<span>${esc(p.created)}</span></span>
@@ -574,14 +596,30 @@ views.submit = async el => {
   el.innerHTML = `<h2 class="page">📝 Своё объявление</h2><p class="sub">Заявку проверит админ. После одобрения объявление появится в каталоге.</p>
     <div class="stagger"><div><span class="lbl">Тема</span><div class="chips" id="tp">${S.me.topics.map(t => `<span class="chip" data-id="${t.id}">${esc(t.name)}</span>`).join('')}</div></div>
     <div><span class="lbl">Текст объявления</span><textarea class="f" id="tx" maxlength="2700" placeholder="Что вы предлагаете или ищете?"></textarea><div class="counter" id="cn">0 / 2700</div></div>
+    <div><span class="lbl">Картинка (необязательно)</span><input type="file" id="ph" accept="image/*" hidden>
+      <div class="upl" id="upl"><button class="btn ghost small" id="pick" type="button">📷 Добавить картинку</button></div></div>
     <button class="btn block" id="send" style="margin-top:8px">🚀 Отправить на проверку</button></div>`;
   $$('#tp .chip', el).forEach(c => c.onclick = () => { $$('#tp .chip', el).forEach(x => x.classList.remove('sel')); c.classList.add('sel'); topic = +c.dataset.id; });
   const tx = $('#tx', el); tx.oninput = () => $('#cn', el).textContent = tx.value.length + ' / 2700';
+  let photo = null, thumbUrl = null;
+  const upl = $('#upl', el), ph = $('#ph', el);
+  const drawUpl = () => {
+    if (!photo) { upl.innerHTML = '<button class="btn ghost small" id="pick" type="button">📷 Добавить картинку</button>'; $('#pick', upl).onclick = () => ph.click(); return; }
+    upl.innerHTML = `<img class="thumb" src="${thumbUrl}" alt=""><button class="btn ghost small" id="chg" type="button">Заменить</button><button class="btn bad small" id="rm" type="button">✕ Убрать</button>`;
+    $('#chg', upl).onclick = () => ph.click();
+    $('#rm', upl).onclick = () => { photo = null; if (thumbUrl) URL.revokeObjectURL(thumbUrl); thumbUrl = null; ph.value = ''; drawUpl(); };
+  };
+  ph.onchange = async () => {
+    const f = ph.files && ph.files[0]; if (!f) return;
+    try { const b = await shrinkImage(f); if (thumbUrl) URL.revokeObjectURL(thumbUrl); photo = b; thumbUrl = URL.createObjectURL(b); drawUpl(); }
+    catch (er) { photo = null; ph.value = ''; drawUpl(); fail(er); }
+  };
+  drawUpl();
   $('#send', el).onclick = async e => {
     if (!topic) { toast('Выберите тему', 'err'); return $('#tp', el).classList.add('shake'), setTimeout(() => $('#tp', el).classList.remove('shake'), 450); }
     if (!tx.value.trim()) { toast('Введите текст', 'err'); return; }
     e.currentTarget.disabled = true;
-    try { await api('/api/submit', { topic_id: topic, text: tx.value }); celebrate(); toast('Заявка отправлена админам ✅', 'good'); go('mine', {}, { replace: true }); }
+    try { const fd = new FormData(); fd.append('topic_id', topic); fd.append('text', tx.value); if (photo) fd.append('photo', photo, 'ad.jpg'); await api('/api/submit', fd); celebrate(); toast('Заявка отправлена админам ✅', 'good'); go('mine', {}, { replace: true }); }
     catch (er) { e.currentTarget.disabled = false; fail(er); }
   };
 };
@@ -593,7 +631,7 @@ views.mine = async el => {
   el.innerHTML = `<h2 class="page">📨 Мои заявки</h2><div class="stagger">${d.requests.map(r => `<div class="card glass" data-id="${r.id}">
     <div class="row"><span class="status st-${r.status}">${STATUS[r.status] || r.status}</span><span class="grow"></span><small style="color:var(--dim)">#${r.id} · ${esc(r.created)}</small></div>
     <div style="margin:8px 0 4px;color:var(--dim);font-size:13px">📂 ${esc(r.topic)}</div>
-    <div class="rich">${safe(r.status === 'awaiting_user' && r.edited_text ? r.edited_text : r.text)}</div>
+    ${r.photo ? `<img class="req-img" src="${esc(r.photo)}" alt="" loading="lazy">` : ''}<div class="rich">${safe(r.status === 'awaiting_user' && r.edited_text ? r.edited_text : r.text)}</div>
     ${r.status === 'awaiting_user' ? `<p class="sub" style="margin:10px 0 8px">Админ подправил пост. Отправить так?</p><div class="row"><button class="btn ok small grow acc">✅ Принять</button><button class="btn bad small grow dec">🚫 Отказаться</button></div>` : ''}</div>`).join('')}</div>`;
   $$('.card', el).forEach(c => {
     const id = +c.dataset.id, act = async accept => { try { await api('/api/user_choice', { id, accept }); if (accept) celebrate(); toast(accept ? 'Опубликовано ✅' : 'Вы отказались', accept ? 'good' : ''); go('mine', {}, { replace: true }); } catch (e) { fail(e); } };
@@ -633,7 +671,7 @@ views.admin_queue = async el => {
   if (!d.requests.length && !d.apps.length) { el.innerHTML = `<h2 class="page">📬 Очередь</h2>` + empty('🎉', 'Всё разобрано!'); return; }
   el.innerHTML = `<h2 class="page">📬 Очередь</h2><div class="stagger">
   ${d.requests.map(r => `<div class="card glass" data-id="${r.id}"><div class="row"><b>📩 #${r.id}</b><span class="grow"></span><small style="color:var(--dim)">${esc(r.created)}</small></div>
-    <div style="color:var(--dim);font-size:13px;margin:6px 0">👤 ${esc(r.from)} · 📂 ${esc(r.topic)}</div><div class="rich">${safe(r.text)}</div>
+    <div style="color:var(--dim);font-size:13px;margin:6px 0">👤 ${esc(r.from)} · 📂 ${esc(r.topic)}</div>${r.photo ? `<img class="req-img" src="${esc(r.photo)}" alt="" loading="lazy">` : ''}<div class="rich">${safe(r.text)}</div>
     <div class="row" style="margin-top:12px"><button class="btn ok small grow ok-b">✅</button><button class="btn bad small grow no-b">❌</button><button class="btn ghost small grow ed-b">✏️</button></div><div class="extra"></div></div>`).join('')}
   ${d.apps.map(a => `<div class="card glass" data-app="${a.id}"><div class="row"><b>🙋 Анкета #${a.id}</b><span class="grow"></span><small style="color:var(--dim)">${esc(a.created)}</small></div>
     <div style="color:var(--dim);font-size:13px;margin:6px 0">👤 ${esc(a.from)}</div>${a.answers.map((x, i) => `<div style="margin:8px 0"><b>${i + 1}. ${esc(x.q)}</b><div class="rich">${esc(x.a)}</div></div>`).join('')}
@@ -716,7 +754,7 @@ views.admin_pic = async el => {
 views.admin_status = async el => {
   const o = await api('/api/admin/overview');
   el.innerHTML = `<h2 class="page">ℹ️ Статус</h2><div class="card glass stagger">
-    ${[['Группа модерации', o.mod_chat || 'не задана (/setmod в группе)'], ['Чат публикации', o.pub_chat || 'не задан (необязательно)'], ['Непривязанных тем', o.unbound], ['Объявлений в каталоге', o.posts], ['Заявок в очереди', o.pending_requests], ['Анкет в очереди', o.pending_apps], ['Gemini', o.gemini ? o.models.join(', ') : 'ключ не задан'], ['Премиум-эмодзи', 'Встроенные стили бота']].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</div>`;
+    ${[['Группа модерации', o.mod_chat ? o.mod_chat + (o.mod_ok ? ' ✅' : ' ⚠️ бот не видит группу — заявки идут в личку') : 'не задана — заявки приходят в личку главным админам (/setmod в группе)'], ['Чат публикации', o.pub_chat || 'не задан (необязательно)'], ['Непривязанных тем', o.unbound], ['Объявлений в каталоге', o.posts], ['Заявок в очереди', o.pending_requests], ['Анкет в очереди', o.pending_apps], ['Gemini', o.gemini ? o.models.join(', ') : 'ключ не задан'], ['Премиум-эмодзи', 'Встроенные стили бота']].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</div>`;
 };
 
 views.admin_stats = async el => {
