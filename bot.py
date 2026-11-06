@@ -27,7 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile, CallbackQuery, KeyboardButton, MenuButtonWebApp, Message,
-    ReplyKeyboardMarkup, ReplyParameters, WebAppInfo,
+    ReplyKeyboardMarkup, ReplyParameters, WebAppInfo, LabeledPrice, PreCheckoutQuery,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 try:
@@ -496,6 +496,72 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users(
             user_id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT,
             created_at TIMESTAMPTZ DEFAULT now(), last_seen TIMESTAMPTZ DEFAULT now());
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'dark';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS accent TEXT NOT NULL DEFAULT '#8b7cff';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+        CREATE TABLE IF NOT EXISTS user_reviews(
+            id BIGSERIAL PRIMARY KEY, reviewer_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            target_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            rating SMALLINT NOT NULL CHECK(rating BETWEEN 1 AND 5), text TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE(reviewer_id,target_id));
+        CREATE INDEX IF NOT EXISTS user_reviews_target_idx ON user_reviews(target_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS escrow_deals(
+            id BIGSERIAL PRIMARY KEY, buyer_id BIGINT NOT NULL, seller_id BIGINT NOT NULL,
+            amount BIGINT NOT NULL CHECK(amount>0), terms TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'awaiting_payment',
+            fee BIGINT NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'XTR',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            payment_deadline TIMESTAMPTZ, release_deadline TIMESTAMPTZ, dispute_reason TEXT,
+            CHECK(buyer_id<>seller_id));
+        CREATE TABLE IF NOT EXISTS escrow_events(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL REFERENCES escrow_deals(id) ON DELETE CASCADE,
+            actor_id BIGINT, event TEXT NOT NULL, details JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS asset_kind TEXT NOT NULL DEFAULT 'gift';
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS asset_ref TEXT;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS seller_confirmed_at TIMESTAMPTZ;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS buyer_confirmed_at TIMESTAMPTZ;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS fee_charge_id TEXT;
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS last_error TEXT;
+        CREATE TABLE IF NOT EXISTS escrow_config(
+            id SMALLINT PRIMARY KEY DEFAULT 1 CHECK(id=1), enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            reserve_min BIGINT NOT NULL DEFAULT 100, reserve_balance BIGINT NOT NULL DEFAULT 0,
+            fee_percent NUMERIC(6,3) NOT NULL DEFAULT 1.000, payment_timeout_minutes INT NOT NULL DEFAULT 30,
+            userbot_online BOOLEAN NOT NULL DEFAULT FALSE, userbot_balance BIGINT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        INSERT INTO escrow_config(id) VALUES(1) ON CONFLICT DO NOTHING;
+        CREATE TABLE IF NOT EXISTS escrow_assets(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL UNIQUE REFERENCES escrow_deals(id) ON DELETE CASCADE,
+            sender_id BIGINT NOT NULL, kind TEXT NOT NULL, telegram_ref TEXT NOT NULL,
+            gift_json JSONB NOT NULL DEFAULT '{}'::jsonb, convert_stars BIGINT NOT NULL DEFAULT 0,
+            is_collectible BOOLEAN NOT NULL DEFAULT FALSE, transfer_stars BIGINT NOT NULL DEFAULT 0,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT now(), transferred_at TIMESTAMPTZ);
+        CREATE TABLE IF NOT EXISTS escrow_messages(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL REFERENCES escrow_deals(id) ON DELETE CASCADE,
+            sender_id BIGINT NOT NULL, body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 2000),
+            system BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE INDEX IF NOT EXISTS escrow_messages_deal_idx ON escrow_messages(deal_id,id);
+        CREATE TABLE IF NOT EXISTS escrow_disputes(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL UNIQUE REFERENCES escrow_deals(id) ON DELETE CASCADE,
+            opened_by BIGINT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+            resolved_by BIGINT, resolution TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ);
+        CREATE TABLE IF NOT EXISTS escrow_receipts(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL REFERENCES escrow_deals(id) ON DELETE CASCADE,
+            outcome TEXT NOT NULL, data JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(deal_id,outcome));
+        CREATE TABLE IF NOT EXISTS escrow_processed_gifts(
+            telegram_ref TEXT PRIMARY KEY, sender_id BIGINT NOT NULL, gift_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE TABLE IF NOT EXISTS direct_messages(
+            id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL, recipient_id BIGINT NOT NULL,
+            body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CHECK(sender_id<>recipient_id));
+        CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,id DESC);
         CREATE TABLE IF NOT EXISTS favorites(
             user_id BIGINT NOT NULL, post_id INT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY(user_id, post_id));
@@ -1720,6 +1786,56 @@ async def mod_text(m: Message, bot: Bot):
     await handle_pending_text(m, bot)
 
 
+# ------------------------------ escrow Telegram Stars fee payments
+@router.pre_checkout_query()
+async def escrow_pre_checkout(q: PreCheckoutQuery, bot: Bot):
+    try:
+        parts = q.invoice_payload.split(":")
+        if len(parts) != 3 or parts[0] != "escrow_fee":
+            return await q.answer(ok=False, error_message="Неизвестный платёж.")
+        deal_id = int(parts[1])
+        expected = int(parts[2])
+        row = await pool.fetchrow("SELECT buyer_id,fee,status,fee_paid FROM escrow_deals WHERE id=$1", deal_id)
+        valid = bool(row and row["buyer_id"] == q.from_user.id and row["fee"] == expected
+                     and row["status"] == "awaiting_fee" and not row["fee_paid"]
+                     and q.currency == "XTR" and q.total_amount == expected)
+        await q.answer(ok=valid, error_message=None if valid else "Счёт устарел. Создайте сделку заново.")
+    except Exception:
+        log.exception("escrow pre_checkout failed")
+        await q.answer(ok=False, error_message="Не удалось проверить платёж.")
+
+
+@router.message(F.successful_payment)
+async def escrow_successful_payment(m: Message):
+    sp = m.successful_payment
+    try:
+        parts = (sp.invoice_payload or "").split(":")
+        if len(parts) != 3 or parts[0] != "escrow_fee":
+            return
+        deal_id, expected = int(parts[1]), int(parts[2])
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("SELECT * FROM escrow_deals WHERE id=$1 FOR UPDATE", deal_id)
+                if not row or row["buyer_id"] != m.from_user.id or row["fee"] != expected:
+                    return
+                if row["fee_paid"]:
+                    return
+                await conn.execute("UPDATE escrow_deals SET fee_paid=TRUE,fee_charge_id=$2,status='awaiting_asset',updated_at=now() WHERE id=$1",
+                                   deal_id, sp.telegram_payment_charge_id)
+                await conn.execute("INSERT INTO escrow_events(deal_id,actor_id,event,details) VALUES($1,$2,'fee_paid',$3::jsonb)",
+                                   deal_id, m.from_user.id, json.dumps({"charge_id": sp.telegram_payment_charge_id, "amount": sp.total_amount}))
+                await conn.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
+                                   deal_id, m.from_user.id, "Комиссия гаранта оплачена. Ожидается поступление подарка на аккаунт гаранта.")
+        await m.answer(f"Комиссия по сделке #{deal_id} получена. Теперь отправьте согласованный подарок на аккаунт гаранта. Сделка не считается оплаченной, пока юзербот не подтвердит фактическое поступление.")
+    except Exception:
+        log.exception("escrow successful_payment failed")
+
+
+@router.message(Command("paysupport"), F.chat.type == "private")
+async def escrow_pay_support(m: Message):
+    await m.answer(f"По вопросам оплаты комиссии и возвратов укажите ID сделки и напишите владельцу: <a href='tg://user?id={OWNER_ID}'>служба поддержки</a>. Сохраните сообщение об оплате и ID транзакции.")
+
+
 # ---------------------------------------------------------------- admin panel
 def panel_kb():
     b = InlineKeyboardBuilder()
@@ -2199,10 +2315,10 @@ async def api_mw(request, handler):
         return jr({"error": "unauthorized"}, 401)
     request["u"] = u
     await pool.execute(
-        "INSERT INTO users(user_id,username,first_name,last_name,last_seen) VALUES($1,$2,$3,$4,now()) "
+        "INSERT INTO users(user_id,username,first_name,last_name,photo_url,last_seen) VALUES($1,$2,$3,$4,$5,now()) "
         "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
-        "last_name=EXCLUDED.last_name, last_seen=now()",
-        u["id"], u.get("username"), u.get("first_name"), u.get("last_name"))
+        "last_name=EXCLUDED.last_name, photo_url=COALESCE(EXCLUDED.photo_url,users.photo_url), last_seen=now()",
+        u["id"], u.get("username"), u.get("first_name"), u.get("last_name"), u.get("photo_url"))
     try:
         return await handler(request)
     except web.HTTPException:
@@ -2444,9 +2560,14 @@ async def api_me(request):
     topics = await topics_with_counts()
     last_app = await pool.fetchval(
         "SELECT status FROM applications WHERE user_id=$1 ORDER BY id DESC LIMIT 1", uid)
+    personalization = await pool.fetchrow("SELECT theme,accent,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1", uid)
     return jr({
-        "user": {"id": uid, "name": u.get("first_name") or u.get("username") or "друг"},
+        "user": {"id": uid, "name": u.get("first_name") or u.get("username") or "друг",
+                  "username": u.get("username"), "photo_url": u.get("photo_url"),
+                  "has_avatar": personalization["has_avatar"] if personalization else False},
         "role": rl,
+        "theme": personalization["theme"] if personalization else "dark",
+        "accent": personalization["accent"] if personalization else "#8b7cff",
         "welcome": await get_text("welcome"),
         "has_photo": bool(await get_setting("welcome_photo")),
         "recruit_open": await get_setting("recruit_open") == "1",
@@ -2588,6 +2709,118 @@ async def api_apply(request):
     if not a:
         raise ApiError(409, "closed")
     return jr({"ok": True})
+
+
+# ---- профили, отзывы и личные сообщения
+async def api_profile(request):
+    uid = int(request.query.get("id") or request["u"]["id"])
+    row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.photo_url,
+        (u.avatar_data IS NOT NULL) has_avatar, u.created_at,
+        COALESCE(avg(r.rating),0)::float rating, count(r.id)::int reviews
+        FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
+        WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
+    if not row:
+        raise ApiError(404, "user_not_found")
+    deal_rows = await pool.fetch("""SELECT id,amount,status,created_at,buyer_id,seller_id FROM escrow_deals
+        WHERE buyer_id=$1 OR seller_id=$1 ORDER BY created_at DESC LIMIT 30""",uid)
+    deals = sum(1 for x in deal_rows if x["status"]=="completed")
+    history=[{"id":x["id"],"amount":x["amount"],"status":x["status"],"created":fmt_dt(x["created_at"]),
+        "side":"Покупатель" if x["buyer_id"]==uid else "Продавец"} for x in deal_rows]
+    return jr({"id": row["user_id"], "username": row["username"],
+        "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
+        "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
+        "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
+        "rating": round(row["rating"],2), "reviews": row["reviews"], "completed_deals": deals, "history": history,
+        "is_me": uid == request["u"]["id"]})
+
+
+async def api_profile_update(request):
+    uid=request["u"]["id"]; d=await body(request)
+    bio=str(d.get("bio") or "").strip()[:500]
+    theme=str(d.get("theme") or "dark")
+    accent=str(d.get("accent") or "#8b7cff")
+    if theme not in ("dark","light","midnight","ocean","forest"):
+        raise ApiError(400,"bad_theme")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}",accent):
+        raise ApiError(400,"bad_accent")
+    await pool.execute("UPDATE users SET bio=$2,theme=$3,accent=$4 WHERE user_id=$1",uid,bio,theme,accent)
+    return jr({"ok":True})
+
+
+async def api_profile_avatar(request):
+    target=int(request.query.get("id") or request["u"]["id"])
+    row=await pool.fetchrow("SELECT avatar_data,avatar_mime FROM users WHERE user_id=$1",target)
+    if not row or not row["avatar_data"]:
+        # Telegram's photo_url is returned by api_me and used as the automatic fallback in the client.
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["avatar_data"]),content_type=row["avatar_mime"] or "image/jpeg",
+        headers={"Cache-Control":"private, max-age=300"})
+
+
+async def api_profile_avatar_upload(request):
+    uid=request["u"]["id"]; form=await request.post(); f=form.get("file")
+    if f is None or not hasattr(f,"file"):
+        raise ApiError(400,"no_file")
+    data=f.file.read()
+    mime=getattr(f,"content_type",None) or "image/jpeg"
+    if not data or len(data)>5*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
+        raise ApiError(400,"bad_image")
+    await pool.execute("UPDATE users SET avatar_data=$2,avatar_mime=$3 WHERE user_id=$1",uid,data,mime)
+    return jr({"ok":True})
+
+
+async def api_profile_reviews(request):
+    uid=int(request.query.get("id") or request["u"]["id"])
+    rows=await pool.fetch("""SELECT r.*,u.username,u.first_name FROM user_reviews r
+        JOIN users u ON u.user_id=r.reviewer_id WHERE r.target_id=$1 ORDER BY r.created_at DESC LIMIT 50""",uid)
+    return jr({"reviews":[{"id":r["id"],"rating":r["rating"],"text":r["text"],
+        "author":r["username"] and "@"+r["username"] or r["first_name"] or "Пользователь",
+        "created":fmt_dt(r["created_at"]),"mine":r["reviewer_id"]==request["u"]["id"]} for r in rows]})
+
+
+async def api_profile_review_save(request):
+    uid=request["u"]["id"]; d=await body(request)
+    target=int(d.get("target_id") or 0); rating=int(d.get("rating") or 0); txt=str(d.get("text") or "").strip()[:1000]
+    if target==uid or rating not in range(1,6): raise ApiError(400,"bad_review")
+    eligible=await pool.fetchval("""SELECT 1 FROM escrow_deals WHERE status='completed'
+        AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1)) LIMIT 1""",uid,target)
+    if not eligible: raise ApiError(403,"review_after_deal_only")
+    await pool.execute("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text) VALUES($1,$2,$3,$4)
+        ON CONFLICT(reviewer_id,target_id) DO UPDATE SET rating=EXCLUDED.rating,text=EXCLUDED.text,updated_at=now()""",uid,target,rating,txt)
+    return jr({"ok":True})
+
+
+async def api_chats(request):
+    uid=request["u"]["id"]
+    rows=await pool.fetch("""SELECT DISTINCT ON (peer) peer,body,created_at FROM (
+        SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,body,created_at,id
+        FROM direct_messages WHERE sender_id=$1 OR recipient_id=$1) x
+        ORDER BY peer,created_at DESC LIMIT 100""",uid)
+    out=[]
+    for r in rows:
+        u=await pool.fetchrow("SELECT user_id,username,first_name,last_name FROM users WHERE user_id=$1",r["peer"])
+        if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
+            "username":u["username"],"last":r["body"],"created":fmt_dt(r["created_at"])})
+    out.sort(key=lambda x:x["created"] or "",reverse=True)
+    return jr({"chats":out})
+
+
+async def api_messages(request):
+    uid=request["u"]["id"]; peer=int(request.query.get("peer") or 0)
+    if not peer or peer==uid: raise ApiError(400,"bad_peer")
+    rows=await pool.fetch("""SELECT * FROM (SELECT * FROM direct_messages
+        WHERE (sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1)
+        ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer)
+    return jr({"messages":[{"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"])} for r in rows]})
+
+
+async def api_message_send(request):
+    uid=request["u"]["id"]; d=await body(request); peer=int(d.get("peer") or 0); msg=str(d.get("text") or "").strip()
+    if not peer or peer==uid or not msg or len(msg)>3000: raise ApiError(400,"bad_message")
+    exists=await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",peer)
+    if not exists: raise ApiError(404,"user_not_found")
+    row=await pool.fetchrow("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id,created_at",uid,peer,msg)
+    return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
 
 
 # ---- admin API
@@ -2941,6 +3174,210 @@ async def app_page(_):
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
+# ---------------------------------------------- escrow API and receipts
+
+def escrow_fee(amount: int, percent: float) -> int:
+    if amount <= 100:
+        return 1
+    if amount <= 1000:
+        return 2
+    return max(3, int((amount * percent + 99.999) // 100))
+
+
+async def escrow_event(conn, deal_id, actor_id, event, details=None):
+    await conn.execute("INSERT INTO escrow_events(deal_id,actor_id,event,details) VALUES($1,$2,$3,$4::jsonb)",
+                       deal_id, actor_id, event, json.dumps(details or {}, ensure_ascii=False))
+
+
+async def escrow_member(deal_id, uid):
+    row = await pool.fetchrow("SELECT * FROM escrow_deals WHERE id=$1", deal_id)
+    if not row:
+        raise ApiError(404, "deal_not_found")
+    if uid not in (row["buyer_id"], row["seller_id"]) and not await role(uid):
+        raise ApiError(403, "forbidden")
+    return row
+
+
+async def api_escrow_status(request):
+    c = await pool.fetchrow("SELECT enabled,reserve_min,reserve_balance,userbot_online,userbot_balance FROM escrow_config WHERE id=1")
+    online = bool(c and c["enabled"] and c["userbot_online"] and c["userbot_balance"] >= c["reserve_min"])
+    return jr({"online": online, "reserve_sufficient": bool(c and c["userbot_balance"] >= c["reserve_min"]),
+               "userbot_online": bool(c and c["userbot_online"]), "reserve_min": c["reserve_min"] if c else 0,
+               "reserve_balance": c["userbot_balance"] if c else 0,
+               "notice": "Операции с подарками выполняются только если Telegram разрешает конкретную конвертацию или передачу."})
+
+
+async def api_escrow_list(request):
+    uid = request["u"]["id"]
+    rows = await pool.fetch("SELECT id,buyer_id,seller_id,amount,terms,status,fee,fee_paid,created_at,updated_at,payment_deadline,release_deadline FROM escrow_deals WHERE buyer_id=$1 OR seller_id=$1 ORDER BY id DESC LIMIT 50", uid)
+    return jr({"deals": [dict(r) for r in rows]})
+
+
+async def api_escrow_create(request):
+    uid = request["u"]["id"]
+    d = await body(request)
+    try:
+        seller_id, amount = int(d.get("seller_id", 0)), int(d.get("amount", 0))
+    except (TypeError, ValueError):
+        raise ApiError(400, "bad_input")
+    terms = str(d.get("terms") or "").strip()
+    if seller_id <= 0 or seller_id == uid or amount < 1 or amount > 1000000 or not terms or len(terms) > 1500:
+        raise ApiError(400, "bad_input")
+    seller = await pool.fetchrow("SELECT user_id FROM users WHERE user_id=$1", seller_id)
+    if not seller:
+        raise ApiError(404, "seller_not_found")
+    cfg = await pool.fetchrow("SELECT * FROM escrow_config WHERE id=1")
+    if not cfg or not cfg["enabled"] or not cfg["userbot_online"] or cfg["userbot_balance"] < cfg["reserve_min"]:
+        raise ApiError(503, "escrow_offline")
+    fee = escrow_fee(amount, float(cfg["fee_percent"]))
+    timeout_m = max(5, min(180, int(cfg["payment_timeout_minutes"])))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("""INSERT INTO escrow_deals(buyer_id,seller_id,amount,terms,status,fee,currency,payment_deadline)
+                VALUES($1,$2,$3,$4,'awaiting_fee',$5,'XTR',now()+($6::text||' minutes')::interval) RETURNING *""",
+                uid, seller_id, amount, terms, fee, timeout_m)
+            await escrow_event(conn, row["id"], uid, "created", {"seller_id": seller_id, "amount": amount, "fee": fee})
+            await conn.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
+                               row["id"], uid, f"Сделка создана. Комиссия: {fee} ⭐. После её оплаты ожидается подарок.")
+    try:
+        await request.app["bot"].send_invoice(
+            chat_id=uid, title=f"Комиссия гаранта · сделка #{row['id']}",
+            description=f"Комиссия за сопровождение сделки на {amount} ⭐. Это отдельная оплата услуги бота.",
+            payload=f"escrow_fee:{row['id']}:{fee}", currency="XTR", provider_token="", prices=[LabeledPrice(label="Комиссия гаранта", amount=fee)])
+    except Exception as e:
+        log.exception("cannot send escrow fee invoice")
+        await pool.execute("UPDATE escrow_deals SET status='cancelled',last_error='fee_invoice_failed',closed_at=now(),updated_at=now() WHERE id=$1", row["id"])
+        raise ApiError(503, "cannot_send_invoice")
+    try:
+        await request.app["bot"].send_message(seller_id, f"Вас указали продавцом в сделке #{row['id']} на {amount} ⭐. Откройте мини-приложение → Гарант, чтобы посмотреть условия.")
+    except Exception:
+        pass
+    return jr({"ok": True, "id": row["id"], "fee": fee, "status": "awaiting_fee"})
+
+
+async def api_escrow_detail(request):
+    deal_id = int(request.query.get("id", "0") or 0)
+    row = await escrow_member(deal_id, request["u"]["id"])
+    msgs = await pool.fetch("SELECT sender_id,body,system,created_at FROM escrow_messages WHERE deal_id=$1 ORDER BY id LIMIT 200", deal_id)
+    dispute = await pool.fetchrow("SELECT status,reason,resolution FROM escrow_disputes WHERE deal_id=$1", deal_id)
+    return jr({"deal": dict(row), "messages": [dict(m) for m in msgs], "dispute": dict(dispute) if dispute else None,
+               "can_dispute": row["status"] not in ("completed","cancelled","refunded")})
+
+
+async def api_escrow_message(request):
+    uid = request["u"]["id"]; d = await body(request); deal_id = int(d.get("deal_id", 0) or 0)
+    row = await escrow_member(deal_id, uid)
+    body_text = str(d.get("body") or "").strip()
+    if not body_text or len(body_text) > 2000 or row["status"] in ("completed","cancelled","refunded"):
+        raise ApiError(400, "message_not_allowed")
+    await pool.execute("INSERT INTO escrow_messages(deal_id,sender_id,body) VALUES($1,$2,$3)", deal_id, uid, body_text)
+    other = row["seller_id"] if uid == row["buyer_id"] else row["buyer_id"]
+    try:
+        await request.app["bot"].send_message(other, f"Новое сообщение в сделке #{deal_id}. Откройте мини-приложение → Гарант.")
+    except Exception:
+        pass
+    return jr({"ok": True})
+
+
+async def api_escrow_dispute(request):
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id",0) or 0)
+    reason=str(d.get("reason") or "Спор без комментария").strip()[:1000]
+    row=await escrow_member(deal_id,uid)
+    if row["status"] in ("completed","cancelled","refunded","disputed"):
+        raise ApiError(409,"bad_status")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE escrow_deals SET status='disputed',updated_at=now(),dispute_reason=$2 WHERE id=$1",deal_id,reason)
+            await conn.execute("INSERT INTO escrow_disputes(deal_id,opened_by,reason) VALUES($1,$2,$3) ON CONFLICT(deal_id) DO NOTHING",deal_id,uid,reason)
+            await escrow_event(conn,deal_id,uid,"dispute_opened",{"reason":reason})
+            await conn.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",deal_id,uid,"Открыт диспут. Автоматическая выдача остановлена до решения администратора.")
+    for admin in await pool.fetch("SELECT user_id FROM admins"):
+        try: await request.app["bot"].send_message(admin["user_id"],f"⚠️ Диспут по сделке #{deal_id}. Причина: {esc(reason)}")
+        except Exception: pass
+    return jr({"ok":True})
+
+
+async def api_escrow_buyer_done(request):
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id",0) or 0)
+    row=await escrow_member(deal_id,uid)
+    if uid!=row["buyer_id"] or row["status"]!="in_progress": raise ApiError(409,"bad_status")
+    await pool.execute("UPDATE escrow_deals SET status='awaiting_seller',buyer_confirmed_at=now(),release_deadline=now()+interval '24 hours',updated_at=now() WHERE id=$1",deal_id)
+    await pool.execute("INSERT INTO escrow_events(deal_id,actor_id,event) VALUES($1,$2,'buyer_confirmed')",deal_id,uid)
+    await pool.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",deal_id,uid,"Покупатель подтвердил выполнение. Ожидается подтверждение продавца; автоматическая выдача не выполняется при открытом споре.")
+    try: await request.app["bot"].send_message(row["seller_id"],f"Покупатель подтвердил сделку #{deal_id}. Подтвердите выполнение в мини-приложении.")
+    except Exception: pass
+    return jr({"ok":True})
+
+
+async def api_escrow_seller_confirm(request):
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id",0) or 0)
+    row=await escrow_member(deal_id,uid)
+    if uid!=row["seller_id"] or row["status"]!="awaiting_seller": raise ApiError(409,"bad_status")
+    await pool.execute("UPDATE escrow_deals SET seller_confirmed_at=now(),status='payout_pending',updated_at=now() WHERE id=$1",deal_id)
+    await pool.execute("INSERT INTO escrow_events(deal_id,actor_id,event) VALUES($1,$2,'seller_confirmed_payout_pending')",deal_id,uid)
+    await pool.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",deal_id,uid,"Продавец подтвердил сделку. Передача подарка ожидает проверки доступности Telegram-операции.")
+    return jr({"ok":True,"status":"payout_pending"})
+
+
+async def api_admin_escrow(request):
+    await need_main(request)
+    cfg=await pool.fetchrow("SELECT * FROM escrow_config WHERE id=1")
+    rows=await pool.fetch("SELECT id,buyer_id,seller_id,amount,fee,status,created_at,asset_ref,last_error FROM escrow_deals ORDER BY id DESC LIMIT 100")
+    return jr({"config":dict(cfg),"deals":[dict(r) for r in rows]})
+
+
+async def api_admin_escrow_action(request):
+    await need_main(request)
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id",0) or 0)
+    action=str(d.get("action") or ""); note=str(d.get("note") or "").strip()[:1000]
+    row=await pool.fetchrow("SELECT * FROM escrow_deals WHERE id=$1",deal_id)
+    if not row: raise ApiError(404,"deal_not_found")
+    if action not in ("refund","release","cancel"): raise ApiError(400,"bad_action")
+    if row["status"]!="disputed" and action in ("refund","release"): raise ApiError(409,"dispute_required")
+    if action == "cancel" and row["status"] not in ("awaiting_fee", "awaiting_asset"):
+        raise ApiError(409,"cannot_cancel_after_asset")
+    target={"refund":"refund_pending","release":"payout_pending","cancel":"cancelled"}[action]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE escrow_deals SET status=$2,updated_at=now(),seller_confirmed_at=CASE WHEN $2 IN ('refund_pending','payout_pending') THEN now() ELSE seller_confirmed_at END,closed_at=CASE WHEN $2 IN ('refunded','cancelled') THEN now() ELSE closed_at END WHERE id=$1",deal_id,target)
+            await conn.execute("UPDATE escrow_disputes SET status='resolved',resolved_by=$2,resolution=$3,resolved_at=now() WHERE deal_id=$1",deal_id,uid,action+(': '+note if note else ''))
+            await escrow_event(conn,deal_id,uid,"admin_"+action,{"note":note})
+            await conn.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",deal_id,uid,"Решение администратора: "+action+(". "+note if note else ""))
+            if target == "cancelled":
+                await conn.execute("INSERT INTO escrow_receipts(deal_id,outcome,data) VALUES($1,'cancelled',$2::jsonb) ON CONFLICT DO NOTHING",deal_id,json.dumps({"reason":"admin_cancelled","note":note}))
+    return jr({"ok":True,"status":target})
+
+
+async def api_admin_escrow_config(request):
+    await need_main(request)
+    d=await body(request)
+    enabled=bool(d.get("enabled"))
+    reserve_min=max(1,min(1000000,int(d.get("reserve_min",100))))
+    fee_percent=max(0.1,min(20.0,float(d.get("fee_percent",1.0))))
+    timeout=max(5,min(180,int(d.get("payment_timeout_minutes",30))))
+    await pool.execute("UPDATE escrow_config SET enabled=$1,reserve_min=$2,fee_percent=$3,payment_timeout_minutes=$4,updated_at=now() WHERE id=1",
+                       enabled,reserve_min,fee_percent,timeout)
+    return jr({"ok":True})
+
+
+async def api_escrow_receipt(request):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    deal_id=int(request.match_info["id"])
+    row=await escrow_member(deal_id,request["u"]["id"])
+    events=await pool.fetch("SELECT event,actor_id,details,created_at FROM escrow_events WHERE deal_id=$1 ORDER BY id",deal_id)
+    status_labels={"completed":"Успешно завершена","cancelled":"Отменена","refunded":"Возврат","disputed":"Спор","payout_pending":"Ожидание выдачи"}
+    buf=io.BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=42,leftMargin=42,topMargin=42,bottomMargin=42)
+    styles=getSampleStyleSheet(); story=[Paragraph("KMBP EXCHANGE — чек сделки",styles["Title"]),Spacer(1,14)]
+    data=[["Параметр","Значение"],["ID сделки",str(row["id"])],["Покупатель",str(row["buyer_id"])],["Продавец",str(row["seller_id"])],["Сумма",f"{row['amount']} ⭐"],["Комиссия",f"{row['fee']} ⭐"],["Статус",status_labels.get(row["status"],row["status"])],["Создана",str(row["created_at"])],["Обновлена",str(row["updated_at"])],["Условия",esc(row["terms"])]]
+    t=Table(data,colWidths=[110,360]); t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#292d3a")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.4,colors.grey),("VALIGN",(0,0),(-1,-1),"TOP"),("PADDING",(0,0),(-1,-1),7)])); story.append(t); story.append(Spacer(1,16)); story.append(Paragraph("Журнал событий",styles["Heading2"]))
+    for e in events: story.append(Paragraph(f"{e['created_at']} — {esc(e['event'])} (ID: {e['actor_id'] or 'система'})",styles["BodyText"]))
+    doc.build(story); buf.seek(0)
+    return web.Response(body=buf.getvalue(),content_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="kmbp-escrow-{deal_id}.pdf"'})
+
+
 def build_web(bot: Bot):
     app = web.Application(middlewares=[api_mw], client_max_size=12 * 1024 * 1024)
     app["bot"] = bot
@@ -2950,6 +3387,15 @@ def build_web(bot: Bot):
     r.add_get("/app", app_page)
     r.add_get("/img/{kind}/{id}", api_img)
     r.add_get("/api/me", api_me)
+    r.add_get("/api/profile", api_profile)
+    r.add_post("/api/profile", api_profile_update)
+    r.add_get("/api/profile/avatar", api_profile_avatar)
+    r.add_post("/api/profile/avatar", api_profile_avatar_upload)
+    r.add_get("/api/profile/reviews", api_profile_reviews)
+    r.add_post("/api/profile/reviews", api_profile_review_save)
+    r.add_get("/api/chats", api_chats)
+    r.add_get("/api/messages", api_messages)
+    r.add_post("/api/messages", api_message_send)
     r.add_get("/api/photo", api_photo)
     r.add_get("/api/emoji/{id}", api_emoji)
     r.add_post("/api/clean", api_clean)
@@ -2991,6 +3437,18 @@ def build_web(bot: Bot):
     r.add_post("/api/admin/question_del", api_admin_question_del)
     r.add_post("/api/admin/photo_set", api_admin_photo_set)
     r.add_post("/api/admin/photo_del", api_admin_photo_del)
+    r.add_get("/api/escrow/status", api_escrow_status)
+    r.add_get("/api/escrow/deals", api_escrow_list)
+    r.add_post("/api/escrow/deals", api_escrow_create)
+    r.add_get("/api/escrow/deal", api_escrow_detail)
+    r.add_post("/api/escrow/message", api_escrow_message)
+    r.add_post("/api/escrow/dispute", api_escrow_dispute)
+    r.add_post("/api/escrow/buyer_done", api_escrow_buyer_done)
+    r.add_post("/api/escrow/seller_confirm", api_escrow_seller_confirm)
+    r.add_get("/api/escrow/receipt/{id}", api_escrow_receipt)
+    r.add_get("/api/admin/escrow", api_admin_escrow)
+    r.add_post("/api/admin/escrow_action", api_admin_escrow_action)
+    r.add_post("/api/admin/escrow_config", api_admin_escrow_config)
     return app
 
 
