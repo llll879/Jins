@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import hmac
 import html
@@ -20,7 +21,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -59,11 +60,39 @@ if not INDEX_FILE.exists():
 MAX_POST = 3000  # длина поста в HTML-разметке
 GROUPS = {"group", "supergroup"}
 
-# Премиум-эмодзи из встроенной библиотеки; отдельная переменная окружения не нужна.
-_PREMIUM = {
-    "star": getattr(CommonIcons, "SPARKLES", None) if CommonIcons else None,
-    "ok": getattr(CommonIcons, "SUCCESS", None) if CommonIcons else None,
+# Премиум-эмодзи: берутся из встроенной библиотеки (имена пробуются по очереди, чего нет — пропускается).
+# Свои премиум-эмодзи можно задать переменной окружения PREMIUM_EMOJI_IDS="star:5368...,ok:5370..."
+_ICON_CANDIDATES = {
+    "star": ["SPARKLES", "STAR"], "ok": ["SUCCESS", "CHECK", "CHECKMARK"],
+    "no": ["ERROR", "FAILURE", "CROSS"], "fire": ["FIRE"], "search": ["SEARCH"],
+    "edit": ["EDIT", "PENCIL"], "hello": ["WAVE", "HELLO"], "heart": ["HEART"],
+    "rocket": ["ROCKET"], "gift": ["GIFT"], "bell": ["BELL", "NOTIFICATION"],
+    "diamond": ["DIAMOND", "GEM"], "crown": ["CROWN"], "pin": ["PIN", "PUSHPIN"],
+    "lock": ["LOCK"], "info": ["INFO", "INFORMATION"], "warning": ["WARNING"],
+    "camera": ["CAMERA", "PHOTO"],
 }
+
+
+def _build_premium():
+    res = {}
+    if CommonIcons:
+        for name, cands in _ICON_CANDIDATES.items():
+            for c in cands:
+                v = getattr(CommonIcons, c, None)
+                if v:
+                    res[name] = v
+                    break
+    for pair in os.getenv("PREMIUM_EMOJI_IDS", "").split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            if k.strip() and v.strip().isdigit():
+                res[k.strip()] = v.strip()
+    return res
+
+
+_PREMIUM = _build_premium()
+
+
 def ce(name, fallback):
     emoji_id = _PREMIUM.get(name)
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>' if emoji_id else fallback
@@ -102,72 +131,187 @@ BTN_ADMIN = "🙋 Хочу стать админом"
 TEXTS = {
     "welcome": (
         "Приветствие (/start)",
-        f"Привет! {ce('hello', '👋')} Это <b>KMBP EXCHANGE</b> {ce('star', '🌲')}\n"
-        "Смотрите объявления, ищите нужное с помощью ИИ, получайте рекомендации "
-        "и публикуйте свои — заявку проверит админ.",
+        f"{ce('star', '✨')} <b>Добро пожаловать в KMBP EXCHANGE!</b> {ce('star', '✨')}\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Привет! {ce('hello', '👋')} Это место, где объявления находят своих людей: "
+        "пиар, поиск админов и партнёров, монтажёры, продажа каналов и ботов — всё в одном аккаунте и под присмотром модераторов.\n\n"
+        "<blockquote>"
+        f"{ce('search', '🔍')} <b>Умный поиск</b> — опишите своими словами, что нужно, и ИИ подберёт подходящие объявления\n"
+        f"{ce('rocket', '🚀')} <b>Своё объявление</b> — с текстом и картинкой, админ проверит и опубликует\n"
+        f"{ce('heart', '💖')} <b>Избранное</b> — сохраняйте самое интересное\n"
+        f"{ce('gift', '🎁')} <b>Рекомендации</b> — подборка под ваши интересы"
+        "</blockquote>\n\n"
+        f"{ce('ok', '✅')} Всё честно: каждое объявление проходит проверку, а на нарушителей можно пожаловаться одной кнопкой.\n\n"
+        f"{ce('fire', '🔥')} <i>Выбирайте действие на клавиатуре ниже или откройте мини-приложение — начнём!</i>",
         "",
     ),
-    "choose_topic": ("Выбор темы для объявления", "Выберите тему, в которую хотите опубликовать пост:", ""),
-    "choose_cat": ("Выбор категории для просмотра", f"{ce('search', '📂')} Выберите категорию:", ""),
+    "choose_topic": (
+        "Выбор темы для объявления",
+        f"{ce('pin', '📌')} <b>Куда публикуем?</b>\n\n"
+        "Выберите тему, в которую хотите опубликовать пост. От темы зависит, "
+        "кто увидит ваше объявление — выбирайте самую подходящую:",
+        "",
+    ),
+    "choose_cat": (
+        "Выбор категории для просмотра",
+        f"{ce('search', '📂')} <b>Что будем смотреть?</b>\n\n"
+        "Выберите категорию — внутри листайте объявления кнопками «Далее» и «Назад». "
+        f"{ce('star', '✨')}",
+        "",
+    ),
     "ask_post": (
         "Просьба прислать пост",
-        "Тема: <b>{topic}</b>\n\nОтправьте текст вашего поста одним сообщением.\n"
-        "📷 Хотите с картинкой? Отправьте одно фото, а текст объявления напишите в подписи к нему.",
+        f"{ce('edit', '✍️')} <b>Тема: {{topic}}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Отправьте текст вашего поста <b>одним сообщением</b> — пишите красиво, "
+        "можно использовать жирный шрифт, курсив и даже премиум-эмодзи.\n\n"
+        "<blockquote>"
+        f"{ce('camera', '📷')} Хотите с картинкой? Отправьте <b>одно фото</b>, а текст объявления напишите в подписи к нему.\n"
+        f"{ce('info', '💡')} Совет: коротко опишите, что вы предлагаете или ищете, и как с вами связаться."
+        "</blockquote>\n\n"
+        "Отмена — /cancel",
         "{topic} — название темы",
     ),
     "sent_ok": (
         "Заявка отправлена",
-        f"{ce('ok', '✅')} Заявка отправлена админам на проверку. Ожидайте ответа.",
+        f"{ce('ok', '✅')} <b>Заявка отправлена!</b>\n\n"
+        "Админы уже получили ваше объявление и скоро его проверят. "
+        "Как только появится решение — мы сразу напишем вам сюда. "
+        f"{ce('star', '✨')}\n\n"
+        "<i>Следить за статусом можно в разделе «Мои заявки» в мини-приложении.</i>",
         "",
     ),
-    "approved": ("Заявка одобрена", f"{ce('ok', '✅')} Вашу заявку одобрили, пост опубликован!", ""),
+    "approved": (
+        "Заявка одобрена",
+        f"{ce('ok', '🎉')} <b>Ура, ваша заявка одобрена!</b>\n\n"
+        f"Пост уже опубликован и виден всем участникам {ce('rocket', '🚀')}\n"
+        "Чтобы поднять его выше в ленте, используйте кнопку «Поднять» под объявлением.\n\n"
+        f"<i>Спасибо, что пользуетесь KMBP EXCHANGE!</i> {ce('heart', '💖')}",
+        "",
+    ),
     "rejected": (
         "Заявка отклонена",
-        f"{ce('no', '❌')} Админ отклонил вашу заявку.\nПричина: {{reason}}",
+        f"{ce('no', '❌')} <b>Заявка отклонена</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "К сожалению, админ не смог опубликовать ваш пост.\n\n"
+        f"<blockquote>{ce('info', '📝')} <b>Причина:</b> {{reason}}</blockquote>\n\n"
+        "Вы можете поправить текст и отправить объявление заново — мы будем рады вашему посту!",
         "{reason} — причина от админа",
     ),
     "edited": (
         "Админ исправил пост",
-        f"{ce('edit', '✏️')} Админ подтвердил выкладывание поста, но немного его исправил:\n\n"
-        "{text}\n\nХотите отправить так? Или отказаться?",
+        f"{ce('edit', '✏️')} <b>Админ немного поправил ваш пост</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Мы готовы опубликовать объявление, но чуть-чуть его улучшили. Вот что получилось:\n\n"
+        "{text}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"{ce('ok', '✅')} Публикуем в таком виде? Или лучше отказаться?",
         "{text} — исправленный пост",
     ),
     "edit_accepted": (
         "Пользователь принял исправление",
-        f"{ce('ok', '✅')} Отлично, пост опубликован в исправленном виде!",
+        f"{ce('ok', '🎉')} <b>Отлично!</b>\n\n"
+        "Пост опубликован в исправленном виде и уже доступен в ленте. "
+        f"Удачи с объявлением! {ce('fire', '🔥')}",
         "",
     ),
     "edit_declined": (
         "Пользователь отказался от исправления",
-        "🚫 Вы отклонили исправление. Пост не опубликован.",
+        f"{ce('no', '🚫')} <b>Вы отклонили исправление.</b>\n\n"
+        "Пост не опубликован. Если передумаете — просто отправьте объявление заново, "
+        "и мы с радостью его рассмотрим.",
         "",
     ),
     "sub_required": (
         "Просьба подписаться",
-        "Чтобы пользоваться ботом, подпишитесь на каналы/чаты ниже и нажмите «Я подписался»:",
+        f"{ce('bell', '🔔')} <b>Остался один шаг!</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Чтобы пользоваться KMBP EXCHANGE, подпишитесь на каналы и чаты ниже — "
+        "там самые свежие новости и полезные люди.\n\n"
+        f"{ce('ok', '✅')} Подписались? Нажмите «Я подписался» — и доступ откроется сразу.",
         "",
     ),
-    "sub_not_yet": ("Подписка не найдена", "Вы ещё не подписались на все каналы/чаты.", ""),
-    "closed": ("Приём закрыт", "Приём заявок временно закрыт.", ""),
+    "sub_not_yet": (
+        "Подписка не найдена",
+        f"{ce('warning', '⚠️')} Подписка пока не найдена. Проверьте, что вы подписались на все каналы и чаты, и нажмите кнопку ещё раз.",
+        "",
+    ),
+    "closed": (
+        "Приём закрыт",
+        f"{ce('lock', '🔒')} <b>Приём заявок временно закрыт.</b>\n\n"
+        "Мы скоро вернёмся — загляните чуть позже. Смотреть объявления можно в любое время!",
+        "",
+    ),
     "search_prompt": (
         "Просьба описать, что ищем",
-        f"{ce('search', '🔍')} Напишите, что вы ищете — ИИ подберёт подходящие объявления.\n"
-        "Например: <i>ищу монтажёра для канала</i>",
+        f"{ce('search', '🔍')} <b>Умный поиск с ИИ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Напишите своими словами, что вы ищете — ИИ прочитает все объявления "
+        "и выберет подходящие по смыслу, а не только по словам.\n\n"
+        "<blockquote>Например: <i>ищу монтажёра для канала про игры</i> "
+        "или <i>хочу взаимный пиар с каналом про кино</i></blockquote>",
         "",
     ),
-    "no_results": ("Ничего не найдено", "😔 Ничего подходящего не нашлось. Попробуйте переформулировать запрос.", ""),
-    "no_posts": ("Нет объявлений", "Пока здесь нет объявлений. Загляните позже!", ""),
-    "feed_end": ("Конец ленты", "🎉 Это всё на сегодня! Загляните позже — появятся новые.", ""),
+    "no_results": (
+        "Ничего не найдено",
+        f"{ce('search', '😔')} <b>Ничего подходящего не нашлось.</b>\n\n"
+        "Попробуйте переформулировать запрос: опишите задачу другими словами "
+        "или загляните в категории — вдруг нужное уже там.",
+        "",
+    ),
+    "no_posts": (
+        "Нет объявлений",
+        f"{ce('star', '🌌')} <b>Здесь пока тихо.</b>\n\n"
+        "Объявлений в этой категории ещё нет — загляните позже или станьте первым, кто разместит своё!",
+        "",
+    ),
+    "feed_end": (
+        "Конец ленты",
+        f"{ce('ok', '🎉')} <b>Это всё на сегодня!</b>\n\n"
+        f"Вы посмотрели все объявления. Загляните позже — появятся новые {ce('star', '✨')}",
+        "",
+    ),
     "apply_intro": (
         "Анкета в админы — вступление",
-        f"{ce('star', '🙋')} Отлично! Ответьте на несколько вопросов анкеты. Отмена — /cancel",
+        f"{ce('crown', '👑')} <b>Хочешь в команду админов?</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Отлично! {ce('star', '✨')} Ответь на несколько вопросов анкеты — честно и со вкусом. "
+        "Твою анкету увидят главные админы и дадут ответ.\n\n"
+        "Отмена — /cancel",
         "",
     ),
-    "apply_sent": ("Анкета отправлена", f"{ce('ok', '✅')} Анкета отправлена главным админам. Мы свяжемся с вами!", ""),
-    "apply_closed": ("Набор закрыт", "Набор в админы сейчас закрыт.", ""),
-    "apply_exists": ("Анкета уже подана", "Ваша анкета уже на рассмотрении. Ожидайте ответа.", ""),
-    "apply_accepted": ("Анкета принята", f"{ce('ok', '🎉')} Поздравляем! Вас приняли в админы.", ""),
-    "apply_rejected": ("Анкета отклонена", f"{ce('no', '😔')} К сожалению, на этот раз вас не взяли в админы.", ""),
+    "apply_sent": (
+        "Анкета отправлена",
+        f"{ce('ok', '✅')} <b>Анкета отправлена!</b>\n\n"
+        f"Главные админы уже получили её. Мы обязательно свяжемся с вами {ce('heart', '💖')}",
+        "",
+    ),
+    "apply_closed": (
+        "Набор закрыт",
+        f"{ce('lock', '🔒')} <b>Набор в админы сейчас закрыт.</b>\n\nСледите за новостями — как только он откроется, мы дадим знать!",
+        "",
+    ),
+    "apply_exists": (
+        "Анкета уже подана",
+        f"{ce('bell', '⏳')} <b>Ваша анкета уже на рассмотрении.</b>\n\nОжидайте ответа — мы обязательно напишем.",
+        "",
+    ),
+    "apply_accepted": (
+        "Анкета принята",
+        f"{ce('ok', '🎉')} <b>Поздравляем!</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"Вас приняли в админы KMBP EXCHANGE {ce('crown', '👑')}\n"
+        "Откройте команду /admin или админ-панель в мини-приложении — и добро пожаловать в команду! "
+        f"{ce('fire', '🔥')}",
+        "",
+    ),
+    "apply_rejected": (
+        "Анкета отклонена",
+        f"{ce('no', '😔')} <b>К сожалению, на этот раз не получилось.</b>\n\n"
+        "Мы ценим ваш интерес и обязательно рассмотрим вас снова в следующем наборе. Не расстраивайтесь! "
+        f"{ce('heart', '💖')}",
+        "",
+    ),
 }
 
 pool: asyncpg.Pool
@@ -240,6 +384,64 @@ def label_d(d):
 
 def full_name_d(d):
     return " ".join(x for x in (d.get("first_name"), d.get("last_name")) if x)
+
+
+# ---------------------------------------------------------------- рассылка
+_bg_tasks: set = set()
+
+
+async def send_one(bot: Bot, uid, text_html, photo=None):
+    """Одно сообщение рассылки. Возвращает (успех, причина). Переживает flood-лимиты,
+    а если Telegram не принял HTML-разметку — отправляет то же самое обычным текстом."""
+    text_html = text_html or ""
+    for _ in range(4):
+        try:
+            if photo:
+                if len(text_html) <= 1024:
+                    await bot.send_photo(uid, photo, caption=text_html or None)
+                else:
+                    await bot.send_photo(uid, photo)
+                    await bot.send_message(uid, text_html)
+            else:
+                await bot.send_message(uid, text_html)
+            return True, None
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(min(e.retry_after, 30) + 1)
+        except TelegramForbiddenError:
+            return False, "бот заблокирован / чат недоступен"
+        except TelegramBadRequest as e:
+            msg = str(e)
+            if any(w in msg.lower() for w in ("parse", "entit", "tag")):
+                text_html = esc(strip_html(text_html))      # разметка сломана — шлём простым текстом
+                continue
+            return False, msg[:90]
+        except Exception as e:
+            return False, repr(e)[:90]
+    return False, "не удалось после повторов"
+
+
+async def run_broadcast(bot: Bot, text_html, photo=None):
+    users = [r["user_id"] for r in await pool.fetch("SELECT user_id FROM users ORDER BY user_id")]
+    sent = 0
+    reasons = Counter()
+    for uid in users:
+        ok, why = await send_one(bot, uid, text_html, photo)
+        if ok:
+            sent += 1
+        else:
+            reasons[why] += 1
+        await asyncio.sleep(0.05)
+    if reasons:
+        log.warning("broadcast: sent %s/%s, failures: %s", sent, len(users), dict(reasons))
+    return {"total": len(users), "sent": sent, "failed": len(users) - sent, "reasons": dict(reasons)}
+
+
+def broadcast_report(r):
+    txt = (f"📣 <b>Рассылка завершена</b>\nВсего: {r['total']}\nДоставлено: {r['sent']}\n"
+           f"Не доставлено: {r['failed']}")
+    if r["reasons"]:
+        txt += "\n\n<b>Причины:</b>\n" + "\n".join(f"• {esc(k)} — {v}" for k, v in r["reasons"].items())
+    return txt
 
 
 def fill(template, **kw):
@@ -405,15 +607,18 @@ def _loads_lenient(txt):
         raise
 
 
-async def gemini_json(prompt, budget=30.0):
+async def gemini_json(prompt, budget=30.0, images=None):
     """Запрос к Gemini с повторами (экспоненциальная пауза) при 429/5xx, переключением
     на запасные модели и «автоматом» (на 45 с отключает ИИ, если всё лежит)."""
     global _ai_down_until
     if not GEMINI_KEY or not GEMINI_MODELS or time.monotonic() < _ai_down_until:
         return None
     deadline = time.monotonic() + budget
+    parts = [{"text": prompt}]
+    for mime, raw in (images or []):
+        parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(raw).decode()}})
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
     async with _ai_sem:
@@ -1281,7 +1486,12 @@ async def apply_answer(m: Message, state: FSMContext, bot: Bot):
         await state.update_data(answers=answers)
         return await m.answer(f"<b>Вопрос {len(answers) + 1}/{len(qs)}</b>\n{esc(qs[len(answers)])}")
     await state.clear()
-    await create_application(bot, m.from_user.id, m.from_user.username, m.from_user.full_name, qs, answers)
+    try:
+        await create_application(bot, m.from_user.id, m.from_user.username, m.from_user.full_name, qs, answers)
+    except Exception:
+        log.exception("create_application failed")
+        return await m.answer("⚠️ Не получилось отправить анкету из-за ошибки. Попробуйте ещё раз чуть позже.",
+                              reply_markup=await main_kb())
     await m.answer(await get_text("apply_sent"), reply_markup=await main_kb())
 
 
@@ -1410,7 +1620,7 @@ async def got_post(m: Message, state: FSMContext, bot: Bot):
         bot, m.from_user.id, m.from_user.username, m.from_user.full_name, data.get("topic_id", 0), body,
         data.get("photo_id"))
     await state.clear()
-    await m.answer(await get_text("sent_ok" if r else "closed"))
+    await m.answer(await get_text("sent_ok") if r else "⚠️ Эта тема больше недоступна. Начните заново: «📝 Отправить своё объявление».")
 
 
 @router.message(UserFlow.post, F.photo, F.chat.type == "private")
@@ -1427,7 +1637,7 @@ async def got_post_photo(m: Message, state: FSMContext, bot: Bot):
     r = await create_request(
         bot, m.from_user.id, m.from_user.username, m.from_user.full_name, data.get("topic_id", 0), body, file_id)
     await state.clear()
-    await m.answer(await get_text("sent_ok" if r else "closed"))
+    await m.answer(await get_text("sent_ok") if r else "⚠️ Эта тема больше недоступна. Начните заново: «📝 Отправить своё объявление».")
 
 
 @router.message(UserFlow.post)
@@ -1698,21 +1908,28 @@ async def admin_broadcast(m: Message, state: FSMContext, bot: Bot):
     if m.text and m.text.startswith("/cancel"):
         await state.clear()
         return await m.answer("Рассылка отменена.", reply_markup=panel_kb())
-    content = m.html_text or (m.caption or "")
-    if not content.strip():
-        return await m.answer("Пришлите текстовое сообщение.")
-    ids = await pool.fetch("SELECT user_id FROM users ORDER BY user_id")
-    sent = failed = 0
-    await m.answer(f"Начинаю рассылку для {len(ids)} пользователей…")
-    for row in ids:
-        try:
-            await bot.send_message(row["user_id"], content)
-            sent += 1
-        except Exception:
-            failed += 1
-        await asyncio.sleep(0.04)
+    photo = m.photo[-1].file_id if m.photo else None
+    content = (m.html_text if (m.text or m.caption) else "") or ""
+    if not content.strip() and not photo:
+        return await m.answer("Пришлите текст (можно с одной картинкой в подписи). Отмена — /cancel.")
     await state.clear()
-    await m.answer(f"Рассылка завершена.\nДоставлено: {sent}\nНе доставлено: {failed}", reply_markup=panel_kb())
+    total = await pool.fetchval("SELECT count(*) FROM users")
+    await m.answer(f"⏳ Рассылка запущена для {total} пользователей. Итог пришлю сюда.")
+
+    async def job():
+        try:
+            res = await run_broadcast(bot, content, photo)
+            await bot.send_message(m.chat.id, broadcast_report(res), reply_markup=panel_kb())
+        except Exception:
+            log.exception("broadcast failed")
+            try:
+                await bot.send_message(m.chat.id, "❌ Рассылка упала с ошибкой, подробности в логах сервера.")
+            except Exception:
+                pass
+
+    t = asyncio.create_task(job())
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
 
 
 @router.callback_query(F.data.startswith("rp:done:"))
@@ -2064,6 +2281,139 @@ async def api_img(request):
                         headers={"Cache-Control": "public, max-age=86400, immutable"})
 
 
+# ---------------------------------------------------------------- премиум-эмодзи в мини-аппе
+TG_EMOJI_RE = re.compile(r'<tg-emoji emoji-id="(\d+)">(.*?)</tg-emoji>', re.S)
+_emoji_cache: "OrderedDict[str, tuple]" = OrderedDict()   # id -> (формат, байты)
+_clean_cache: "OrderedDict[str, str]" = OrderedDict()     # хеш текста -> очищенный HTML
+
+_SANS_BOLD_DIGITS = {str(i): chr(0x1D7EC + i) for i in range(10)}
+
+
+def fancy_letters(s: str) -> str:
+    """Красивый шрифт: латиница → жирный курсив-«каллиграфия», цифры → жирные;
+    кириллица в Unicode красивых вариантов не имеет — её оформляем жирным."""
+    out, cyr = [], False
+    for ch in s:
+        if "A" <= ch <= "Z":
+            out.append(chr(0x1D4D0 + ord(ch) - 65))
+        elif "a" <= ch <= "z":
+            out.append(chr(0x1D4EA + ord(ch) - 97))
+        elif ch in _SANS_BOLD_DIGITS:
+            out.append(_SANS_BOLD_DIGITS[ch])
+        elif ch.isalpha():
+            out.append(f"<b>{esc(ch)}</b>")
+            cyr = True
+        else:
+            out.append(esc(ch))
+    res = "".join(out)
+    return res.replace("</b><b>", "") if cyr else res
+
+
+async def emoji_sticker_bytes(bot: Bot, eid: str):
+    """(формат, байты) премиум-эмодзи: tgs / webm / webp."""
+    if eid in _emoji_cache:
+        _emoji_cache.move_to_end(eid)
+        return _emoji_cache[eid]
+    sts = await bot.get_custom_emoji_stickers([eid])
+    if not sts:
+        return None
+    st = sts[0]
+    fmt = "tgs" if st.is_animated else "webm" if st.is_video else "webp"
+    buf = io.BytesIO()
+    await bot.download(st.file_id, destination=buf)
+    _emoji_cache[eid] = (fmt, buf.getvalue())
+    while len(_emoji_cache) > 300:
+        _emoji_cache.popitem(last=False)
+    return _emoji_cache[eid]
+
+
+async def api_emoji(request):
+    eid = request.match_info["id"]
+    if not eid.isdigit() or len(eid) > 25:
+        raise web.HTTPNotFound()
+    try:
+        got = await emoji_sticker_bytes(request.app["bot"], eid)
+    except Exception:
+        log.warning("cannot load custom emoji %s", eid, exc_info=True)
+        got = None
+    if not got:
+        raise web.HTTPNotFound()
+    fmt, data = got
+    ctype = {"tgs": "application/octet-stream", "webm": "video/webm", "webp": "image/webp"}[fmt]
+    return web.Response(body=data, content_type=ctype, headers={
+        "Cache-Control": "private, max-age=86400", "X-Emoji-Fmt": fmt,
+        "Access-Control-Expose-Headers": "X-Emoji-Fmt"})
+
+
+async def beautify_premium(bot: Bot, text_html: str):
+    """Убирает все премиум-эмодзи. Если стикер — буква/цифра/надпись, ИИ (Gemini видит картинку)
+    понимает, что там написано, и вставляет это красивым шрифтом. Возвращает (html, ai_ok)."""
+    found = list(TG_EMOJI_RE.finditer(text_html or ""))
+    if not found:
+        return text_html, True
+    key = hashlib.sha256(text_html.encode()).hexdigest()
+    if key in _clean_cache:
+        return _clean_cache[key], True
+
+    ids = list(dict.fromkeys(m.group(1) for m in found))[:24]
+    thumbs = {}   # id -> (mime, bytes)
+    try:
+        sts = await bot.get_custom_emoji_stickers(ids)
+        for st in sts:
+            fid = st.thumbnail.file_id if st.thumbnail else (
+                st.file_id if not (st.is_animated or st.is_video) else None)
+            if not fid:
+                continue
+            buf = io.BytesIO()
+            await bot.download(fid, destination=buf)
+            thumbs[st.custom_emoji_id] = ("image/webp", buf.getvalue())
+    except Exception:
+        log.warning("beautify: cannot fetch sticker thumbnails", exc_info=True)
+
+    order = [i for i in ids if i in thumbs]
+    labels = {i: f"E{n + 1}" for n, i in enumerate(order)}
+    marked = TG_EMOJI_RE.sub(
+        lambda m: f"[[{labels[m.group(1)]}]]" if m.group(1) in labels else "", text_html)
+    answer = None
+    if order:
+        prompt = (
+            "Ниже текст объявления. Премиум-эмодзи в нём заменены метками [[E1]], [[E2]] и т. д. "
+            "К запросу приложены картинки этих эмодзи в том же порядке (E1, E2, ...).\n"
+            "Для КАЖДОЙ метки посмотри на её картинку:\n"
+            "- если на картинке буква, цифра или короткая надпись — верни ровно те символы, что на ней видны "
+            "(для русского слова — русскими буквами, для английского — латиницей; подсказка — окружающие метки и слова);\n"
+            "- если это просто украшение, смайл, значок или иллюстрация — верни пустую строку.\n"
+            "Верни ТОЛЬКО JSON вида {\"E1\": \"...\", \"E2\": \"\"}.\n\n"
+            f"ТЕКСТ:\n{strip_html(marked)[:3000]}")
+        answer = await gemini_json(prompt, budget=25.0, images=[thumbs[i] for i in order])
+    ai_ok = isinstance(answer, dict)
+
+    def repl(m):
+        eid, fb = m.group(1), m.group(2)
+        if not ai_ok:
+            return fb                      # ИИ недоступен — обычный эмодзи-заменитель
+        lab = labels.get(eid)
+        val = str(answer.get(lab, "") or "").strip()[:12] if lab else ""
+        return fancy_letters(val) if val else ""
+
+    out = TG_EMOJI_RE.sub(repl, text_html)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    if ai_ok:
+        _clean_cache[key] = out
+        while len(_clean_cache) > 400:
+            _clean_cache.popitem(last=False)
+    return out, ai_ok
+
+
+async def api_clean(request):
+    """Текст без премиум-эмодзи (на случай, если мини-апп не смог их показать)."""
+    d = await body(request)
+    txt = str(d.get("text") or "")[:8000]
+    out, ai = await beautify_premium(request.app["bot"], txt)
+    return jr({"text": out, "ai": ai})
+
+
+
 def post_json(p, uid=None):
     return {
         "id": p["id"], "topic_id": p["topic_id"], "topic": p["topic_name"], "text": p["text"],
@@ -2349,19 +2699,24 @@ async def api_admin_report_done(request):
 
 async def api_admin_broadcast(request):
     await need_main(request)
+    uid = request["u"]["id"]
     msg = ((await body(request)).get("text") or "").strip()
     if not msg or len(msg) > 4000:
         raise ApiError(400, "bad_text")
-    users = await pool.fetch("SELECT user_id FROM users ORDER BY user_id")
-    sent = failed = 0
-    for row in users:
+    bot = request.app["bot"]
+    total = await pool.fetchval("SELECT count(*) FROM users")
+
+    async def job():
         try:
-            await request.app["bot"].send_message(row["user_id"], msg)
-            sent += 1
+            res = await run_broadcast(bot, msg)
+            await bot.send_message(uid, broadcast_report(res))
         except Exception:
-            failed += 1
-        await asyncio.sleep(0.04)
-    return jr({"sent": sent, "failed": failed, "total": len(users)})
+            log.exception("broadcast failed")
+
+    t = asyncio.create_task(job())          # рассылка идёт в фоне — запрос не висит и не обрывается по таймауту
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+    return jr({"started": True, "total": total})
 
 
 async def api_admin_queue(request):
@@ -2596,6 +2951,8 @@ def build_web(bot: Bot):
     r.add_get("/img/{kind}/{id}", api_img)
     r.add_get("/api/me", api_me)
     r.add_get("/api/photo", api_photo)
+    r.add_get("/api/emoji/{id}", api_emoji)
+    r.add_post("/api/clean", api_clean)
     r.add_get("/api/posts", api_posts)
     r.add_get("/api/favorites", api_favorites)
     r.add_post("/api/favorite", api_favorite_toggle)
