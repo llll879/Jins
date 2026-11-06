@@ -518,6 +518,8 @@ async def init_db():
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             UNIQUE(reviewer_id,target_id));
         CREATE INDEX IF NOT EXISTS user_reviews_target_idx ON user_reviews(target_id, created_at DESC);
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS photo_data BYTEA;
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS photo_mime TEXT;
         CREATE TABLE IF NOT EXISTS escrow_deals(
             id BIGSERIAL PRIMARY KEY, buyer_id BIGINT NOT NULL, seller_id BIGINT NOT NULL,
             amount BIGINT NOT NULL CHECK(amount>0), terms TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'awaiting_payment',
@@ -575,7 +577,9 @@ async def init_db():
             id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL, recipient_id BIGINT NOT NULL,
             body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CHECK(sender_id<>recipient_id));
-        CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,id DESC);
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS post_id INT REFERENCES posts(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,post_id,id DESC);
+        ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS listing_post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         CREATE TABLE IF NOT EXISTS favorites(
             user_id BIGINT NOT NULL, post_id INT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY(user_id, post_id));
@@ -2748,9 +2752,15 @@ async def api_img(request):
         ident = int(request.match_info["id"])
     except ValueError:
         raise web.HTTPNotFound()
-    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r") else ""
+    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r", "rv") else ""
     if not want or not hmac.compare_digest(request.query.get("t", ""), want):
         raise web.HTTPNotFound()
+    if kind == "rv":
+        row = await pool.fetchrow("SELECT photo_data,photo_mime FROM user_reviews WHERE id=$1", ident)
+        if not row or not row["photo_data"]:
+            raise web.HTTPNotFound()
+        return web.Response(body=bytes(row["photo_data"]), content_type=row["photo_mime"] or "image/jpeg",
+                            headers={"Cache-Control": "private, max-age=600"})
     data = _img_cache.get((kind, ident))
     if data is None:
         fid = await pool.fetchval(
@@ -2920,6 +2930,30 @@ def post_json(p, uid=None):
     }
 
 
+async def seller_ratings(user_ids):
+    ids = list({int(i) for i in user_ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("""SELECT target_id, avg(rating)::float a, count(*)::int c FROM user_reviews
+        WHERE target_id = ANY($1::bigint[]) GROUP BY target_id""", ids)
+    return {r["target_id"]: (round(r["a"], 1), r["c"]) for r in rows}
+
+
+async def posts_json(rows, uid=None):
+    """post_json + рейтинг и число отзывов продавца (author_id, rating, reviews)."""
+    rows = list(rows)
+    rt = await seller_ratings([p["user_id"] for p in rows])
+    out = []
+    for p in rows:
+        j = post_json(p, uid)
+        a, c = rt.get(p["user_id"], (0, 0))
+        j["author_id"] = p["user_id"]
+        j["rating"] = a
+        j["reviews"] = c
+        out.append(j)
+    return out
+
+
 async def posts_by_ids(ids):
     if not ids:
         return []
@@ -2984,7 +3018,7 @@ async def api_posts(request):
     else:
         rows = await pool.fetch(
             "SELECT * FROM posts WHERE active AND expires_at>now() ORDER BY bumped_at DESC NULLS LAST, id DESC LIMIT $1 OFFSET $2", limit + 1, offset)
-    return jr({"posts": [post_json(p, uid) for p in rows[:limit]], "has_more": len(rows) > limit})
+    return jr({"posts": await posts_json(rows[:limit], uid), "has_more": len(rows) > limit})
 
 
 async def api_view(request):
@@ -3004,14 +3038,14 @@ async def api_search(request):
     if not rate_ok(("s", uid), 2):
         raise ApiError(429, "slow")
     ids, mode = await search_posts(uid, q)
-    return jr({"posts": [post_json(p, uid) for p in await posts_by_ids(ids)], "mode": mode})
+    return jr({"posts": await posts_json(await posts_by_ids(ids), uid), "mode": mode})
 
 
 async def api_recs(request):
     await need_sub(request)
     uid = request["u"]["id"]
     ids = await build_recs(uid)
-    return jr({"posts": [post_json(p, uid) for p in await posts_by_ids(ids)]})
+    return jr({"posts": await posts_json(await posts_by_ids(ids), uid)})
 
 
 async def api_submit(request):
@@ -3148,55 +3182,88 @@ async def api_profile_avatar_upload(request):
 
 async def api_profile_reviews(request):
     uid=int(request.query.get("id") or request["u"]["id"])
-    rows=await pool.fetch("""SELECT r.*,u.username,u.first_name FROM user_reviews r
+    rows=await pool.fetch("""SELECT r.id,r.rating,r.text,r.created_at,r.reviewer_id,(r.photo_data IS NOT NULL) has_photo,
+        u.username,u.first_name FROM user_reviews r
         JOIN users u ON u.user_id=r.reviewer_id WHERE r.target_id=$1 ORDER BY r.created_at DESC LIMIT 50""",uid)
     return jr({"reviews":[{"id":r["id"],"rating":r["rating"],"text":r["text"],
         "author":r["username"] and "@"+r["username"] or r["first_name"] or "Пользователь",
+        "author_id":r["reviewer_id"],
+        "photo":img_url("rv",r["id"]) if r["has_photo"] else None,
         "created":fmt_dt(r["created_at"]),"mine":r["reviewer_id"]==request["u"]["id"]} for r in rows]})
 
 
 async def api_profile_review_save(request):
-    uid=request["u"]["id"]; d=await body(request)
-    target=int(d.get("target_id") or 0); rating=int(d.get("rating") or 0); txt=str(d.get("text") or "").strip()[:1000]
+    uid=request["u"]["id"]
+    photo=None; pmime=None
+    if (request.content_type or "").startswith("multipart/"):
+        form=await request.post(); d={k:form.get(k) for k in ("target_id","rating","text")}
+        f=form.get("photo")
+        if f is not None and hasattr(f,"file"):
+            data=f.file.read(); mime=getattr(f,"content_type",None) or "image/jpeg"
+            if data:
+                if len(data)>5*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
+                    raise ApiError(400,"bad_image")
+                photo=data; pmime=mime
+    else:
+        d=await body(request)
+    try:
+        target=int(d.get("target_id") or 0); rating=int(d.get("rating") or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400,"bad_review")
+    txt=str(d.get("text") or "").strip()[:1000]
     if target==uid or rating not in range(1,6): raise ApiError(400,"bad_review")
     eligible=await pool.fetchval("""SELECT 1 FROM escrow_deals WHERE status='completed'
         AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1)) LIMIT 1""",uid,target)
     if not eligible: raise ApiError(403,"review_after_deal_only")
-    await pool.execute("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text) VALUES($1,$2,$3,$4)
-        ON CONFLICT(reviewer_id,target_id) DO UPDATE SET rating=EXCLUDED.rating,text=EXCLUDED.text,updated_at=now()""",uid,target,rating,txt)
+    await pool.execute("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text,photo_data,photo_mime) VALUES($1,$2,$3,$4,$5,$6)
+        ON CONFLICT(reviewer_id,target_id) DO UPDATE SET rating=EXCLUDED.rating,text=EXCLUDED.text,
+        photo_data=COALESCE(EXCLUDED.photo_data,user_reviews.photo_data),
+        photo_mime=COALESCE(EXCLUDED.photo_mime,user_reviews.photo_mime),updated_at=now()""",uid,target,rating,txt,photo,pmime)
     return jr({"ok":True})
 
 
 async def api_chats(request):
     uid=request["u"]["id"]
-    rows=await pool.fetch("""SELECT DISTINCT ON (peer) peer,body,created_at FROM (
-        SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,body,created_at,id
+    rows=await pool.fetch("""SELECT DISTINCT ON (peer,post_id) peer,post_id,body,created_at FROM (
+        SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id
         FROM direct_messages WHERE sender_id=$1 OR recipient_id=$1) x
-        ORDER BY peer,created_at DESC LIMIT 100""",uid)
+        ORDER BY peer,post_id,created_at DESC LIMIT 150""",uid)
     out=[]
     for r in rows:
         u=await pool.fetchrow("SELECT user_id,username,first_name,last_name FROM users WHERE user_id=$1",r["peer"])
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
-            "username":u["username"],"last":r["body"],"created":fmt_dt(r["created_at"])})
+            "username":u["username"],"last":r["body"],"post_id":r["post_id"],"created":fmt_dt(r["created_at"])})
     out.sort(key=lambda x:x["created"] or "",reverse=True)
     return jr({"chats":out})
 
 
 async def api_messages(request):
     uid=request["u"]["id"]; peer=int(request.query.get("peer") or 0)
+    post_id=int(request.query.get("post_id") or 0) or None
     if not peer or peer==uid: raise ApiError(400,"bad_peer")
+    if post_id:
+        post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
+        if not post or post["user_id"] not in (uid, peer):
+            raise ApiError(404,"post_chat_not_found")
     rows=await pool.fetch("""SELECT * FROM (SELECT * FROM direct_messages
-        WHERE (sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1)
-        ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer)
+        WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
+        AND post_id IS NOT DISTINCT FROM $3 ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer,post_id)
     return jr({"messages":[{"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"])} for r in rows]})
 
 
 async def api_message_send(request):
     uid=request["u"]["id"]; d=await body(request); peer=int(d.get("peer") or 0); msg=str(d.get("text") or "").strip()
+    post_id=int(d.get("post_id") or 0) or None
     if not peer or peer==uid or not msg or len(msg)>3000: raise ApiError(400,"bad_message")
     exists=await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",peer)
     if not exists: raise ApiError(404,"user_not_found")
-    row=await pool.fetchrow("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id,created_at",uid,peer,msg)
+    if post_id:
+        post=await pool.fetchrow("SELECT user_id,active FROM posts WHERE id=$1",post_id)
+        if not post or not post["active"] or post["user_id"] not in (uid, peer) or uid==peer:
+            raise ApiError(403,"post_chat_forbidden")
+    row=await pool.fetchrow("INSERT INTO direct_messages(sender_id,recipient_id,body,post_id) VALUES($1,$2,$3,$4) RETURNING id,created_at",uid,peer,msg,post_id)
+    try: await request.app["bot"].send_message(peer, "Новое сообщение по объявлению" + (f" #{post_id}" if post_id else "") + ". Откройте мини-приложение → Сообщения.")
+    except Exception: pass
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
 
 
@@ -3206,7 +3273,7 @@ async def api_favorites(request):
     rows = await pool.fetch(
         "SELECT p.* FROM favorites f JOIN posts p ON p.id=f.post_id "
         "WHERE f.user_id=$1 AND p.active AND p.expires_at>now() ORDER BY f.created_at DESC", uid)
-    return jr({"posts": [post_json(p, uid) for p in rows]})
+    return jr({"posts": await posts_json(rows, uid)})
 
 
 async def api_favorite_toggle(request):
@@ -3598,6 +3665,11 @@ async def api_escrow_create(request):
     except (TypeError, ValueError):
         raise ApiError(400, "bad_input")
     terms = str(d.get("terms") or "").strip()
+    post_id = int(d.get("post_id") or 0) or None
+    if post_id:
+        listing = await pool.fetchrow("SELECT user_id,active FROM posts WHERE id=$1", post_id)
+        if not listing or not listing["active"] or listing["user_id"] != seller_id:
+            raise ApiError(400, "listing_seller_mismatch")
     if seller_id <= 0 or seller_id == uid or amount < 1 or amount > 1000000 or not terms or len(terms) > 1500:
         raise ApiError(400, "bad_input")
     seller = await pool.fetchrow("SELECT user_id FROM users WHERE user_id=$1", seller_id)
@@ -3610,9 +3682,9 @@ async def api_escrow_create(request):
     timeout_m = max(5, min(180, int(cfg["payment_timeout_minutes"])))
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("""INSERT INTO escrow_deals(buyer_id,seller_id,amount,terms,status,fee,currency,payment_deadline)
-                VALUES($1,$2,$3,$4,'awaiting_fee',$5,'XTR',now()+($6::text||' minutes')::interval) RETURNING *""",
-                uid, seller_id, amount, terms, fee, timeout_m)
+            row = await conn.fetchrow("""INSERT INTO escrow_deals(buyer_id,seller_id,amount,terms,status,fee,currency,payment_deadline,listing_post_id)
+                VALUES($1,$2,$3,$4,'awaiting_fee',$5,'XTR',now()+($6::text||' minutes')::interval,$7) RETURNING *""",
+                uid, seller_id, amount, terms, fee, timeout_m, post_id)
             await escrow_event(conn, row["id"], uid, "created", {"seller_id": seller_id, "amount": amount, "fee": fee})
             await conn.execute("INSERT INTO escrow_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
                                row["id"], uid, f"Сделка создана. Комиссия: {fee} ⭐. После её оплаты ожидается подарок.")

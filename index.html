@@ -337,6 +337,7 @@ hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
 .chat-bubble.theirs{border-bottom-left-radius:5px}.chat-time{display:block;color:var(--dim);font-size:10px;margin-top:5px;text-align:right}
 .chat-compose{position:sticky;bottom:-100px;display:flex;gap:8px;padding:10px 0;background:var(--bg)}.chat-compose textarea{min-height:44px;max-height:110px;flex:1}
 .review{padding:13px;border:1px solid var(--line);border-radius:15px;background:var(--glass);margin:8px 0}.stars{letter-spacing:2px;color:#e4aa42}
+.rt{color:#e4aa42;font-weight:600}.seller{cursor:pointer;display:flex;align-items:center;gap:6px;flex-wrap:wrap}.seller b{color:var(--text,inherit)}.seller .arr{margin-left:auto;opacity:.6}.rv-photo{display:block;max-width:100%;max-height:220px;border-radius:12px;margin:8px 0;cursor:zoom-in;object-fit:cover}.zoom-bg{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.88);display:grid;place-items:center;padding:12px}.zoom-bg img{max-width:100%;max-height:100%;border-radius:10px}
 </style>
 </head>
 <body>
@@ -661,7 +662,7 @@ function cardHtml(p, isFav) {
     <div class="ab">
       <div class="arow"><div class="at">${esc(a.title)}</div><button class="afav ${isFav ? 'on' : ''}" aria-label="В избранное">${ic('heart', !!isFav)}</button></div>
       <div class="arow"><div class="ap">${priceHtml(a.price) || `<span class="ap-t">${esc(p.topic)}</span>`}</div><button class="adots" aria-label="Меню">${DOTS}</button></div>
-      <div class="am">${esc(p.topic)} · ${esc(p.created)}</div>
+      <div class="am">${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span> (${p.reviews}) · ` : ''}${esc(p.topic)} · ${esc(p.created)}</div>
     </div>`;
 }
 
@@ -675,7 +676,7 @@ function adDetail(p) {
       <h3 class="ad-title">${esc(a.title)}</h3>
       <div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span></div>
       ${a.desc ? `<div class="rich ad-desc">${esc(a.desc)}</div>` : ''}
-      <div class="ad-au">Автор: ${esc(p.author)}</div>
+      <div class="ad-au seller" data-seller="${p.author_id || ''}">Продавец: <b>${esc(p.author)}</b> ${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span><span>· ${p.reviews} отзыв.</span>` : '<span>· пока без отзывов</span>'}${p.author_id ? '<span class="arr">›</span>' : ''}</div>
     </div></div>`;
 }
 
@@ -756,16 +757,21 @@ views.ad = async (el, p) => {
   const fav = await favSet();
   el.innerHTML = `${adDetail(a)}
     <div class="ad-acts">
-      <button class="btn grow talk">${a.author_url ? 'Написать автору' : 'Профиль автора'}</button>
+      ${a.author_id && !a.mine ? '<button class="btn grow talk">✉️ Написать в мини-приложении</button>' : ''}
+      ${a.author_url && !a.mine ? '<button class="btn ghost small telegram-talk">Telegram</button>' : ''}
       <button class="btn ghost fav">${fav.has(a.id) ? '★ В избранном' : '☆ В избранное'}</button>
     </div>
     <div class="ad-acts">
+      ${a.author_id && !a.mine ? '<button class="btn ghost small seller-btn">★ Отзывы о продавце</button>' : ''}
       <button class="btn ghost small report">Пожаловаться</button>
       ${a.mine ? '<button class="btn ok small bump">Поднять</button>' : ''}
       ${isStaff() ? '<button class="btn bad small del">Удалить</button>' : ''}
     </div>
     ${a.expires ? `<div class="post-meta">Действует до ${esc(a.expires)}</div>` : ''}`;
-  $('.talk', el).onclick = () => openLink(a.author_url || a.contact);
+  const talk=$('.talk',el); if(talk) talk.onclick=()=>go('chat',{peer:a.author_id,post_id:a.id});
+  const tgTalk=$('.telegram-talk',el); if(tgTalk) tgTalk.onclick=()=>openLink(a.author_url || a.contact);
+  const sel = $('.seller', el); if (sel && a.author_id) sel.onclick = () => go('profile', { id: a.author_id });
+  const sb = $('.seller-btn', el); if (sb) sb.onclick = () => go('profile', { id: a.author_id });
   $('.fav', el).onclick = async e => { try { const s = await toggleFav(a.id); e.target.textContent = s ? '★ В избранном' : '☆ В избранное'; } catch (er) { fail(er); } };
   $('.report', el).onclick = async () => { if (!await confirmBox('Отправить жалобу на это объявление?')) return; try { const r = await api('/api/report', { post_id: a.id }); toast(r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (e) { fail(e); } };
   const bp = $('.bump', el); if (bp) bp.onclick = async () => { try { await api('/api/bump', { post_id: a.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } };
@@ -854,20 +860,20 @@ views.admin_escrow = async el => {
 };
 
 // ===== гарант Stars: сделки и диспуты =====
-views.escrow = async el => {
+views.escrow = async (el, params={}) => {
   const [st, ds] = await Promise.all([api('/api/escrow/status'), api('/api/escrow/deals')]);
   const labels = {awaiting_fee:'Ожидание комиссии', awaiting_asset:'Ожидание подарка', in_progress:'Сделка идёт', awaiting_seller:'Ожидание продавца', payout_pending:'Ожидание выдачи', refund_pending:'Ожидание возврата', disputed:'Спор', completed:'Завершена', cancelled:'Отменена', refunded:'Возвращена'};
   el.innerHTML = `<h2 class="page">Гарант Stars</h2>
     <div class="card glass"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>Состояние гаранта</b><span class="badge ${st.online?'good':'warn'}">${st.online?'Гарант онлайн':'Недоступен'}</span></div>
     <p class="sub" style="margin:8px 0">${st.online?'Резерв достаточен':'Новые сделки временно недоступны'}</p><div class="kv"><span>Резерв аккаунта</span><b>${Number(st.reserve_balance||0).toLocaleString('ru-RU')} ⭐</b></div><small class="dim">${esc(st.notice||'')}</small></div>
     <div class="card glass"><b>Создать сделку</b><p class="sub">Покупатель создаёт сделку и оплачивает комиссию. Подарок считается полученным только после проверки юзерботом.</p>
-    <label class="lbl">Telegram ID продавца</label><input class="f" id="escSeller" inputmode="numeric" placeholder="Например, 123456789">
+    <label class="lbl">Telegram ID продавца</label><input class="f" id="escSeller" inputmode="numeric" placeholder="Например, 123456789" value="${Number(params.seller_id)||''}" ${params.seller_id?'readonly':''}>
     <label class="lbl">Сумма в Stars</label><input class="f" id="escAmount" inputmode="numeric" placeholder="Например, 500">
-    <label class="lbl">Условия сделки</label><textarea class="f" id="escTerms" maxlength="1500" placeholder="Подробно опишите, что должен сделать продавец"></textarea>
+    <label class="lbl">Условия сделки</label><textarea class="f" id="escTerms" maxlength="1500" placeholder="Подробно опишите, что должен сделать продавец">${esc(params.terms||'')}</textarea>
     <button class="btn block" id="escCreate" style="margin-top:10px" ${st.online?'':'disabled'}>Создать и оплатить комиссию</button>
     ${!st.online?'<small class="dim">Гарант отключён администратором или аккаунт/резерв недоступен.</small>':''}</div>
     <h3 class="page" style="font-size:19px">Мои сделки</h3><div id="escDeals" class="stagger">${ds.deals.length?ds.deals.map(d=>`<div class="li glass" data-esc-id="${d.id}"><span class="ic">🛡</span><span class="t"><b>Сделка #${d.id} · ${d.amount} ⭐</b><small>${labels[d.status]||d.status} · комиссия ${d.fee} ⭐</small></span><span class="arr">›</span></div>`).join(''):'<div class="card glass sub">Сделок пока нет.</div>'}</div>`;
-  $('#escCreate',el).onclick=async()=>{const seller_id=Number($('#escSeller',el).value),amount=Number($('#escAmount',el).value),terms=$('#escTerms',el).value.trim();if(!seller_id||!amount||!terms)return toast('Заполните все поля','err');try{const r=await api('/api/escrow/deals',{seller_id,amount,terms});toast(`Сделка #${r.id} создана. Оплатите счёт в чате с ботом.`,'good');go('escrow',{}, {replace:true});}catch(e){if(e.code==='escrow_offline')toast('Гарант сейчас недоступен','err');else if(e.code==='cannot_send_invoice')toast('Не удалось отправить счёт. Откройте чат с ботом и повторите.','err');else fail(e)}};
+  $('#escCreate',el).onclick=async()=>{const seller_id=Number($('#escSeller',el).value),amount=Number($('#escAmount',el).value),terms=$('#escTerms',el).value.trim();if(!seller_id||!amount||!terms)return toast('Заполните все поля','err');try{const r=await api('/api/escrow/deals',{seller_id,amount,terms,post_id:Number(params.post_id)||null});toast(`Сделка #${r.id} создана. Оплатите счёт в чате с ботом.`,'good');go('escrow',{}, {replace:true});}catch(e){if(e.code==='escrow_offline')toast('Гарант сейчас недоступен','err');else if(e.code==='cannot_send_invoice')toast('Не удалось отправить счёт. Откройте чат с ботом и повторите.','err');else fail(e)}};
   $$('[data-esc-id]',el).forEach(x=>x.onclick=()=>go('escrow_deal',{id:Number(x.dataset.escId)}));
 };
 views.escrow_deal = async (el,p={}) => {
@@ -875,10 +881,11 @@ views.escrow_deal = async (el,p={}) => {
   const mineBuyer=Number(x.buyer_id)===Number(S.me.user.id),mineSeller=Number(x.seller_id)===Number(S.me.user.id);
   el.innerHTML=`<h2 class="page">Сделка #${x.id}</h2><div class="card glass"><div class="kv"><span>Статус</span><b>${labels[x.status]||x.status}</b></div><div class="kv"><span>Сумма</span><b>${x.amount} ⭐</b></div><div class="kv"><span>Комиссия</span><b>${x.fee} ⭐ · ${x.fee_paid?'оплачена':'не оплачена'}</b></div><div class="kv"><span>Покупатель</span><b>${x.buyer_id}</b></div><div class="kv"><span>Продавец</span><b>${x.seller_id}</b></div><p class="rich">${esc(x.terms)}</p></div>
   <div class="card glass"><b>Чат сделки</b><div id="escChat" style="display:grid;gap:8px;margin:12px 0">${d.messages.map(m=>`<div class="review"><small class="dim">${m.system?'Система':'ID '+m.sender_id} · ${esc(m.created_at||'')}</small><p class="rich">${esc(m.body)}</p></div>`).join('')}</div><textarea class="f" id="escMsg" maxlength="2000" placeholder="Сообщение участнику сделки"></textarea><button class="btn small" id="escSend" style="margin-top:8px">Отправить</button></div>
-  <div class="card glass"><b>Действия</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${mineBuyer&&x.status==='in_progress'?'<button class="btn small" id="escDone">Сделка выполнена</button>':''}${mineSeller&&x.status==='awaiting_seller'?'<button class="btn small" id="escConfirm">Подтвердить</button>':''}${d.can_dispute?'<button class="btn small danger" id="escDispute">Открыть диспут</button>':''}<button class="btn small" id="escReceipt">Чек PDF</button></div></div>`;
+  <div class="card glass"><b>Действия</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${mineBuyer&&x.status==='in_progress'?'<button class="btn small" id="escDone">Сделка выполнена</button>':''}${mineSeller&&x.status==='awaiting_seller'?'<button class="btn small" id="escConfirm">Подтвердить</button>':''}${x.status==='completed'?'<button class="btn small" id="escReview">★ Оставить отзыв</button>':''}${d.can_dispute?'<button class="btn small danger" id="escDispute">Открыть диспут</button>':''}<button class="btn small" id="escReceipt">Чек PDF</button></div></div>`;
   $('#escSend',el).onclick=async()=>{const body=$('#escMsg',el).value.trim();if(!body)return;try{await api('/api/escrow/message',{deal_id:x.id,body});toast('Сообщение отправлено','good');go('escrow_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   const act=async(path)=>{try{await api(path,{deal_id:x.id});toast('Действие принято','good');go('escrow_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   if($('#escDone',el))$('#escDone',el).onclick=()=>act('/api/escrow/buyer_done');
+  if($('#escReview',el))$('#escReview',el).onclick=()=>go('profile',{id:mineBuyer?x.seller_id:x.buyer_id});
   if($('#escConfirm',el))$('#escConfirm',el).onclick=()=>act('/api/escrow/seller_confirm');
   if($('#escDispute',el))$('#escDispute',el).onclick=async()=>{const reason=prompt('Опишите причину диспута');if(!reason)return;try{await api('/api/escrow/dispute',{deal_id:x.id,reason});toast('Диспут открыт','good');go('escrow_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   $('#escReceipt',el).onclick=async()=>{try{const r=await fetch('/api/escrow/receipt/'+x.id,{headers:{'X-Init-Data':(tg&&tg.initData)||''}});if(!r.ok)throw Error('Чек пока недоступен');const b=await r.blob(),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='kmbp-escrow-'+x.id+'.pdf';a.click();URL.revokeObjectURL(u);}catch(e){toast(e.message||'Не удалось получить чек','err')}};
@@ -902,10 +909,11 @@ views.profile = async (el, params={}) => {
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
   ${[['dark','Тёмная','#15171d'],['light','Светлая','#edf0f5'],['midnight','Полночь','#090d20'],['ocean','Океан','#0d2634'],['forest','Лес','#14291e']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
   <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv"><span>Сделка #${d.id} · ${esc(d.side)}<small class="dim">${esc(d.created||'')}</small></span><b>${d.amount} ⭐ · ${esc(d.status)}</b></div>`).join(''):'<div class="sub">История появится после проведения сделок через гарант.</div>'}</div>
-  <h3 class="page" style="font-size:19px">Отзывы</h3><div id="reviews">${rv.reviews.length?rv.reviews.map(r=>`<div class="review"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.author)}</b><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div><p class="rich">${esc(r.text||'Без комментария')}</p><small class="dim">${esc(r.created||'')}${r.mine?' · ваш отзыв':''}</small></div>`).join(''):empty('☆','Отзывов пока нет')}</div>
-  ${!own?`<div class="card glass"><b>Оставить или изменить отзыв</b><p class="sub" style="margin:5px 0 10px">Отзыв доступен только участникам завершённой сделки.</p><select class="f" id="reviewRating"><option value="5">★★★★★ — отлично</option><option value="4">★★★★☆ — хорошо</option><option value="3">★★★☆☆ — нормально</option><option value="2">★★☆☆☆ — плохо</option><option value="1">★☆☆☆☆ — очень плохо</option></select><textarea class="f" id="reviewText" maxlength="1000" placeholder="Ваш отзыв…" style="margin-top:8px"></textarea><button class="btn block" id="saveReview" style="margin-top:8px">Опубликовать / изменить отзыв</button></div>`:''}`;
+  <h3 class="page" style="font-size:19px">Отзывы</h3><div id="reviews">${rv.reviews.length?rv.reviews.map(r=>`<div class="review"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.author)}</b><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div><p class="rich">${esc(r.text||'Без комментария')}</p>${r.photo?`<img class="rv-photo" src="${esc(r.photo)}" alt="Скриншот" loading="lazy" data-zoom="${esc(r.photo)}">`:''}<small class="dim">${esc(r.created||'')}${r.mine?' · ваш отзыв':''}</small></div>`).join(''):empty('☆','Отзывов пока нет')}</div>
+  ${!own?`<div class="card glass"><b>Оставить или изменить отзыв</b><p class="sub" style="margin:5px 0 10px">Отзыв доступен только участникам завершённой сделки.</p><select class="f" id="reviewRating"><option value="5">★★★★★ — отлично</option><option value="4">★★★★☆ — хорошо</option><option value="3">★★★☆☆ — нормально</option><option value="2">★★☆☆☆ — плохо</option><option value="1">★☆☆☆☆ — очень плохо</option></select><textarea class="f" id="reviewText" maxlength="1000" placeholder="Ваш отзыв…" style="margin-top:8px"></textarea><label class="lbl" style="margin-top:8px">Скриншот (необязательно)</label><input type="file" id="reviewFile" accept="image/jpeg,image/png,image/webp" class="f"><button class="btn block" id="saveReview" style="margin-top:8px">Опубликовать / изменить отзыв</button></div>`:''}`;
   if(u.has_avatar){fetch('/api/profile/avatar?id='+id,{headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>{if(!r.ok)throw Error('avatar');return r.blob()}).then(b=>{const im=$('#pAvatar',el);if(im)im.src=URL.createObjectURL(b)}).catch(()=>{});}
-  if(!own){const pc=$('#openPeerChat',el);if(pc)pc.onclick=()=>go('chat',{peer:id});const sr=$('#saveReview',el);if(sr)sr.onclick=async()=>{try{await api('/api/profile/reviews',{target_id:id,rating:+$('#reviewRating',el).value,text:$('#reviewText',el).value});toast('Отзыв сохранён','good');go('profile',{id},{replace:true});}catch(er){if(er.code==='review_after_deal_only')toast('Оставить отзыв можно после завершённой сделки','err');else fail(er)}};}
+  $$('[data-zoom]',el).forEach(im=>im.onclick=()=>{const bg=document.createElement('div');bg.className='zoom-bg';bg.innerHTML='<img src="'+im.dataset.zoom+'" alt="">';bg.onclick=()=>bg.remove();document.body.appendChild(bg);});
+  if(!own){const pc=$('#openPeerChat',el);if(pc)pc.onclick=()=>go('chat',{peer:id});const sr=$('#saveReview',el);if(sr)sr.onclick=async()=>{try{const rf=$('#reviewFile',el),fd=new FormData();fd.append('target_id',id);fd.append('rating',$('#reviewRating',el).value);fd.append('text',$('#reviewText',el).value);if(rf&&rf.files[0])fd.append('photo',await shrinkImage(rf.files[0],1400,.85),'review.jpg');await api('/api/profile/reviews',fd);toast('Отзыв сохранён','good');go('profile',{id},{replace:true});}catch(er){if(er.code==='review_after_deal_only')toast('Оставить отзыв можно после завершённой сделки','err');else fail(er)}};}
   if(own){
     $('#changeAvatar',el).onclick=()=>$('#avatarFile',el).click();
     $('#avatarFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();fd.append('file',await shrinkImage(f,900,.88),'avatar.jpg');await api('/api/profile/avatar',fd);toast('Аватар обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
@@ -917,15 +925,17 @@ views.profile = async (el, params={}) => {
 views.chats = async el => {
   const d=await api('/api/chats');el.innerHTML=`<h2 class="page">Сообщения</h2>`;
   if(!d.chats.length){el.innerHTML+=empty('✉','Здесь появятся ваши диалоги');return;}
-  el.innerHTML+=`<div class="glass">${d.chats.map(c=>`<div class="chat-row" data-peer="${c.id}"><div class="pav">${esc(c.name.slice(0,1).toUpperCase())}</div><div style="min-width:0;flex:1"><b>${esc(c.name)}</b><div class="sub" style="margin:3px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.last)}</div></div><span class="arr">›</span></div>`).join('')}</div>`;
-  $$('.chat-row',el).forEach(x=>x.onclick=()=>go('chat',{peer:+x.dataset.peer}));
+  el.innerHTML+=`<div class="glass">${d.chats.map(c=>`<div class="chat-row" data-peer="${c.id}" data-post="${c.post_id||''}"><div class="pav">${esc(c.name.slice(0,1).toUpperCase())}</div><div style="min-width:0;flex:1"><b>${esc(c.name)}</b><div class="sub" style="margin:3px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.post_id?'Объявление #'+c.post_id+' · ':''}${esc(c.last)}</div></div><span class="arr">›</span></div>`).join('')}</div>`;
+  $$('.chat-row',el).forEach(x=>x.onclick=()=>go('chat',{peer:+x.dataset.peer,post_id:x.dataset.post?+x.dataset.post:0}));
 };
 views.chat = async (el,params={}) => {
   const peer=Number(params.peer);if(!peer){el.innerHTML=empty('✉','Не выбран собеседник');return;}
-  const d=await api('/api/messages?peer='+peer);el.innerHTML=`<h2 class="page">Чат <button class="btn ghost small" id="peerProfile">Профиль</button></h2><div id="chatLog" class="card glass" style="min-height:55vh;display:flex;flex-direction:column"></div><div class="chat-compose"><textarea class="f" id="chatText" rows="1" maxlength="3000" placeholder="Сообщение…"></textarea><button class="btn" id="chatSend">➤</button></div>`;
+  const post_id=Number(params.post_id)||0;const qs='peer='+peer+(post_id?'&post_id='+post_id:'');
+  const d=await api('/api/messages?'+qs);el.innerHTML=`<h2 class="page">${post_id?'Чат по объявлению #'+post_id:'Чат'} <button class="btn ghost small" id="peerProfile">Профиль</button></h2>${post_id?'<div class="card glass"><b>Обсуждение объявления</b><p class="sub">Договоритесь об условиях, затем создайте защищённую сделку через гаранта.</p><button class="btn block" id="startEscrow">🛡 Сделать сделку через гаранта</button></div>':''}<div id="chatLog" class="card glass" style="min-height:45vh;display:flex;flex-direction:column"></div><div class="chat-compose"><textarea class="f" id="chatText" rows="1" maxlength="3000" placeholder="Сообщение…"></textarea><button class="btn" id="chatSend">➤</button></div>`;
   const log=$('#chatLog',el);const draw=rows=>{log.innerHTML=rows.map(m=>`<div class="chat-bubble ${m.sender===S.me.user.id?'mine':'theirs'}">${esc(m.body)}<span class="chat-time">${esc(m.created||'')}</span></div>`).join('')||'<div class="sub">Начните диалог</div>';log.scrollTop=log.scrollHeight;};draw(d.messages);
   $('#peerProfile',el).onclick=()=>go('profile',{id:peer});
-  $('#chatSend',el).onclick=async()=>{const t=$('#chatText',el).value.trim();if(!t)return;try{await api('/api/messages',{peer,text:t});$('#chatText',el).value='';const n=await api('/api/messages?peer='+peer);draw(n.messages);}catch(e){fail(e)}};
+  const escrowBtn=$('#startEscrow',el);if(escrowBtn)escrowBtn.onclick=()=>go('escrow',{seller_id:peer,post_id,terms:'Сделка по объявлению #'+post_id+'\nУсловия согласовать в чате.'});
+  $('#chatSend',el).onclick=async()=>{const t=$('#chatText',el).value.trim();if(!t)return;try{await api('/api/messages',{peer,text:t,post_id:post_id||null});$('#chatText',el).value='';const n=await api('/api/messages?'+qs);draw(n.messages);}catch(e){fail(e)}};
 };
 
 // ===== подача объявления: 4 этапа + предпросмотр =====

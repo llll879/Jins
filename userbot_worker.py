@@ -71,13 +71,29 @@ def gift_snapshot(item):
     }
 
 
+def stars_to_int(value):
+    """balance в новых слоях Telegram — объект StarsAmount(amount, nanos) / StarsTonAmount, а не число.
+    Раньше int(StarsAmount) падал, ошибка глоталась и баланс всегда становился 0."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    amount = getattr(value, "amount", None)
+    if amount is not None:
+        return int(amount)
+    return int(value)
+
+
 async def refresh_balance(client):
+    """Баланс Stars юзербота или None, если прочитать не удалось (тогда прежнее значение в БД не затираем)."""
     try:
         status = await client(functions.payments.GetStarsStatusRequest(peer=types.InputPeerSelf()))
-        return int(getattr(status, "balance", 0) or 0)
-    except Exception as exc:
-        log.warning("Could not read userbot Stars balance: %s", exc)
-        return 0
+        bal = stars_to_int(getattr(status, "balance", None))
+        log.info("Userbot Stars balance: %s (raw: %r)", bal, getattr(status, "balance", None))
+        return bal
+    except Exception:
+        log.exception("Could not read userbot Stars balance")
+        return None
 
 
 async def scan_incoming_gifts(client, pool, http):
@@ -231,7 +247,11 @@ async def main():
         while not stop.is_set():
             try:
                 balance = await refresh_balance(client)
-                await pool.execute("UPDATE escrow_config SET userbot_online=TRUE,userbot_balance=$1,updated_at=now() WHERE id=1", balance)
+                if balance is None:
+                    await pool.execute("UPDATE escrow_config SET userbot_online=TRUE,updated_at=now() WHERE id=1")
+                    balance = int(await pool.fetchval("SELECT userbot_balance FROM escrow_config WHERE id=1") or 0)
+                else:
+                    await pool.execute("UPDATE escrow_config SET userbot_online=TRUE,userbot_balance=$1,updated_at=now() WHERE id=1", balance)
                 cfg = await pool.fetchrow("SELECT reserve_min FROM escrow_config WHERE id=1")
                 if cfg and balance < cfg["reserve_min"] and not low_alerted:
                     await notify(http, OWNER_ID, f"⚠️ Резерв Stars юзербота низкий: {balance} ⭐. Новые сделки будут заблокированы.")
