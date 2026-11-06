@@ -577,6 +577,19 @@ async def init_db():
             id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL, recipient_id BIGINT NOT NULL,
             body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CHECK(sender_id<>recipient_id));
+        CREATE TABLE IF NOT EXISTS direct_deals(
+            id BIGSERIAL PRIMARY KEY, buyer_id BIGINT NOT NULL, seller_id BIGINT NOT NULL,
+            amount BIGINT NOT NULL DEFAULT 0 CHECK(amount>=0), terms TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending_acceptance',
+            buyer_confirmed_at TIMESTAMPTZ, seller_confirmed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            closed_at TIMESTAMPTZ, CHECK(buyer_id<>seller_id));
+        CREATE INDEX IF NOT EXISTS direct_deals_member_idx ON direct_deals(buyer_id,seller_id,id DESC);
+        CREATE TABLE IF NOT EXISTS direct_deal_messages(
+            id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL REFERENCES direct_deals(id) ON DELETE CASCADE,
+            sender_id BIGINT NOT NULL, body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 2000),
+            system BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE INDEX IF NOT EXISTS direct_deal_messages_idx ON direct_deal_messages(deal_id,id);
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,post_id,id DESC);
         ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS listing_post_id INT REFERENCES posts(id) ON DELETE SET NULL;
@@ -3132,11 +3145,15 @@ async def api_profile(request):
         WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
     if not row:
         raise ApiError(404, "user_not_found")
-    deal_rows = await pool.fetch("""SELECT id,amount,status,created_at,buyer_id,seller_id FROM escrow_deals
-        WHERE buyer_id=$1 OR seller_id=$1 ORDER BY created_at DESC LIMIT 30""",uid)
+    deal_rows = await pool.fetch("""SELECT id,amount,status,created_at,buyer_id,seller_id,'guarantor'::text kind FROM escrow_deals
+        WHERE buyer_id=$1 OR seller_id=$1
+        UNION ALL
+        SELECT id,amount,status,created_at,buyer_id,seller_id,'direct'::text kind FROM direct_deals
+        WHERE buyer_id=$1 OR seller_id=$1
+        ORDER BY created_at DESC LIMIT 30""",uid)
     deals = sum(1 for x in deal_rows if x["status"]=="completed")
     history=[{"id":x["id"],"amount":x["amount"],"status":x["status"],"created":fmt_dt(x["created_at"]),
-        "side":"Покупатель" if x["buyer_id"]==uid else "Продавец"} for x in deal_rows]
+        "kind":x["kind"],"side":"Покупатель" if x["buyer_id"]==uid else "Продавец"} for x in deal_rows]
     return jr({"id": row["user_id"], "username": row["username"],
         "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
@@ -3213,6 +3230,9 @@ async def api_profile_review_save(request):
     txt=str(d.get("text") or "").strip()[:1000]
     if target==uid or rating not in range(1,6): raise ApiError(400,"bad_review")
     eligible=await pool.fetchval("""SELECT 1 FROM escrow_deals WHERE status='completed'
+        AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1))
+        UNION ALL
+        SELECT 1 FROM direct_deals WHERE status='completed'
         AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1)) LIMIT 1""",uid,target)
     if not eligible: raise ApiError(403,"review_after_deal_only")
     await pool.execute("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text,photo_data,photo_mime) VALUES($1,$2,$3,$4,$5,$6)
@@ -3265,6 +3285,98 @@ async def api_message_send(request):
     try: await request.app["bot"].send_message(peer, "Новое сообщение по объявлению" + (f" #{post_id}" if post_id else "") + ". Откройте мини-приложение → Сообщения.")
     except Exception: pass
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
+
+
+
+# ---- direct deals (без гаранта)
+async def direct_member(deal_id, uid):
+    row = await pool.fetchrow("SELECT * FROM direct_deals WHERE id=$1 AND (buyer_id=$2 OR seller_id=$2)", deal_id, uid)
+    if not row:
+        raise ApiError(404, "direct_deal_not_found")
+    return row
+
+
+async def api_direct_list(request):
+    uid=request["u"]["id"]
+    rows=await pool.fetch("""SELECT id,buyer_id,seller_id,amount,terms,status,created_at,updated_at
+        FROM direct_deals WHERE buyer_id=$1 OR seller_id=$1 ORDER BY id DESC LIMIT 100""",uid)
+    return jr({"deals":[dict(r) for r in rows]})
+
+
+async def api_direct_create(request):
+    uid=request["u"]["id"]; d=await body(request)
+    try:
+        seller_id=int(d.get("seller_id") or 0); amount=int(d.get("amount") or 0)
+    except (TypeError,ValueError):
+        raise ApiError(400,"bad_input")
+    terms=str(d.get("terms") or "").strip()
+    if seller_id<=0 or seller_id==uid or amount<0 or amount>1000000000 or not terms or len(terms)>1500:
+        raise ApiError(400,"bad_input")
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",seller_id):
+        raise ApiError(404,"seller_not_found")
+    row=await pool.fetchrow("""INSERT INTO direct_deals(buyer_id,seller_id,amount,terms,status)
+        VALUES($1,$2,$3,$4,'pending_acceptance') RETURNING id""",uid,seller_id,amount,terms)
+    await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
+        row["id"],uid,"Предложение прямой сделки создано. Гарант не участвует, деньги и товар сервис не удерживает.")
+    try: await request.app["bot"].send_message(seller_id,f"Вам предложили прямую сделку #{row['id']}. Откройте KMBP EXCHANGE → Сделки без гаранта.")
+    except Exception: pass
+    return jr({"ok":True,"id":row["id"],"status":"pending_acceptance"})
+
+
+async def api_direct_detail(request):
+    deal_id=int(request.query.get("id") or 0); row=await direct_member(deal_id,request["u"]["id"])
+    msgs=await pool.fetch("SELECT sender_id,body,system,created_at FROM direct_deal_messages WHERE deal_id=$1 ORDER BY id LIMIT 200",deal_id)
+    return jr({"deal":dict(row),"messages":[dict(m) for m in msgs]})
+
+
+async def api_direct_action(request):
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id") or 0)
+    action=str(d.get("action") or "")
+    row=await direct_member(deal_id,uid)
+    if action=="accept":
+        if uid!=row["seller_id"] or row["status"]!="pending_acceptance": raise ApiError(409,"bad_status")
+        await pool.execute("UPDATE direct_deals SET status='in_progress',updated_at=now() WHERE id=$1",deal_id)
+        msg="Продавец принял условия. Сделка началась."
+    elif action=="decline":
+        if uid!=row["seller_id"] or row["status"]!="pending_acceptance": raise ApiError(409,"bad_status")
+        await pool.execute("UPDATE direct_deals SET status='cancelled',closed_at=now(),updated_at=now() WHERE id=$1",deal_id)
+        msg="Продавец отклонил предложение."
+    elif action=="confirm":
+        if row["status"]!="in_progress": raise ApiError(409,"bad_status")
+        fresh=await pool.fetchrow("""UPDATE direct_deals SET
+            buyer_confirmed_at=CASE WHEN buyer_id=$2 THEN COALESCE(buyer_confirmed_at,now()) ELSE buyer_confirmed_at END,
+            seller_confirmed_at=CASE WHEN seller_id=$2 THEN COALESCE(seller_confirmed_at,now()) ELSE seller_confirmed_at END,
+            status=CASE WHEN (buyer_confirmed_at IS NOT NULL OR buyer_id=$2)
+                         AND (seller_confirmed_at IS NOT NULL OR seller_id=$2) THEN 'completed' ELSE status END,
+            closed_at=CASE WHEN (buyer_confirmed_at IS NOT NULL OR buyer_id=$2)
+                            AND (seller_confirmed_at IS NOT NULL OR seller_id=$2) THEN now() ELSE closed_at END,
+            updated_at=now() WHERE id=$1 RETURNING *""",deal_id,uid)
+        if fresh["status"]=="completed":
+            msg="Обе стороны подтвердили завершение. Сделка завершена — теперь можно оставить отзыв."
+        else:
+            msg="Ваше подтверждение записано. Для завершения нужно подтверждение второй стороны."
+    elif action=="cancel":
+        if row["status"] not in ("pending_acceptance","in_progress"): raise ApiError(409,"bad_status")
+        await pool.execute("UPDATE direct_deals SET status='cancelled',closed_at=now(),updated_at=now() WHERE id=$1",deal_id)
+        msg="Прямая сделка отменена."
+    else: raise ApiError(400,"bad_action")
+    await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",deal_id,uid,msg)
+    other=row["seller_id"] if uid==row["buyer_id"] else row["buyer_id"]
+    try: await request.app["bot"].send_message(other,f"Обновление прямой сделки #{deal_id}: {msg}")
+    except Exception: pass
+    return jr({"ok":True})
+
+
+async def api_direct_message(request):
+    uid=request["u"]["id"]; d=await body(request); deal_id=int(d.get("deal_id") or 0)
+    row=await direct_member(deal_id,uid); msg=str(d.get("body") or "").strip()
+    if row["status"] in ("completed","cancelled") or not msg or len(msg)>2000:
+        raise ApiError(400,"message_not_allowed")
+    await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body) VALUES($1,$2,$3)",deal_id,uid,msg)
+    other=row["seller_id"] if uid==row["buyer_id"] else row["buyer_id"]
+    try: await request.app["bot"].send_message(other,f"Новое сообщение в прямой сделке #{deal_id}.")
+    except Exception: pass
+    return jr({"ok":True})
 
 
 # ---- admin API
@@ -3902,6 +4014,11 @@ def build_web(bot: Bot):
     r.add_post("/api/escrow/dispute", api_escrow_dispute)
     r.add_post("/api/escrow/buyer_done", api_escrow_buyer_done)
     r.add_post("/api/escrow/seller_confirm", api_escrow_seller_confirm)
+    r.add_get("/api/direct/deals", api_direct_list)
+    r.add_post("/api/direct/deals", api_direct_create)
+    r.add_get("/api/direct/deal", api_direct_detail)
+    r.add_post("/api/direct/action", api_direct_action)
+    r.add_post("/api/direct/message", api_direct_message)
     r.add_get("/api/escrow/receipt/{id}", api_escrow_receipt)
     r.add_get("/api/admin/escrow", api_admin_escrow)
     r.add_post("/api/admin/escrow_action", api_admin_escrow_action)

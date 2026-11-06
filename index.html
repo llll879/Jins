@@ -762,7 +762,7 @@ views.ad = async (el, p) => {
       <button class="btn ghost fav">${fav.has(a.id) ? '★ В избранном' : '☆ В избранное'}</button>
     </div>
     <div class="ad-acts">
-      ${a.author_id && !a.mine ? '<button class="btn ghost small seller-btn">★ Отзывы о продавце</button>' : ''}
+      ${a.author_id && !a.mine ? '<button class="btn ghost small seller-btn">★ Отзывы о продавце</button><button class="btn small direct-deal">🤝 Сделка напрямую</button>' : ''}
       <button class="btn ghost small report">Пожаловаться</button>
       ${a.mine ? '<button class="btn ok small bump">Поднять</button>' : ''}
       ${isStaff() ? '<button class="btn bad small del">Удалить</button>' : ''}
@@ -772,6 +772,7 @@ views.ad = async (el, p) => {
   const tgTalk=$('.telegram-talk',el); if(tgTalk) tgTalk.onclick=()=>openLink(a.author_url || a.contact);
   const sel = $('.seller', el); if (sel && a.author_id) sel.onclick = () => go('profile', { id: a.author_id });
   const sb = $('.seller-btn', el); if (sb) sb.onclick = () => go('profile', { id: a.author_id });
+  const directBtn=$('.direct-deal',el); if(directBtn) directBtn.onclick=()=>go('direct_deals',{seller_id:a.author_id,post_id:a.id});
   $('.fav', el).onclick = async e => { try { const s = await toggleFav(a.id); e.target.textContent = s ? '★ В избранном' : '☆ В избранное'; } catch (er) { fail(er); } };
   $('.report', el).onclick = async () => { if (!await confirmBox('Отправить жалобу на это объявление?')) return; try { const r = await api('/api/report', { post_id: a.id }); toast(r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (e) { fail(e); } };
   const bp = $('.bump', el); if (bp) bp.onclick = async () => { try { await api('/api/bump', { post_id: a.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } };
@@ -834,7 +835,7 @@ views.favorites = async el => {
 views.more = async el => {
   const me = S.me, light = document.documentElement.dataset.theme === 'light';
   const ROLE = { owner: 'Владелец', main: 'Главный админ' };
-  const rows = [['profile', '♙', 'Мой профиль', 'Аватар, рейтинг и отзывы'], ['escrow', '🛡', 'Гарант Stars', 'Сделки, статусы и диспуты'], ['chats', '✉', 'Мои чаты', 'Личные сообщения'], ['favorites', '☆', 'Избранное', 'Сохранённые объявления'], ['submit', '＋', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', '▤', 'Мои заявки', 'Статусы и правки админов'], ['recs', '✦', 'Рекомендации', 'Подборка специально для вас']];
+  const rows = [['profile', '♙', 'Мой профиль', 'Аватар, рейтинг и отзывы'], ['escrow', '🤝', 'Сделки', 'Через гаранта или напрямую'], ['chats', '✉', 'Мои чаты', 'Личные сообщения'], ['favorites', '☆', 'Избранное', 'Сохранённые объявления'], ['submit', '＋', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', '▤', 'Мои заявки', 'Статусы и правки админов'], ['recs', '✦', 'Рекомендации', 'Подборка специально для вас']];
   if (me.recruit_open && !me.role) rows.push(['apply', '🙋', 'Хочу стать админом', 'Набор открыт — заполните анкету']);
   const name = (me.user && me.user.name) || 'друг';
   el.innerHTML = `<div class="prof glass" data-go="profile"><div class="pav" id="meAvatar">${esc(name.charAt(0).toUpperCase())}</div><div class="pn"><b>${esc(name)}</b><small>${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div><span class="arr">›</span></div>
@@ -863,7 +864,8 @@ views.admin_escrow = async el => {
 views.escrow = async (el, params={}) => {
   const [st, ds] = await Promise.all([api('/api/escrow/status'), api('/api/escrow/deals')]);
   const labels = {awaiting_fee:'Ожидание комиссии', awaiting_asset:'Ожидание подарка', in_progress:'Сделка идёт', awaiting_seller:'Ожидание продавца', payout_pending:'Ожидание выдачи', refund_pending:'Ожидание возврата', disputed:'Спор', completed:'Завершена', cancelled:'Отменена', refunded:'Возвращена'};
-  el.innerHTML = `<h2 class="page">Гарант Stars</h2>
+  el.innerHTML = `<h2 class="page">Сделки</h2>
+    <div class="card glass"><b>Выберите способ сделки</b><p class="sub">Гарант — с сопровождением сервиса. Напрямую — без комиссии и без удержания средств сервисом.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" id="goDirect">🤝 Сделки без гаранта</button><button class="btn small" id="goEscrow">🛡 Сделки через гаранта</button></div></div>
     <div class="card glass"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>Состояние гаранта</b><span class="badge ${st.online?'good':'warn'}">${st.online?'Гарант онлайн':'Недоступен'}</span></div>
     <p class="sub" style="margin:8px 0">${st.online?'Аккаунт подключён, воркер работает':(st.connected?'Аккаунт подключён, воркер запускается или недоступен':'Юзербот не подключён')}</p><small class="dim">${esc(st.notice||'')}</small></div>
     <div class="card glass"><b>Создать сделку</b><p class="sub">Покупатель создаёт сделку и оплачивает комиссию. Подарок считается полученным только после проверки юзерботом.</p>
@@ -873,9 +875,52 @@ views.escrow = async (el, params={}) => {
     <button class="btn block" id="escCreate" style="margin-top:10px" ${st.online?'':'disabled'}>Создать и оплатить комиссию</button>
     ${!st.online?'<small class="dim">Проверьте подключение аккаунта, работу воркера и разрешение новых сделок в настройках.</small>':''}</div>
     <h3 class="page" style="font-size:19px">Мои сделки</h3><div id="escDeals" class="stagger">${ds.deals.length?ds.deals.map(d=>`<div class="li glass" data-esc-id="${d.id}"><span class="ic">🛡</span><span class="t"><b>Сделка #${d.id} · ${d.amount} ⭐</b><small>${labels[d.status]||d.status} · комиссия ${d.fee} ⭐</small></span><span class="arr">›</span></div>`).join(''):'<div class="card glass sub">Сделок пока нет.</div>'}</div>`;
+  $('#goDirect',el).onclick=()=>go('direct_deals');
+  $('#goEscrow',el).onclick=()=>document.querySelector('#escCreate')?.scrollIntoView({behavior:'smooth',block:'center'});
   $('#escCreate',el).onclick=async()=>{const seller_id=Number($('#escSeller',el).value),amount=Number($('#escAmount',el).value),terms=$('#escTerms',el).value.trim();if(!seller_id||!amount||!terms)return toast('Заполните все поля','err');try{const r=await api('/api/escrow/deals',{seller_id,amount,terms,post_id:Number(params.post_id)||null});toast(`Сделка #${r.id} создана. Оплатите счёт в чате с ботом.`,'good');go('escrow',{}, {replace:true});}catch(e){if(e.code==='escrow_offline')toast('Гарант сейчас недоступен','err');else if(e.code==='cannot_send_invoice')toast('Не удалось отправить счёт. Откройте чат с ботом и повторите.','err');else fail(e)}};
   $$('[data-esc-id]',el).forEach(x=>x.onclick=()=>go('escrow_deal',{id:Number(x.dataset.escId)}));
 };
+
+// ===== прямые сделки без гаранта =====
+views.direct_deals = async (el, params={}) => {
+  const [ds, me] = await Promise.all([api('/api/direct/deals'), api('/api/me')]);
+  const uid=Number(me.user.id);
+  const labels={pending_acceptance:'Ожидает принятия',in_progress:'В процессе',completed:'Завершена',cancelled:'Отменена'};
+  el.innerHTML=`<h2 class="page">Сделки без гаранта</h2>
+    <div class="card glass"><b>Новая прямая сделка</b><p class="sub">Создайте предложение для другого пользователя. Он должен принять условия. Сервис не выступает посредником, не хранит деньги и не гарантирует исполнение.</p>
+      <label class="lbl">Telegram ID второй стороны</label><input class="f" id="ddSeller" inputmode="numeric" placeholder="ID пользователя" value="${Number(params.seller_id)||''}">
+      <label class="lbl">Сумма (необязательно, для фиксации договорённости)</label><input class="f" id="ddAmount" type="number" min="0" class="f" placeholder="0 — не указана">
+      <label class="lbl">Условия сделки</label><textarea class="f" id="ddTerms" maxlength="1500" placeholder="Что передаётся, сроки, способ оплаты и другие условия"></textarea>
+      <button class="btn block" id="ddCreate" style="margin-top:10px">Отправить предложение</button></div>
+    <h3 class="page" style="font-size:19px">Мои прямые сделки</h3>
+    <div class="stagger">${ds.deals.length?ds.deals.map(d=>{const other=Number(d.buyer_id)===uid?d.seller_id:d.buyer_id;return `<div class="li glass" data-direct-id="${d.id}"><span class="ic">🤝</span><span class="t"><b>Сделка #${d.id}</b><small>${labels[d.status]||d.status} · ${Number(d.amount)?Number(d.amount)+' ⭐':''} · ${Number(d.buyer_id)===uid?'Вы покупатель':'Вы продавец'} · ID ${other}</small></span><span class="arr">›</span></div>`}).join(''):'<div class="card glass sub">Прямых сделок пока нет.</div>'}</div>
+    <div class="card glass"><small class="dim">Важно: в прямой сделке проверяйте контрагента и договорённости самостоятельно. Не отправляйте деньги или ценности, пока не уверены в условиях.</small></div>`;
+  $('#ddCreate',el).onclick=async()=>{const seller_id=Number($('#ddSeller',el).value),amount=Number($('#ddAmount',el).value||0),terms=$('#ddTerms',el).value.trim();if(!seller_id||!terms)return toast('Укажите ID и условия сделки','err');try{const r=await api('/api/direct/deals',{seller_id,amount,terms});toast('Предложение отправлено','good');go('direct_deal',{id:r.id});}catch(e){fail(e)}};
+  $$('[data-direct-id]',el).forEach(x=>x.onclick=()=>go('direct_deal',{id:Number(x.dataset.directId)}));
+};
+
+views.direct_deal = async (el,p={}) => {
+  const d=await api('/api/direct/deal?id='+Number(p.id)),x=d.deal,uid=Number(S.me.user.id);
+  const buyer=uid===Number(x.buyer_id),seller=uid===Number(x.seller_id);
+  const labels={pending_acceptance:'Ожидает принятия продавцом',in_progress:'В процессе',completed:'Завершена',cancelled:'Отменена'};
+  el.innerHTML=`<h2 class="page">Прямая сделка #${x.id}</h2>
+    <div class="card glass"><div class="kv"><span>Статус</span><b>${labels[x.status]||x.status}</b></div><div class="kv"><span>Покупатель</span><b>${x.buyer_id}</b></div><div class="kv"><span>Продавец</span><b>${x.seller_id}</b></div><div class="kv"><span>Сумма</span><b>${Number(x.amount)?Number(x.amount)+' ⭐':'Не указана'}</b></div><p class="rich">${esc(x.terms)}</p><small class="dim">Сделка проходит напрямую. KMBP EXCHANGE не принимает и не удерживает оплату.</small></div>
+    <div class="card glass"><b>Переписка по сделке</b><div style="display:grid;gap:8px;margin:12px 0">${d.messages.map(m=>`<div class="review"><small class="dim">${m.system?'Система':'ID '+m.sender_id}</small><p class="rich">${esc(m.body)}</p></div>`).join('')}</div>${x.status!=='completed'&&x.status!=='cancelled'?'<textarea class="f" id="ddMsg" maxlength="2000" placeholder="Сообщение"></textarea><button class="btn small" id="ddSend" style="margin-top:8px">Отправить</button>':''}</div>
+    <div class="card glass"><b>Действия</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${seller&&x.status==='pending_acceptance'?'<button class="btn small" id="ddAccept">Принять условия</button><button class="btn small danger" id="ddDecline">Отклонить</button>':''}
+      ${x.status==='in_progress'?`<button class="btn small" id="ddConfirm">${buyer?(x.buyer_confirmed_at?'Вы подтвердили':'Подтвердить выполнение'): (x.seller_confirmed_at?'Вы подтвердили':'Подтвердить выполнение')}</button>`:''}
+      ${x.status==='completed'?`<button class="btn small" id="ddReview">★ Оставить отзыв</button>`:''}
+      ${['pending_acceptance','in_progress'].includes(x.status)?'<button class="btn small danger" id="ddCancel">Отменить</button>':''}
+    </div><p class="sub">Сделка считается завершённой только после подтверждения обеими сторонами. После этого можно оставить отзыв.</p></div>`;
+  const act=async(action)=>{try{await api('/api/direct/action',{deal_id:x.id,action});toast('Статус обновлён','good');go('direct_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
+  if($('#ddAccept',el))$('#ddAccept',el).onclick=()=>act('accept');
+  if($('#ddDecline',el))$('#ddDecline',el).onclick=()=>act('decline');
+  if($('#ddConfirm',el))$('#ddConfirm',el).onclick=()=>act('confirm');
+  if($('#ddCancel',el))$('#ddCancel',el).onclick=()=>act('cancel');
+  if($('#ddReview',el))$('#ddReview',el).onclick=()=>go('profile',{id:buyer?x.seller_id:x.buyer_id});
+  if($('#ddSend',el))$('#ddSend',el).onclick=async()=>{const body=$('#ddMsg',el).value.trim();if(!body)return;try{await api('/api/direct/message',{deal_id:x.id,body});go('direct_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
+};
+
 views.escrow_deal = async (el,p={}) => {
   const d=await api('/api/escrow/deal?id='+Number(p.id));const x=d.deal, labels={awaiting_fee:'Ожидание комиссии',awaiting_asset:'Ожидание подарка',in_progress:'Сделка идёт',awaiting_seller:'Ожидание продавца',payout_pending:'Ожидание выдачи',refund_pending:'Ожидание возврата',disputed:'Спор',completed:'Завершена',cancelled:'Отменена',refunded:'Возвращена'};
   const mineBuyer=Number(x.buyer_id)===Number(S.me.user.id),mineSeller=Number(x.seller_id)===Number(S.me.user.id);
@@ -908,9 +953,9 @@ views.profile = async (el, params={}) => {
   <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><input type="file" id="avatarFile" accept="image/jpeg,image/png,image/webp" hidden><button class="btn small" id="changeAvatar">Изменить фото</button><button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
   ${[['dark','Тёмная','#15171d'],['light','Светлая','#edf0f5'],['midnight','Полночь','#090d20'],['ocean','Океан','#0d2634'],['forest','Лес','#14291e']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
-  <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv"><span>Сделка #${d.id} · ${esc(d.side)}<small class="dim">${esc(d.created||'')}</small></span><b>${d.amount} ⭐ · ${esc(d.status)}</b></div>`).join(''):'<div class="sub">История появится после проведения сделок через гарант.</div>'}</div>
+  <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv"><span>Сделка #${d.id} · ${esc(d.side)}<small class="dim">${esc(d.created||'')}</small></span><b>${d.amount?d.amount+' ⭐':'Сумма не указана'} · ${d.kind==='direct'?'без гаранта':'через гаранта'} · ${esc(d.status)}</b></div>`).join(''):'<div class="sub">Здесь отображаются сделки через гаранта и прямые сделки.</div>'}</div>
   <h3 class="page" style="font-size:19px">Отзывы</h3><div id="reviews">${rv.reviews.length?rv.reviews.map(r=>`<div class="review"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.author)}</b><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div><p class="rich">${esc(r.text||'Без комментария')}</p>${r.photo?`<img class="rv-photo" src="${esc(r.photo)}" alt="Скриншот" loading="lazy" data-zoom="${esc(r.photo)}">`:''}<small class="dim">${esc(r.created||'')}${r.mine?' · ваш отзыв':''}</small></div>`).join(''):empty('☆','Отзывов пока нет')}</div>
-  ${!own?`<div class="card glass"><b>Оставить или изменить отзыв</b><p class="sub" style="margin:5px 0 10px">Отзыв доступен только участникам завершённой сделки.</p><select class="f" id="reviewRating"><option value="5">★★★★★ — отлично</option><option value="4">★★★★☆ — хорошо</option><option value="3">★★★☆☆ — нормально</option><option value="2">★★☆☆☆ — плохо</option><option value="1">★☆☆☆☆ — очень плохо</option></select><textarea class="f" id="reviewText" maxlength="1000" placeholder="Ваш отзыв…" style="margin-top:8px"></textarea><label class="lbl" style="margin-top:8px">Скриншот (необязательно)</label><input type="file" id="reviewFile" accept="image/jpeg,image/png,image/webp" class="f"><button class="btn block" id="saveReview" style="margin-top:8px">Опубликовать / изменить отзыв</button></div>`:''}`;
+  ${!own?`<div class="card glass"><b>Оставить или изменить отзыв</b><p class="sub" style="margin:5px 0 10px">Отзыв доступен участникам завершённой сделки через гаранта или напрямую (после подтверждения обеими сторонами).</p><select class="f" id="reviewRating"><option value="5">★★★★★ — отлично</option><option value="4">★★★★☆ — хорошо</option><option value="3">★★★☆☆ — нормально</option><option value="2">★★☆☆☆ — плохо</option><option value="1">★☆☆☆☆ — очень плохо</option></select><textarea class="f" id="reviewText" maxlength="1000" placeholder="Ваш отзыв…" style="margin-top:8px"></textarea><label class="lbl" style="margin-top:8px">Скриншот (необязательно)</label><input type="file" id="reviewFile" accept="image/jpeg,image/png,image/webp" class="f"><button class="btn block" id="saveReview" style="margin-top:8px">Опубликовать / изменить отзыв</button></div>`:''}`;
   if(u.has_avatar){fetch('/api/profile/avatar?id='+id,{headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>{if(!r.ok)throw Error('avatar');return r.blob()}).then(b=>{const im=$('#pAvatar',el);if(im)im.src=URL.createObjectURL(b)}).catch(()=>{});}
   $$('[data-zoom]',el).forEach(im=>im.onclick=()=>{const bg=document.createElement('div');bg.className='zoom-bg';bg.innerHTML='<img src="'+im.dataset.zoom+'" alt="">';bg.onclick=()=>bg.remove();document.body.appendChild(bg);});
   if(!own){const pc=$('#openPeerChat',el);if(pc)pc.onclick=()=>go('chat',{peer:id});const sr=$('#saveReview',el);if(sr)sr.onclick=async()=>{try{const rf=$('#reviewFile',el),fd=new FormData();fd.append('target_id',id);fd.append('rating',$('#reviewRating',el).value);fd.append('text',$('#reviewText',el).value);if(rf&&rf.files[0])fd.append('photo',await shrinkImage(rf.files[0],1400,.85),'review.jpg');await api('/api/profile/reviews',fd);toast('Отзыв сохранён','good');go('profile',{id},{replace:true});}catch(er){if(er.code==='review_after_deal_only')toast('Оставить отзыв можно после завершённой сделки','err');else fail(er)}};}

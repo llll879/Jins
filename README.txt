@@ -193,3 +193,16 @@ KMBP EXCHANGE — Telegram-бот и мини-приложение
 - A zero Stars balance alone no longer marks the guarantor offline and no longer blocks deal creation. The worker still must be connected and the guarantor must be enabled.
 - The Mini App API no longer returns the userbot Stars balance; the UI does not display it.
 - Telegram may still require Stars for particular paid transfer operations. Such an operation must not be marked completed unless Telegram confirms it.
+
+
+=== Прямые сделки без гаранта ===
+- В разделе «Сделки» доступны два отдельных сценария: через гаранта и напрямую между пользователями.
+- Прямая сделка создаётся по Telegram ID второй стороны; продавец принимает или отклоняет предложение.
+- После принятия стороны могут общаться в карточке сделки и независимо подтвердить выполнение.
+  Статус «Завершена» устанавливается только после двух подтверждений.
+- В прямых сделках сервис не принимает, не хранит и не переводит деньги/товары, не удерживает комиссию
+  и не гарантирует исполнение договорённостей. Проверка контрагента и расчёты остаются на сторонах.
+- История профиля объединяет прямые сделки и сделки через гаранта.
+- Отзыв разрешён после завершённой сделки любого типа; для прямой сделки требуются оба подтверждения.
+- Новые таблицы direct_deals и direct_deal_messages создаются автоматически при запуске через init_db.
+  Отдельная ручная миграция для этой версии не нужна.
