@@ -9,11 +9,14 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import sys
 from datetime import datetime, timezone
 
 import asyncpg
 from aiohttp import ClientSession
 from telethon import TelegramClient, functions, types
+from telethon.errors import AuthKeyError, AuthKeyUnregisteredError, SessionRevokedError, UserDeactivatedError
 from telethon.sessions import StringSession
 
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +25,7 @@ log = logging.getLogger("kmbp_escrow_userbot")
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-SESSION = os.environ["USERBOT_SESSION_STRING"]
+EXIT_UNAUTHORIZED = 3  # supervisor в bot.py удалит отозванную сессию и уведомит владельца
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
@@ -193,19 +196,39 @@ async def _init_conn(conn):
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
+async def load_session(pool):
+    """Сессия берётся из БД (подключается в админке бота); USERBOT_SESSION_STRING — запасной вариант."""
+    row = await pool.fetchval("SELECT session FROM userbot_session WHERE id=1")
+    return row or os.environ.get("USERBOT_SESSION_STRING", "")
+
+
 async def main():
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3, statement_cache_size=0, init=_init_conn)
-    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     http = ClientSession()
-    await pool.execute("UPDATE escrow_config SET userbot_online=FALSE,updated_at=now() WHERE id=1")
-    await client.connect()
-    if not await client.is_user_authorized():
-        raise RuntimeError("USERBOT_SESSION_STRING is not authorized; run connect_userbot.py locally")
-    me = await client.get_me()
-    log.info("Escrow MTProto worker connected as id=%s username=%s", me.id, me.username)
-    low_alerted = False
+    client = None
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass
+    exit_code = 0
     try:
-        while True:
+        await pool.execute("UPDATE escrow_config SET userbot_online=FALSE,updated_at=now() WHERE id=1")
+        session = await load_session(pool)
+        if not session:
+            log.error("Нет сессии юзербота: подключите аккаунт в админке бота")
+            return 2
+        client = TelegramClient(StringSession(session), API_ID, API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            log.error("Сессия юзербота не авторизована (отозвана?)")
+            return EXIT_UNAUTHORIZED
+        me = await client.get_me()
+        log.info("Escrow MTProto worker connected as id=%s username=%s", me.id, me.username)
+        low_alerted = False
+        while not stop.is_set():
             try:
                 balance = await refresh_balance(client)
                 await pool.execute("UPDATE escrow_config SET userbot_online=TRUE,userbot_balance=$1,updated_at=now() WHERE id=1", balance)
@@ -218,15 +241,27 @@ async def main():
                 await scan_incoming_gifts(client, pool, http)
                 await try_release_collectible(client, pool, http)
                 await expire_unpaid(pool, http)
+            except (AuthKeyError, AuthKeyUnregisteredError, SessionRevokedError, UserDeactivatedError):
+                log.error("Сессия юзербота отозвана в Telegram")
+                exit_code = EXIT_UNAUTHORIZED
+                break
             except Exception:
                 log.exception("worker iteration failed")
-            await asyncio.sleep(20)
+            try:
+                await asyncio.wait_for(stop.wait(), 20)
+            except asyncio.TimeoutError:
+                pass
+        return exit_code
     finally:
-        await pool.execute("UPDATE escrow_config SET userbot_online=FALSE,updated_at=now() WHERE id=1")
-        await client.disconnect()
+        try:
+            await pool.execute("UPDATE escrow_config SET userbot_online=FALSE,updated_at=now() WHERE id=1")
+        except Exception:
+            pass
+        if client:
+            await client.disconnect()
         await http.close()
         await pool.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()) or 0)

@@ -10,12 +10,21 @@ import os
 import random
 import re
 import time
+import secrets
+import sys
 from collections import Counter, OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
 import asyncpg
+try:
+    from telethon import TelegramClient
+    from telethon import errors as tl_errors
+    from telethon.sessions import StringSession
+except ImportError:  # telethon нужен только для подключения юзербота
+    TelegramClient = None
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -535,6 +544,11 @@ async def init_db():
             userbot_online BOOLEAN NOT NULL DEFAULT FALSE, userbot_balance BIGINT NOT NULL DEFAULT 0,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
         INSERT INTO escrow_config(id) VALUES(1) ON CONFLICT DO NOTHING;
+        CREATE TABLE IF NOT EXISTS userbot_session(
+            id SMALLINT PRIMARY KEY DEFAULT 1 CHECK(id=1), session TEXT NOT NULL,
+            phone TEXT, account_id BIGINT, username TEXT, first_name TEXT,
+            connected_by BIGINT, connected_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        DROP TABLE IF EXISTS userbot_auth_requests;
         CREATE TABLE IF NOT EXISTS escrow_assets(
             id BIGSERIAL PRIMARY KEY, deal_id BIGINT NOT NULL UNIQUE REFERENCES escrow_deals(id) ON DELETE CASCADE,
             sender_id BIGINT NOT NULL, kind TEXT NOT NULL, telegram_ref TEXT NOT NULL,
@@ -1252,6 +1266,12 @@ class ApplyFlow(StatesGroup):
     answering = State()
 
 
+class UserbotFlow(StatesGroup):
+    phone = State()
+    code = State()
+    password = State()
+
+
 class AdminFlow(StatesGroup):
     edit_text = State()
     add_admin = State()
@@ -1378,6 +1398,7 @@ async def cb_sub_check(cb: CallbackQuery, bot: Bot):
 @router.message(Command("cancel"))
 async def cmd_cancel(m: Message, state: FSMContext, bot: Bot):
     await state.clear()
+    await ub_drop(m.from_user.id)
     await release_pending(bot, m.from_user.id)
     await m.answer("Отменено.", reply_markup=await main_kb() if m.chat.type == "private" else None)
 
@@ -1849,6 +1870,7 @@ def panel_kb():
     b.button(text="📊 Статистика", callback_data="a:stats")
     b.button(text="📣 Рассылка", callback_data="a:broadcast")
     b.button(text="ℹ️ Статус", callback_data="a:status")
+    b.button(text="🤖 Юзербот гаранта", callback_data="a:userbot")
     b.adjust(2)
     return b.as_markup()
 
@@ -1876,6 +1898,7 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
     if not await is_main(cb.from_user.id):
         return await cb.answer("Нет доступа", show_alert=True)
     await state.clear()
+    await ub_drop(cb.from_user.id)
     act = cb.data[2:]
     if act == "home":
         await cb.message.edit_text("⚙️ Админ-панель", reply_markup=panel_kb())
@@ -1948,6 +1971,9 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
             f"(кнопка «Хочу стать админом» {'видна' if open_ else 'скрыта'} у пользователей)\n"
             f"Анкет на рассмотрении: {napps}\n\nВопросы анкеты:\n{lines}",
             reply_markup=b.as_markup())
+    elif act == "userbot":
+        text, kb = await ub_status_view(cb.from_user.id)
+        await cb.message.edit_text(text, reply_markup=kb)
     elif act == "pic":
         has = bool(await get_setting("welcome_photo"))
         b = InlineKeyboardBuilder()
@@ -2275,6 +2301,357 @@ async def pending_text_private(m: Message, bot: Bot):
     """Причина отклонения / правка поста, когда заявки приходят админу в личку (нет группы модерации)."""
     if await role(m.from_user.id) is not None:
         await handle_pending_text(m, bot)
+
+
+# ================================================================ ЮЗЕРБОТ ГАРАНТА: вход через бота
+# Админка → «Юзербот гаранта» → «Подключить»: номер → код (формат 12.345) → пароль 2FA (если включён).
+# Сообщения с номером/кодом/паролем бот сразу удаляет. Готовая StringSession хранится в таблице userbot_session.
+UB_LOGIN_TTL = 600  # сек. на весь процесс входа
+UB_MAX_PASSWORD_TRIES = 5
+_ub_login = {}      # user_id -> {"client", "phone", "hash", "ts", "tries"}
+_ub_proc = None
+_ub_wake = None     # asyncio.Event, создаётся в supervisor
+_ub_quick_restart = False
+
+
+def ub_api_creds():
+    api_id = os.getenv("TELEGRAM_API_ID", "").strip()
+    api_hash = os.getenv("TELEGRAM_API_HASH", "").strip()
+    return (int(api_id), api_hash) if api_id.isdigit() and api_hash else None
+
+
+def ub_clean_phone(text):
+    digits = re.sub(r"\D", "", text or "")
+    if len(digits) == 11 and digits.startswith("8"):  # 8 9xx xxx-xx-xx → +7…
+        digits = "7" + digits[1:]
+    return "+" + digits if 7 <= len(digits) <= 15 else None
+
+
+async def ub_safe_delete(m: Message):
+    try:
+        await m.delete()
+    except Exception:
+        pass
+
+
+async def ub_drop(uid):
+    """Закрыть незавершённый вход (временный клиент без сохранения сессии)."""
+    st = _ub_login.pop(uid, None)
+    if st:
+        try:
+            await st["client"].disconnect()
+        except Exception:
+            pass
+
+
+async def ub_get_login(uid, state: FSMContext, m: Message):
+    st = _ub_login.get(uid)
+    if st and time.time() - st["ts"] > UB_LOGIN_TTL:
+        await ub_drop(uid)
+        st = None
+    if not st:
+        await state.clear()
+        await m.answer("⌛ Сессия входа истекла или была сброшена. Откройте /admin → «Юзербот гаранта» и начните заново.")
+    return st
+
+
+def ub_cancel_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="✖️ Отмена", callback_data="ub:cancel")
+    return b.as_markup()
+
+
+async def ub_restart_worker(quick=True):
+    """Остановить текущий воркер; supervisor поднимет его заново уже с актуальной сессией."""
+    global _ub_quick_restart
+    _ub_quick_restart = quick
+    if _ub_wake:
+        _ub_wake.set()
+    proc = _ub_proc
+    if proc and proc.returncode is None:
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+
+
+async def ub_status_view(uid):
+    row = await pool.fetchrow("SELECT phone,account_id,username,first_name,connected_at FROM userbot_session WHERE id=1")
+    cfg = await pool.fetchrow("SELECT userbot_online,userbot_balance FROM escrow_config WHERE id=1")
+    owner = uid == OWNER_ID
+    b = InlineKeyboardBuilder()
+    lines = ["🤖 <b>Юзербот гаранта</b>", ""]
+    if row:
+        name = esc(row["first_name"] or "")
+        uname = f" @{esc(row['username'])}" if row["username"] else ""
+        lines += [f"Аккаунт: <b>{name}</b>{uname}", f"ID: <code>{row['account_id']}</code>",
+                  f"Номер: <code>{esc(row['phone'] or '—')}</code>",
+                  f"Подключён: {row['connected_at'].astimezone(TZ):%d.%m.%Y %H:%M}",
+                  f"Воркер: {'🟢 онлайн' if cfg and cfg['userbot_online'] else '🔴 офлайн'}",
+                  f"Баланс Stars: {cfg['userbot_balance'] if cfg else 0} ⭐"]
+        if owner:
+            b.button(text="🔄 Перезапустить воркер", callback_data="ub:restart")
+            b.button(text="🔁 Сменить аккаунт", callback_data="ub:connect")
+            b.button(text="⛔ Отключить", callback_data="ub:disconnect")
+    else:
+        lines.append("Аккаунт не подключён.")
+        if owner:
+            b.button(text="🔌 Подключить юзербота", callback_data="ub:connect")
+    if owner:
+        if TelegramClient is None:
+            lines.append("\n⚠️ Не установлена библиотека telethon (pip install -r requirements.txt).")
+        if not ub_api_creds():
+            lines.append("\n⚠️ Не заданы TELEGRAM_API_ID и TELEGRAM_API_HASH (my.telegram.org) в переменных окружения.")
+    else:
+        lines.append("\nПодключать и отключать юзербота может только владелец.")
+    b.button(text="⬅️ В панель", callback_data="a:home")
+    b.adjust(1)
+    return "\n".join(lines), b.as_markup()
+
+
+@router.callback_query(F.data.startswith("ub:"))
+async def cb_userbot(cb: CallbackQuery, state: FSMContext):
+    uid = cb.from_user.id
+    if uid != OWNER_ID:
+        return await cb.answer("Только для владельца", show_alert=True)
+    act = cb.data[3:]
+    if act in ("connect", "cancel", "disconnect", "disconnect_yes", "restart"):
+        await state.clear()
+        await ub_drop(uid)
+    if act == "connect":
+        if TelegramClient is None:
+            return await cb.answer("Не установлен telethon", show_alert=True)
+        if not ub_api_creds():
+            return await cb.answer("Задайте TELEGRAM_API_ID и TELEGRAM_API_HASH", show_alert=True)
+        await state.set_state(UserbotFlow.phone)
+        await cb.message.edit_text(
+            "🔌 <b>Подключение юзербота</b>\n\n"
+            "Шаг 1 из 3. Отправьте номер <b>отдельного</b> Telegram-аккаунта гаранта "
+            "в международном формате, например <code>+79991234567</code>.\n\n"
+            "Сообщение с номером бот сразу удалит.", reply_markup=ub_cancel_kb())
+    elif act == "cancel":
+        text, kb = await ub_status_view(uid)
+        await cb.message.edit_text(text, reply_markup=kb)
+    elif act == "restart":
+        await ub_restart_worker()
+        await cb.answer("Воркер перезапускается…")
+        await asyncio.sleep(1)
+        text, kb = await ub_status_view(uid)
+        await cb.message.edit_text(text, reply_markup=kb)
+        return
+    elif act == "disconnect":
+        b = InlineKeyboardBuilder()
+        b.button(text="⛔ Да, отключить", callback_data="ub:disconnect_yes")
+        b.button(text="⬅️ Назад", callback_data="ub:cancel")
+        b.adjust(1)
+        await cb.message.edit_text(
+            "Отключить юзербота? Сессия будет завершена в Telegram и удалена из базы, воркер остановится. "
+            "Новые сделки гаранта работать не будут.", reply_markup=b.as_markup())
+    elif act == "disconnect_yes":
+        sess = await pool.fetchval("SELECT session FROM userbot_session WHERE id=1")
+        await pool.execute("DELETE FROM userbot_session WHERE id=1")
+        await ub_restart_worker()
+        if sess and TelegramClient and ub_api_creds():
+            api_id, api_hash = ub_api_creds()
+            try:
+                c = TelegramClient(StringSession(sess), api_id, api_hash)
+                await c.connect()
+                if await c.is_user_authorized():
+                    await c.log_out()
+                else:
+                    await c.disconnect()
+            except Exception:
+                log.warning("userbot log_out failed", exc_info=True)
+        await pool.execute("UPDATE escrow_config SET userbot_online=FALSE,updated_at=now() WHERE id=1")
+        text, kb = await ub_status_view(uid)
+        await cb.message.edit_text("✅ Юзербот отключён.\n\n" + text, reply_markup=kb)
+    await cb.answer()
+
+
+@router.message(UserbotFlow.phone, F.text, F.chat.type == "private")
+async def ub_got_phone(m: Message, state: FSMContext):
+    uid = m.from_user.id
+    if uid != OWNER_ID:
+        return await state.clear()
+    await ub_safe_delete(m)
+    phone = ub_clean_phone(m.text)
+    if not phone:
+        return await m.answer("Не похоже на номер. Пример: <code>+79991234567</code>. Отмена — /cancel.")
+    creds = ub_api_creds()
+    if TelegramClient is None or not creds:
+        await state.clear()
+        return await m.answer("Не настроены telethon / TELEGRAM_API_ID / TELEGRAM_API_HASH.")
+    await ub_drop(uid)
+    client = TelegramClient(StringSession(), creds[0], creds[1])
+    try:
+        await client.connect()
+        sent = await client.send_code_request(phone)
+    except tl_errors.PhoneNumberInvalidError:
+        await client.disconnect()
+        return await m.answer("Telegram не принял этот номер. Проверьте и отправьте ещё раз.")
+    except tl_errors.FloodWaitError as e:
+        await client.disconnect()
+        await state.clear()
+        return await m.answer(f"Telegram просит подождать {e.seconds} сек. перед новым запросом кода. Попробуйте позже.")
+    except Exception as e:
+        log.exception("userbot send_code failed")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        await state.clear()
+        return await m.answer(f"Не удалось запросить код: {esc(type(e).__name__)}. Попробуйте позже.")
+    _ub_login[uid] = {"client": client, "phone": phone, "hash": sent.phone_code_hash, "ts": time.time(), "tries": 0}
+    await state.set_state(UserbotFlow.code)
+    await m.answer(
+        "Шаг 2 из 3. Код отправлен в Telegram на этот аккаунт (или SMS).\n\n"
+        "Отправьте его <b>через точку</b>: например, если код <code>12345</code>, пишите <code>12.345</code>.\n"
+        "Так Telegram не считает код «слитым» и не аннулирует его.\n\n"
+        "Сообщение с кодом бот сразу удалит. Отмена — /cancel.", reply_markup=ub_cancel_kb())
+
+
+@router.message(UserbotFlow.code, F.text, F.chat.type == "private")
+async def ub_got_code(m: Message, state: FSMContext, bot: Bot):
+    uid = m.from_user.id
+    if uid != OWNER_ID:
+        return await state.clear()
+    await ub_safe_delete(m)
+    st = await ub_get_login(uid, state, m)
+    if not st:
+        return
+    code = re.sub(r"\D", "", m.text or "")
+    if not 4 <= len(code) <= 8:
+        return await m.answer("Не вижу код. Отправьте цифры через точку, например <code>12.345</code>.")
+    try:
+        await st["client"].sign_in(phone=st["phone"], code=code, phone_code_hash=st["hash"])
+    except tl_errors.SessionPasswordNeededError:
+        await state.set_state(UserbotFlow.password)
+        return await m.answer("Шаг 3 из 3. На аккаунте включена двухфакторная защита. Отправьте пароль 2FA "
+                              "(сообщение будет удалено). Отмена — /cancel.", reply_markup=ub_cancel_kb())
+    except tl_errors.PhoneCodeInvalidError:
+        return await m.answer("❌ Неверный код. Отправьте ещё раз в формате <code>12.345</code>.")
+    except (tl_errors.PhoneCodeExpiredError, tl_errors.PhoneCodeEmptyError):
+        await ub_drop(uid)
+        await state.clear()
+        return await m.answer("⌛ Код истёк. Откройте /admin → «Юзербот гаранта» и запросите новый.")
+    except tl_errors.FloodWaitError as e:
+        return await m.answer(f"Слишком много попыток, подождите {e.seconds} сек.")
+    except Exception as e:
+        log.exception("userbot sign_in failed")
+        await ub_drop(uid)
+        await state.clear()
+        return await m.answer(f"Вход не удался: {esc(type(e).__name__)}. Начните заново.")
+    await ub_finish(m, state, uid, st)
+
+
+@router.message(UserbotFlow.password, F.text, F.chat.type == "private")
+async def ub_got_password(m: Message, state: FSMContext):
+    uid = m.from_user.id
+    if uid != OWNER_ID:
+        return await state.clear()
+    password = m.text or ""
+    await ub_safe_delete(m)
+    st = await ub_get_login(uid, state, m)
+    if not st:
+        return
+    try:
+        await st["client"].sign_in(password=password)
+    except tl_errors.PasswordHashInvalidError:
+        st["tries"] += 1
+        if st["tries"] >= UB_MAX_PASSWORD_TRIES:
+            await ub_drop(uid)
+            await state.clear()
+            return await m.answer("❌ Слишком много неверных паролей. Начните заново через /admin.")
+        return await m.answer(f"❌ Неверный пароль 2FA ({st['tries']}/{UB_MAX_PASSWORD_TRIES}). Попробуйте ещё раз.")
+    except tl_errors.FloodWaitError as e:
+        return await m.answer(f"Слишком много попыток, подождите {e.seconds} сек.")
+    except Exception as e:
+        log.exception("userbot 2fa failed")
+        await ub_drop(uid)
+        await state.clear()
+        return await m.answer(f"Вход не удался: {esc(type(e).__name__)}. Начните заново.")
+    await ub_finish(m, state, uid, st)
+
+
+@router.message(StateFilter(UserbotFlow.phone, UserbotFlow.code, UserbotFlow.password), F.chat.type == "private")
+async def ub_wrong_input(m: Message):
+    if m.text and m.text.startswith("/"):
+        return
+    await m.answer("Нужен текст. Отмена — /cancel.")
+
+
+async def ub_finish(m: Message, state: FSMContext, uid, st):
+    client = st["client"]
+    try:
+        me = await client.get_me()
+        if getattr(me, "bot", False):
+            raise RuntimeError("bot_account")
+        session = client.session.save()
+        await pool.execute(
+            "INSERT INTO userbot_session(id,session,phone,account_id,username,first_name,connected_by,connected_at) "
+            "VALUES(1,$1,$2,$3,$4,$5,$6,now()) ON CONFLICT(id) DO UPDATE SET session=EXCLUDED.session, "
+            "phone=EXCLUDED.phone, account_id=EXCLUDED.account_id, username=EXCLUDED.username, "
+            "first_name=EXCLUDED.first_name, connected_by=EXCLUDED.connected_by, connected_at=now()",
+            session, st["phone"], me.id, me.username, me.first_name, uid)
+    except Exception as e:
+        log.exception("userbot finish failed")
+        await ub_drop(uid)
+        await state.clear()
+        return await m.answer(f"Не удалось сохранить сессию: {esc(type(e).__name__)}. Начните заново.")
+    await ub_drop(uid)
+    await state.clear()
+    await ub_restart_worker()
+    uname = f" @{esc(me.username)}" if me.username else ""
+    text, kb = await ub_status_view(uid)
+    await m.answer(f"✅ Юзербот подключён: <b>{esc(me.first_name or '')}</b>{uname} (ID <code>{me.id}</code>).\n"
+                   "Воркер запускается — статус «онлайн» появится через несколько секунд.\n\n" + text, reply_markup=kb)
+
+
+async def userbot_supervisor(bot: Bot):
+    """Держит процесс userbot_worker.py: ждёт сессию в БД, перезапускает при сбое/смене аккаунта."""
+    global _ub_proc, _ub_wake, _ub_quick_restart
+    _ub_wake = asyncio.Event()
+    worker_path = Path(__file__).with_name("userbot_worker.py")
+    if not worker_path.exists():
+        return log.error("userbot_worker.py не найден — юзербот не запущен")
+    backoff = 5
+    while True:
+        try:
+            if not await pool.fetchval("SELECT 1 FROM userbot_session WHERE id=1"):
+                _ub_wake.clear()
+                try:
+                    await asyncio.wait_for(_ub_wake.wait(), 30)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            _ub_wake.clear()
+            _ub_quick_restart = False
+            proc = await asyncio.create_subprocess_exec(sys.executable, str(worker_path))
+            _ub_proc = proc
+            started = time.monotonic()
+            log.info("Userbot worker started pid=%s", proc.pid)
+            code = await proc.wait()
+            _ub_proc = None
+            log.warning("Userbot worker exited with code=%s", code)
+            if code == 3:  # сессия отозвана в Telegram
+                await pool.execute("DELETE FROM userbot_session WHERE id=1")
+                try:
+                    await bot.send_message(OWNER_ID, "⚠️ Сессия юзербота гаранта больше не действительна "
+                                           "(отозвана в Telegram). Подключите аккаунт заново: /admin → «Юзербот гаранта».")
+                except Exception:
+                    pass
+                continue
+            if _ub_quick_restart:
+                backoff = 5
+                await asyncio.sleep(1)
+                continue
+            backoff = 5 if time.monotonic() - started > 60 else min(backoff * 2, 120)
+            await asyncio.sleep(backoff)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("userbot supervisor error")
+            await asyncio.sleep(10)
 
 
 # ================================================================ MINI APP API
@@ -3494,6 +3871,12 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=False)
+
+    # Юзербот-воркер запускается вместе с ботом (сессия берётся из БД, подключается в админке бота).
+    # Отключить встроенный запуск: RUN_USERBOT_IN_WEB=false (если воркер крутится отдельным сервисом).
+    if os.getenv("RUN_USERBOT_IN_WEB", "true").lower() in ("1", "true", "yes"):
+        asyncio.create_task(userbot_supervisor(bot))
+
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
