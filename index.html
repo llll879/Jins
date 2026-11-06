@@ -229,6 +229,97 @@ hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
 .pe-wrap{display:contents}
 .pe{display:inline-block;width:1.3em;height:1.3em;vertical-align:-.28em;line-height:1.3em;overflow:hidden;text-align:center}
 .pe img,.pe video,.pe .pe-l{display:block;width:100%;height:100%;object-fit:contain}
+
+/* ===== лента-сетка в стиле приложения объявлений ===== */
+.shead{position:sticky;top:0;z-index:5;margin:-8px -16px 0;padding:calc(10px + env(safe-area-inset-top)) 16px 8px;background:var(--bg)}
+.sbar{display:flex;align-items:center;gap:10px;height:48px;padding:0 6px 0 14px;border-radius:16px;background:var(--glass2);border:1px solid var(--line);box-shadow:var(--sh),var(--shin)}
+.sbar>.i{font-size:21px;color:var(--dim)}
+.sin{flex:1;min-width:0;height:100%;border:0;outline:0;background:none;font-size:16px;color:var(--txt);-webkit-appearance:none;appearance:none}
+.sin::placeholder{color:var(--dim)}
+.sin::-webkit-search-cancel-button{display:none}
+.sfl{width:40px;height:40px;border:0;background:none;display:grid;place-items:center;font-size:23px;color:var(--ink);cursor:pointer}
+.cats{display:flex;gap:8px;overflow-x:auto;margin:6px -16px 14px;padding:2px 16px;scrollbar-width:none}
+.cats::-webkit-scrollbar{display:none}
+.cat{flex:none;display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--glass2);color:var(--txt);border-radius:99px;padding:9px 15px;font-size:14px;white-space:nowrap;cursor:pointer;transition:background .2s,color .2s}
+.cat.sel{background:var(--ink);color:var(--ink-t);border-color:transparent}
+.cat .n{opacity:.6;font-size:12px}
+.agrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px}
+.ac{position:relative;min-width:0;cursor:pointer;animation:rise .4s var(--ease) both;transition:transform .15s}
+.ac:active{transform:scale(.98)}
+.aph{position:relative;aspect-ratio:4/5;border-radius:14px;overflow:hidden;background:var(--line)}
+.aph img{width:100%;height:100%;object-fit:cover;display:block}
+.aph-n{width:100%;height:100%;display:grid;place-items:center;background:linear-gradient(135deg,var(--bg2),var(--line));font-size:56px;font-weight:800;color:var(--a3)}
+.ab{padding:8px 2px 0}
+.arow{display:flex;align-items:flex-start;gap:6px}
+.at{flex:1;min-width:0;font-size:14px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.afav,.adots{flex:none;width:30px;height:28px;margin:-4px -4px 0 0;padding:0;border:0;background:none;color:var(--txt);font-size:22px;display:grid;place-items:center;cursor:pointer}
+.afav.on{color:var(--bad)}
+.adots{color:var(--dim);margin-top:-5px}
+.ap{flex:1;min-width:0;font-size:16px;font-weight:800;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-t{font-size:13px;font-weight:600;color:var(--dim)}
+.pr{display:inline-flex;align-items:center;gap:4px}
+.star{width:1em;height:1em;display:inline-block;vertical-align:-.12em;fill:#f5b301;stroke:#d89a00;stroke-width:1.2;stroke-linejoin:round;flex:none}
+.am{font-size:12px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gmore{display:flex;justify-content:center;padding:18px 0 4px}
+.ac.pv{pointer-events:none;animation:none}
+.ac.sk{opacity:.5}
+.sk-l{height:10px;border-radius:6px;background:var(--line);margin-top:9px}
+.pv-wrap{max-width:420px}
+
+/* ===== шторка действий ===== */
+.sheet-bg{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .2s}
+.sheet-bg.out{opacity:0;transition:opacity .18s}
+.sheet{width:100%;max-width:560px;background:var(--bg2);border-radius:22px 22px 0 0;padding:10px 12px calc(14px + env(safe-area-inset-bottom));animation:sheetUp .28s var(--ease)}
+.sh-t{padding:8px 8px 4px;font-weight:700;color:var(--dim);font-size:13px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sh-list{max-height:52vh;overflow-y:auto;scrollbar-width:none}
+.sh-b{display:block;width:100%;border:1px solid var(--line);background:var(--glass2);color:var(--txt);border-radius:14px;padding:15px;font-size:16px;margin-top:8px;cursor:pointer}
+.sh-b.bad{color:var(--bad)}
+.sh-b.cancel{background:none;color:var(--dim);border-color:transparent}
+@keyframes fadeIn{from{opacity:0}}
+@keyframes sheetUp{from{transform:translateY(100%)}}
+
+/* ===== страница объявления ===== */
+.ad-d{overflow:hidden;margin-bottom:12px}
+.ad-big{display:block;width:100%;max-height:440px;object-fit:cover;background:var(--line)}
+.ad-in{padding:16px}
+.ad-price{font-size:26px;font-weight:800;margin-bottom:4px}
+.ad-title{margin:0 0 10px;font-size:19px;font-weight:600;line-height:1.3;word-break:break-word}
+.ad-desc{margin-top:14px}
+.ad-au{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
+.ad-acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.ad-acts .btn{flex:1;min-width:120px}
+
+/* ===== подача: этапы ===== */
+.stp-bar{display:flex;gap:6px;margin:0 0 8px}
+.stp-bar i{flex:1;height:4px;border-radius:4px;background:var(--line);transition:background .3s}
+.stp-bar i.done{background:var(--ink)}
+.stp-bar i.cur{background:var(--a3)}
+.stp-l{font-size:13px;color:var(--dim);margin:0 2px 14px}
+.stp-l b{color:var(--txt)}
+.drop{position:relative;aspect-ratio:4/5;max-width:300px;margin:0 auto 6px;border:2px dashed var(--a3);border-radius:18px;display:grid;place-items:center;text-align:center;color:var(--dim);cursor:pointer;overflow:hidden;background:var(--glass);padding:10px}
+.drop.has{border-style:solid;border-color:var(--line);padding:0}
+.drop img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.drop .i{font-size:40px;color:var(--ink);margin:0 auto 8px}
+.drop-b{position:absolute;left:8px;right:8px;bottom:8px;display:flex;gap:8px}
+.drop-b .btn{flex:1}
+.opt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:14px 16px;margin-bottom:8px;border-radius:14px;border:1px solid var(--line);background:var(--glass2);font-size:16px;cursor:pointer;box-shadow:var(--sh),var(--shin);color:var(--txt)}
+.opt::before{content:"";width:20px;height:20px;border-radius:50%;border:2px solid var(--a3);flex:none;transition:all .2s}
+.opt.sel{border-color:var(--ink)}
+.opt.sel::before{border-color:var(--ink);background:radial-gradient(var(--ink) 45%,transparent 50%)}
+.pin{position:relative}
+.pin input{padding-right:54px;font-size:24px;font-weight:700}
+.pin .star{position:absolute;right:16px;top:50%;margin-top:-14px;font-size:28px}
+.wz-nav{display:flex;gap:10px;margin-top:18px}
+.wz-nav .btn{flex:1}
+
+/* ===== профиль / мои заявки ===== */
+.prof{display:flex;align-items:center;gap:14px;padding:16px;margin-bottom:14px}
+.pav{width:56px;height:56px;border-radius:50%;background:var(--ink);color:var(--ink-t);display:grid;place-items:center;font-size:24px;font-weight:800;flex:none}
+.pn b{display:block;font-size:18px}
+.pn small{color:var(--dim)}
+.grp{font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);margin:18px 4px 8px}
+.mtitle{font-weight:700;font-size:16px;margin-bottom:2px}
+.mprice{font-weight:800;margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -238,9 +329,9 @@ hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
   <main id="main"></main>
   <nav class="bar" id="nav">
     <div id="ind"></div>
-    <button data-go="home"><span class="e" data-i="home"></span>Главная</button>
+    <button data-go="home"><span class="e" data-i="home"></span>Поиск</button>
     <button data-go="favorites"><span class="e" data-i="heart"></span>Избранное</button>
-    <button data-go="submit"><span class="e" data-i="plus"></span>Создать</button>
+    <button data-go="submit"><span class="e" data-i="plus"></span>Подать</button>
     <button data-go="more"><span class="e" data-i="user"></span>Профиль</button>
   </nav>
 </div>
@@ -463,7 +554,7 @@ const celebrate = () => { for (let i = 0; i < 4; i++) setTimeout(() => Stars.bur
 const S = { me: null, hist: [], cur: 'home' };
 const views = {};
 const TABS = ['home', 'favorites', 'submit', 'more'];
-const TAB_OF = { home: 'home', browse: 'home', feed_browse: 'home', search: 'home', recs: 'home', favorites: 'favorites', submit: 'submit', more: 'more' };
+const TAB_OF = { home: 'home', ad: 'home', browse: 'home', feed_browse: 'home', search: 'home', recs: 'home', favorites: 'favorites', submit: 'submit', more: 'more' };
 function setInd(name) {
   const i = Math.max(0, TABS.indexOf(TAB_OF[name] || 'more'));
   $('#ind').style.transform = `translateX(${i * 100}%)`;
@@ -489,58 +580,121 @@ document.addEventListener('click', e => { const g = e.target.closest('[data-go]'
 async function loadMe() { S.me = await api('/api/me'); return S.me; }
 const isStaff = () => !!S.me.role, isMain = () => ['owner', 'main'].includes(S.me.role);
 
-/* ============================================================ Feed component */
-function Feed(el, o) {
-  let items = o.items.slice(), more = o.hasMore, idx = 0, busy = false, dragging = false;
-  el.innerHTML = `<div class="feed-head"><div class="feed-title">${o.title}</div><div class="pos"></div></div>
-    ${o.note ? `<div class="note">${esc(o.note)}</div>` : ''}
-    <div class="stage"></div>
-    <div class="feed-nav"><button class="btn ghost prev">← Назад</button><button class="btn next">Далее →</button></div>`;
-  const stage = $('.stage', el), pos = $('.pos', el);
-  async function ensure() { if (more && !busy && idx >= items.length - 3) { busy = true; try { const d = await o.more(); items = items.concat(d.posts); more = d.has_more; } catch (e) { more = false; } busy = false; render(); } }
-  function show(dir) {
-    stage.innerHTML = '';
-    if (idx >= items.length) {
-      stage.innerHTML = `<div class="post glass end ${dir < 0 ? 'l' : ''}"><div class="big">🎉</div><p>${esc(S.me.texts.feed_end.replace(/<[^>]+>/g, ''))}</p><button class="btn restart">↺ К началу</button></div>`;
-      $('.restart', stage).onclick = () => { idx = 0; show(-1); render(); }; return;
-    }
-    const p = items[idx];
-    const card = document.createElement('article'); card.className = 'post glass' + (dir < 0 ? ' l' : '');
-    card.innerHTML = `<div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span></div>
-      ${p.photo ? `<img class="ad-img" src="${esc(p.photo)}" alt="" loading="lazy">` : ''}
-      <div class="body rich">${safe(p.text)}</div>
-      <div class="foot"><span class="author">Автор: ${esc(p.author)}</span>
-      ${p.author_url ? '<button class="btn small contact">Профиль автора</button>' : ''}
-      ${isStaff() ? '<button class="btn small bad del">Удалить</button>' : ''}</div>
-      <div class="post-actions">
-        <button class="btn ghost small fav">☆ В избранное</button>
-        <button class="btn ghost small report">Пожаловаться</button>
-        ${p.mine ? '<button class="btn ok small bump">Поднять</button>' : ''}
-      </div>
-      ${p.expires ? `<div class="post-meta">Действует до ${esc(p.expires)}</div>` : ''}`;
-    stage.appendChild(card);
-    const c = $('.contact', card); if (c) c.onclick = () => openLink(p.author_url || p.contact);
-    const f = $('.fav', card); if (f) f.onclick = async () => { try { const r=await api('/api/favorite',{post_id:p.id}); f.textContent=r.saved?'★ В избранном':'☆ В избранное'; f.classList.toggle('ok',r.saved); toast(r.saved?'Добавлено в избранное':'Убрано из избранного','good'); } catch(e){fail(e)} };
-    const rp = $('.report', card); if (rp) rp.onclick = async () => { if(!await confirmBox('Отправить жалобу на это объявление?')) return; try{const r=await api('/api/report',{post_id:p.id});toast(r.duplicate?'Вы уже жаловались':'Жалоба отправлена админам','good')}catch(e){fail(e)} };
-    const bp = $('.bump', card); if (bp) bp.onclick = async () => { try{await api('/api/bump',{post_id:p.id});toast('Объявление поднято ещё на 30 дней','good');go(S.cur,S.curParams,{replace:true})}catch(e){fail(e)} };
-    const d = $('.del', card); if (d) d.onclick = async () => { if (!await confirmBox('Удалить объявление?')) return; await api('/api/admin/post_del', { id: p.id }); items.splice(idx, 1); toast('Удалено', 'good'); show(1); render(); };
-    api('/api/view', { post_id: p.id }).catch(() => {});
+/* ============================================================ объявления: разбор, карточки, сетка */
+S.ads = new Map(); S.favs = null;
+const STAR = '<svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>';
+const DOTS = '<svg class="i f" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const fmtN = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+
+// Текст объявления: 1-я строка — название, 2-я — «Цена: 500 ⭐», дальше описание.
+// Старые объявления (без строки «Цена:») разбираются по прежнему: цена ищется в тексте, любая валюта → звёзды.
+function parseAd(p) {
+  const lines = plain(p.text || '').split('\n').map(x => x.trim());
+  const i0 = lines.findIndex(Boolean);
+  const first = i0 < 0 ? '' : lines[i0];
+  let rest = i0 < 0 ? [] : lines.slice(i0 + 1), price = null, fresh = false;
+  const j = rest.findIndex(Boolean), m = j < 0 ? null : /^цена\s*:\s*(.+)$/i.exec(rest[j]);
+  if (m) {
+    const num = m[1].replace(/[^\d]/g, '');
+    price = num ? +num : 'deal'; fresh = true; rest = rest.slice(j + 1);
+  } else {
+    const mm = plain(p.text || '').match(/(\d[\d\s]*\d|\d)\s?(₽|руб(?:лей|\.)?|р(?![а-яёa-z])|\$|€|usd|⭐|★)/i);
+    if (mm) price = +mm[1].replace(/\s/g, '');
   }
-  function render() { pos.textContent = items.length ? `${Math.min(idx + 1, items.length)} / ${items.length}${more ? '+' : ''}` : ''; $('.prev', el).style.visibility = idx === 0 ? 'hidden' : 'visible'; $('.next', el).disabled = idx >= items.length && !more; }
-  function step(d) { const n = idx + d; if (n < 0 || n > items.length) return; idx = n; show(d); render(); ensure(); buzz('light'); }
-  $('.next', el).onclick = () => step(1); $('.prev', el).onclick = () => step(-1);
-  // свайп
-  let sx = 0, sy = 0, dx = 0, lock = null;
-  stage.addEventListener('pointerdown', e => { if (e.target.closest('button,a')) return; sx = e.clientX; sy = e.clientY; dx = 0; lock = null; dragging = true; });
-  stage.addEventListener('pointermove', e => {
-    if (!dragging) return; const c = $('.post', stage); if (!c) return;
-    const mx = e.clientX - sx, my = e.clientY - sy;
-    if (lock === null && (Math.abs(mx) > 8 || Math.abs(my) > 8)) lock = Math.abs(mx) > Math.abs(my) ? 'x' : 'y';
-    if (lock !== 'x') return; dx = mx; c.style.animation = 'none'; c.style.transition = 'none'; c.style.transform = `translateX(${dx}px) rotate(${dx / 25}deg)`; c.style.opacity = 1 - Math.min(Math.abs(dx) / 400, .5);
-  });
-  const end = () => { if (!dragging) return; dragging = false; const c = $('.post', stage); if (lock === 'x' && c) { if (Math.abs(dx) > 90) { const d = dx < 0 ? 1 : -1; c.style.transition = 'transform .22s,opacity .22s'; c.style.transform = `translateX(${dx < 0 ? -420 : 420}px) rotate(${dx < 0 ? -14 : 14}deg)`; c.style.opacity = 0; setTimeout(() => step(d), 180); } else { c.style.transition = 'transform .3s var(--ease),opacity .3s'; c.style.transform = ''; c.style.opacity = 1; } } };
-  stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
-  show(1); render(); ensure();
+  const title = first || 'Объявление';
+  return { title: title.length > 90 ? title.slice(0, 88) + '…' : title, price, desc: rest.join('\n').trim(), fresh };
+}
+const priceHtml = pr => pr === null ? '' : pr === 'deal' ? 'Договорная' : pr === 0 ? 'Бесплатно' : `<span class="pr">${fmtN(pr)}${STAR}</span>`;
+
+async function favSet() {
+  if (!S.favs) { const d = await api('/api/favorites').catch(() => ({ posts: [] })); S.favs = new Set(d.posts.map(p => p.id)); }
+  return S.favs;
+}
+async function toggleFav(id) {
+  const r = await api('/api/favorite', { post_id: id }), f = await favSet();
+  r.saved ? f.add(id) : f.delete(id);
+  toast(r.saved ? 'Добавлено в избранное' : 'Убрано из избранного', 'good'); buzz('light');
+  return r.saved;
+}
+
+function sheet(title, rows) {
+  const bg = document.createElement('div'); bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet"><div class="sh-t">${esc(title)}</div><div class="sh-list">${rows.map((r, i) => `<button class="sh-b ${r.cls || ''}" data-i="${i}">${esc(r.t)}</button>`).join('')}</div><button class="sh-b cancel">Отмена</button></div>`;
+  const close = () => { bg.classList.add('out'); setTimeout(() => bg.remove(), 180); };
+  bg.onclick = e => {
+    if (e.target === bg || e.target.closest('.cancel')) return close();
+    const b = e.target.closest('[data-i]'); if (b) { close(); rows[+b.dataset.i].fn(); }
+  };
+  document.body.appendChild(bg);
+}
+
+function adMenu(p, onGone) {
+  const rows = [{ t: p.author_url ? 'Написать автору' : 'Профиль автора', fn: () => openLink(p.author_url || p.contact) }];
+  if (p.mine) rows.push({ t: 'Поднять объявление', fn: async () => { try { await api('/api/bump', { post_id: p.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } } });
+  rows.push({ t: 'Пожаловаться', fn: async () => { if (!await confirmBox('Отправить жалобу на это объявление?')) return; try { const r = await api('/api/report', { post_id: p.id }); toast(r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (e) { fail(e); } } });
+  if (isStaff()) rows.push({ t: 'Удалить', cls: 'bad', fn: async () => { if (!await confirmBox('Удалить объявление?')) return; try { await api('/api/admin/post_del', { id: p.id }); toast('Удалено', 'good'); onGone && onGone(p.id); } catch (e) { fail(e); } } });
+  sheet(parseAd(p).title, rows);
+}
+
+// карточка в ленте (внутренность <article class="ac">)
+function cardHtml(p, isFav) {
+  const a = parseAd(p);
+  const ph = p.photo ? `<img src="${esc(p.photo)}" alt="" loading="lazy">` : `<div class="aph-n"><span>${esc((a.title.charAt(0) || '•').toUpperCase())}</span></div>`;
+  return `<div class="aph">${ph}</div>
+    <div class="ab">
+      <div class="arow"><div class="at">${esc(a.title)}</div><button class="afav ${isFav ? 'on' : ''}" aria-label="В избранное">${ic('heart', !!isFav)}</button></div>
+      <div class="arow"><div class="ap">${priceHtml(a.price) || `<span class="ap-t">${esc(p.topic)}</span>`}</div><button class="adots" aria-label="Меню">${DOTS}</button></div>
+      <div class="am">${esc(p.topic)} · ${esc(p.created)}</div>
+    </div>`;
+}
+
+// открытое объявление (без кнопок действий)
+function adDetail(p) {
+  const a = parseAd(p);
+  return `<div class="ad-d glass">
+    ${p.photo ? `<img class="ad-big" src="${esc(p.photo)}" alt="">` : ''}
+    <div class="ad-in">
+      ${priceHtml(a.price) ? `<div class="ad-price">${priceHtml(a.price)}</div>` : ''}
+      <h3 class="ad-title">${esc(a.title)}</h3>
+      <div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span></div>
+      ${a.desc ? `<div class="rich ad-desc">${esc(a.desc)}</div>` : ''}
+      <div class="ad-au">Автор: ${esc(p.author)}</div>
+    </div></div>`;
+}
+
+// Сетка из двух колонок. o: { items, hasMore, more(), note, empty, onUnfav }
+async function Grid(el, o) {
+  if (!o.items.length) { el.innerHTML = empty(o.emptyIc || '🌌', o.empty || 'Пока пусто'); return; }
+  const fav = await favSet();
+  let more = o.hasMore, busy = false, io = null;
+  el.innerHTML = `${o.note ? `<div class="note">${esc(o.note)}</div>` : ''}<div class="agrid"></div><div class="gmore"></div>`;
+  const grid = $('.agrid', el), foot = $('.gmore', el);
+  const gone = id => { const c = $(`.ac[data-id="${id}"]`, grid); if (c) c.remove(); if (!$('.ac', grid)) el.innerHTML = empty(o.emptyIc || '🌌', o.empty || 'Пока пусто'); };
+  function add(list) {
+    list.forEach(p => {
+      S.ads.set(p.id, p);
+      const c = document.createElement('article'); c.className = 'ac'; c.dataset.id = p.id; c.innerHTML = cardHtml(p, fav.has(p.id));
+      c.onclick = async e => {
+        if (e.target.closest('.afav')) {
+          try { const s = await toggleFav(p.id); const b = $('.afav', c); b.classList.toggle('on', s); b.innerHTML = ic('heart', s); if (!s && o.onUnfav) gone(p.id); } catch (er) { fail(er); }
+        } else if (e.target.closest('.adots')) adMenu(p, gone);
+        else go('ad', { id: p.id });
+      };
+      grid.appendChild(c);
+    });
+  }
+  async function loadMore() {
+    if (!more || busy || !o.more) return; busy = true;
+    try { const d = await o.more(); add(d.posts); more = d.has_more; } catch (e) { more = false; }
+    busy = false; drawFoot();
+  }
+  function drawFoot() {
+    if (io) io.disconnect();
+    foot.innerHTML = more ? '<button class="btn ghost small">Показать ещё</button>' : '';
+    const b = $('button', foot); if (!b) return; b.onclick = loadMore;
+    if ('IntersectionObserver' in window) { io = new IntersectionObserver(es => { if (es.some(x => x.isIntersecting)) loadMore(); }, { root: $('#main'), rootMargin: '500px' }); io.observe(b); }
+  }
+  add(o.items); drawFoot();
 }
 
 /* ============================================================ views */
@@ -553,68 +707,53 @@ views.gate = async el => {
   $('#chk', el).onclick = async () => { await loadMe(); if (S.me.missing.length) { draw(); el.firstElementChild.classList.add('shake'); setTimeout(() => el.firstElementChild.classList.remove('shake'), 500); toast('Вы подписались не на все каналы', 'err'); } else { celebrate(); toast('Отлично!', 'good'); go('home', {}, { root: true }); } };
 };
 
+S.homeTopic = 0;
 views.home = async el => {
   if (S.me.missing.length) return views.gate(el);
-  const me = S.me;
-  const [pop, fav, st] = await Promise.all([
-    api('/api/posts?topic=0&offset=0&limit=3').catch(() => ({ posts: [] })),
-    api('/api/favorites').catch(() => ({ posts: [] })),
-    isMain() ? api('/api/admin/stats').catch(() => null) : Promise.resolve(null),
-  ]);
-  const favIds = new Set(fav.posts.map(p => p.id));
-  const light = document.documentElement.dataset.theme !== 'dark';
-  const fmt = n => n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(n);
-  const priceOf = t => { const m = plain(t).match(/(\d[\d\s]*\d|\d)\s?(₽|руб(?:лей|\.)?|р(?![а-яёa-z])|\$|€|usd)/i); return m ? m[0].replace(/\s+/g, ' ').trim() : ''; };
-  const titleOf = t => { const l = plain(t).split('\n').map(x => x.trim()).filter(Boolean)[0] || 'Объявление'; return l.length > 70 ? l.slice(0, 68) + '…' : l; };
-  const tiles = [
-    ['browse', 'mega', 'Просмотреть объявления', ''],
-    ['submit', 'pencil', 'Опубликовать объявление', ''],
-    ['favorites', 'star', 'Избранное', String(fav.posts.length)],
-    isMain() ? ['admin_reports', 'warn', 'Жалобы', ''] : ['mine', 'mail', 'Мои заявки', ''],
-  ];
-  const extra = [['recs', 'gem', 'Рекомендации', 'Подборка специально для вас']];
-  if (me.recruit_open && !me.role) extra.push(['apply', 'users', 'Хочу стать админом', 'Набор открыт — заполните анкету']);
-  if (isStaff()) extra.push(['admin', 'gear', 'Админ-панель', 'Модерация и настройки']);
-  el.innerHTML = `<div class="homewrap">
-    <img class="statue" src="${IMG.st}" alt="">
-    <div class="hero">
-      <img class="av" src="${IMG.av}" alt="">
-      <div class="ht"><h1>KMBP EXCHANGE</h1><p>Объявления • Общение • Возможности</p></div>
-      <div class="btns"><button class="iconbtn" id="thm" aria-label="Тема">${ic(light ? 'moon' : 'sun', false)}</button><button class="iconbtn" id="gr" aria-label="Настройки">${ic('gear', false)}</button></div>
+  const topics = S.me.topics.filter(t => t.count > 0), total = topics.reduce((a, t) => a + t.count, 0);
+  if (S.homeTopic && !topics.some(t => t.id === S.homeTopic)) S.homeTopic = 0;
+  el.innerHTML = `<div class="shead"><div class="sbar">${ic('search', false)}<input class="sin" id="q" type="search" enterkeyhint="search" autocomplete="off" maxlength="300" placeholder="Найти объявление"><button class="sfl" id="fl" aria-label="Категории">${ic('sliders', false)}</button></div></div>
+    <div class="cats" id="cats"><button class="cat" data-t="0">Все <span class="n">${total}</span></button>${topics.map(t => `<button class="cat" data-t="${t.id}">${esc(t.name)} <span class="n">${t.count}</span></button>`).join('')}</div>
+    <div id="gridbox"></div>`;
+  const box = $('#gridbox', el); let token = 0;
+  const mark = () => $$('.cat', el).forEach(b => { const on = +b.dataset.t === S.homeTopic; b.classList.toggle('sel', on); if (on) b.scrollIntoView({ inline: 'center', block: 'nearest' }); });
+  async function loadGrid() {
+    const my = ++token; box.innerHTML = loader(); let off = 0;
+    const load = async () => { const d = await api(`/api/posts?topic=${S.homeTopic}&offset=${off}&limit=20`); off += d.posts.length; return d; };
+    try {
+      const d = await load(); if (my !== token) return;
+      box.innerHTML = '';
+      await Grid(box, { items: d.posts, hasMore: d.has_more, more: load, empty: S.me.texts.no_posts.replace(/<[^>]+>/g, '') });
+    } catch (e) { if (my === token) { box.innerHTML = ''; fail(e); } }
+  }
+  $$('.cat', el).forEach(b => b.onclick = () => { const t = +b.dataset.t; if (t === S.homeTopic) return; S.homeTopic = t; mark(); loadGrid(); buzz('light'); });
+  $('#fl', el).onclick = () => sheet('Категория', [{ t: `Все объявления (${total})`, fn: () => { S.homeTopic = 0; mark(); loadGrid(); } }]
+    .concat(topics.map(t => ({ t: `${t.name} (${t.count})`, fn: () => { S.homeTopic = t.id; mark(); loadGrid(); } }))));
+  $('#q', el).onkeydown = e => { if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) { e.target.blur(); go('search', { q: v }); } } };
+  mark(); loadGrid();
+};
+
+views.ad = async (el, p) => {
+  const a = S.ads.get(p.id);
+  if (!a) { el.innerHTML = empty('🌌', 'Объявление не найдено'); return; }
+  const fav = await favSet();
+  el.innerHTML = `${adDetail(a)}
+    <div class="ad-acts">
+      <button class="btn grow talk">${a.author_url ? 'Написать автору' : 'Профиль автора'}</button>
+      <button class="btn ghost fav">${fav.has(a.id) ? '★ В избранном' : '☆ В избранное'}</button>
     </div>
-    <div class="searchbar" id="sb">${ic('search', false)}<span>Поиск объявлений…</span><div class="fl" id="fl">${ic('sliders', false)}</div></div>
-    <div class="tiles">${tiles.map(([g, i, t, n]) => `<button class="tile" data-go="${g}"><span class="ic">${ic(i)}</span><span class="tx"><b>${t}</b></span>${n !== '' ? `<span class="cnt">${n}</span>` : `<span class="chev">${ic('chev', false)}</span>`}</button>`).join('')}</div>
-    <div style="height:12px"></div>
-    ${me.welcome ? `<div class="card glass" style="position:relative;z-index:1;margin-bottom:12px">${me.has_photo ? '<img class="welcome-img" alt="">' : ''}<div class="rich">${safe(me.welcome)}</div></div>` : ''}
-    <div>${extra.map(([g, i, t, s2]) => `<div class="li glass" style="position:relative;z-index:1" data-go="${g}"><span class="ic" style="filter:none;font-size:24px;display:grid;place-items:center">${ic(i)}</span><span class="t"><b>${t}</b><small>${s2}</small></span><span class="arr">›</span></div>`).join('')}</div>
-    <div class="sec"><h3>${ic('flame')}Популярные объявления</h3><a id="all">Все ${ic('arrow', false)}</a></div>
-    <div id="pops"></div>
-    ${st ? `<div class="stats glass" id="stt"><div class="sh">${ic('chart', false)}Статистика <small>(для админов)</small><span class="go">${ic('arrow', false)}</span></div>
-      <div class="cols">${[['users', st.users, 'Пользователей'], ['list', st.active_posts, 'Объявлений'], ['warn', st.new_reports, 'Жалоб'], ['flame', st.activity7, 'Активность']].map(([i, v, l]) => `<div class="col">${ic(i)}<b>${fmt(v)}</b><span>${l}</span></div>`).join('')}</div></div>` : ''}
-  </div>`;
-  if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': tg.initData } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
-  $('#thm', el).onclick = e => { const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; setTheme(next); go('home', {}, { replace: true }); };
-  $('#gr', el).onclick = () => go(isStaff() ? 'admin' : 'more');
-  $('#sb', el).onclick = e => { if (e.target.closest('#fl')) go('browse'); else go('search'); };
-  $('#all', el).onclick = () => go('browse');
-  const box = $('#pops', el);
-  if (!pop.posts.length) box.innerHTML = `<div class="empty" style="padding:20px 0">Пока нет объявлений</div>`;
-  pop.posts.forEach((p, i) => {
-    const price = priceOf(p.text);
-    const c = document.createElement('div'); c.className = 'pcard glass';
-    c.innerHTML = `<div class="pimg" style="background-image:url(${p.photo ? esc(p.photo) : IMG.c[i % 3]})"><span class="pill"><i></i>Активно</span></div>
-      <div class="pbody"><div class="ptop"><div class="ptitle">${esc(titleOf(p.text))}</div><button class="heart ${favIds.has(p.id) ? 'on' : ''}">${ic('heart', favIds.has(p.id))}</button></div>
-        ${price ? `<div class="pprice">${esc(price)}</div>` : `<div class="pprice t">${esc(p.topic)}</div>`}
-        <div class="pfoot"><span class="pclock">${ic('clock', false)}<span>${esc(p.created)}</span></span>
-        ${p.mine ? `<button class="pbtn bump">${ic('arrow', false)}Поднять</button>` : `<button class="pbtn talk">${ic(p.author_url ? 'chat' : 'user', false)}${p.author_url ? 'Написать' : 'Профиль'}</button>`}</div></div>`;
-    c.onclick = e => { if (e.target.closest('button')) return; go('feed_browse', { topic: 0, name: 'Все объявления' }); };
-    const h = $('.heart', c);
-    h.onclick = async () => { try { const r = await api('/api/favorite', { post_id: p.id }); h.classList.toggle('on', r.saved); h.innerHTML = ic('heart', r.saved); toast(r.saved ? 'Добавлено в избранное' : 'Убрано из избранного', 'good'); } catch (e) { fail(e); } };
-    const t = $('.talk', c); if (t) t.onclick = () => openLink(p.author_url || p.contact);
-    const b = $('.bump', c); if (b) b.onclick = async () => { try { await api('/api/bump', { post_id: p.id }); toast('Объявление поднято ещё на 30 дней', 'good'); go('home', {}, { replace: true }); } catch (e) { fail(e); } };
-    box.appendChild(c);
-  });
-  const st2 = $('#stt', el); if (st2) st2.onclick = () => go('admin_stats');
+    <div class="ad-acts">
+      <button class="btn ghost small report">Пожаловаться</button>
+      ${a.mine ? '<button class="btn ok small bump">Поднять</button>' : ''}
+      ${isStaff() ? '<button class="btn bad small del">Удалить</button>' : ''}
+    </div>
+    ${a.expires ? `<div class="post-meta">Действует до ${esc(a.expires)}</div>` : ''}`;
+  $('.talk', el).onclick = () => openLink(a.author_url || a.contact);
+  $('.fav', el).onclick = async e => { try { const s = await toggleFav(a.id); e.target.textContent = s ? '★ В избранном' : '☆ В избранное'; } catch (er) { fail(er); } };
+  $('.report', el).onclick = async () => { if (!await confirmBox('Отправить жалобу на это объявление?')) return; try { const r = await api('/api/report', { post_id: a.id }); toast(r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (e) { fail(e); } };
+  const bp = $('.bump', el); if (bp) bp.onclick = async () => { try { await api('/api/bump', { post_id: a.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } };
+  const d = $('.del', el); if (d) d.onclick = async () => { if (!await confirmBox('Удалить объявление?')) return; try { await api('/api/admin/post_del', { id: a.id }); toast('Удалено', 'good'); S.ads.delete(a.id); back(); } catch (e) { fail(e); } };
+  api('/api/view', { post_id: a.id }).catch(() => {});
 };
 
 views.browse = async el => {
@@ -622,23 +761,23 @@ views.browse = async el => {
   await loadMe();
   const rows = S.me.topics.filter(t => t.count > 0), total = rows.reduce((a, t) => a + t.count, 0);
   if (!rows.length) { el.innerHTML = empty('🌌', S.me.texts.no_posts.replace(/<[^>]+>/g, '')); return; }
-  el.innerHTML = `<h2 class="page">📋 Объявления</h2><p class="sub">Выберите категорию и листайте — кнопкой «Далее» или свайпом.</p>
+  el.innerHTML = `<h2 class="page">📋 Категории</h2><p class="sub">Выберите категорию, чтобы посмотреть объявления.</p>
     <div class="chips stagger"><span class="chip sel" data-go="feed_browse" data-p='{"topic":0,"name":"Все объявления"}'>🎲 Все <span class="n">${total}</span></span>
     ${rows.map(t => `<span class="chip" data-go="feed_browse" data-p='${esc(JSON.stringify({ topic: t.id, name: t.name }))}'>${esc(t.name)} <span class="n">${t.count}</span></span>`).join('')}</div>`;
 };
 
 views.feed_browse = async (el, p) => {
   let offset = 0;
-  const load = async () => { const d = await api(`/api/posts?topic=${p.topic}&offset=${offset}&limit=15`); offset += d.posts.length; return d; };
+  const load = async () => { const d = await api(`/api/posts?topic=${p.topic}&offset=${offset}&limit=20`); offset += d.posts.length; return d; };
   const d = await load();
-  if (!d.posts.length) { el.innerHTML = empty('🌌', 'Пока пусто'); return; }
-  Feed(el, { title: '📋 ' + esc(p.name), items: d.posts, hasMore: d.has_more, more: load });
+  el.innerHTML = `<h2 class="page">📋 ${esc(p.name)}</h2><div id="gb"></div>`;
+  await Grid($('#gb', el), { items: d.posts, hasMore: d.has_more, more: load, empty: 'Пока пусто' });
 };
 
-views.search = async el => {
+views.search = async (el, p) => {
   if (S.me.missing.length) return views.gate(el);
   el.innerHTML = `<h2 class="page">🔍 Поиск <span class="grad">с ИИ</span></h2><p class="sub">${S.me.gemini ? 'ИИ прочитает все объявления и выберет подходящие по смыслу.' : 'Ключ Gemini не задан — работает простой поиск по словам.'}</p>
-    <div class="stagger"><div class="row"><input class="f grow" id="q" maxlength="300" placeholder="Например: ищу монтажёра для канала"><button class="btn" id="go">Найти</button></div></div><div id="res" style="margin-top:16px"></div>`;
+    <div class="row"><input class="f grow" id="q" maxlength="300" placeholder="Например: iPhone до 500 звёзд" value="${esc(p.q || '')}"><button class="btn" id="go">Найти</button></div><div id="res" style="margin-top:16px"></div>`;
   const q = $('#q', el), res = $('#res', el), btn = $('#go', el);
   async function run() {
     const v = q.value.trim(); if (!v) { q.classList.add('shake'); setTimeout(() => q.classList.remove('shake'), 450); return; }
@@ -646,68 +785,122 @@ views.search = async el => {
     try {
       const d = await api('/api/search', { query: v });
       res.innerHTML = '';
-      if (!d.posts.length) { res.innerHTML = empty('😔', d.mode === 'empty' ? 'В каталоге пока нет объявлений' : 'Ничего подходящего не нашлось. Попробуйте переформулировать.'); }
-      else Feed(res, { title: '🔍 ' + esc(v.slice(0, 40)), items: d.posts, hasMore: false, note: d.mode === 'kw' ? 'ИИ сейчас перегружен — показан простой поиск по словам.' : '' });
+      await Grid(res, { items: d.posts, hasMore: false, emptyIc: '😔', empty: d.mode === 'empty' ? 'В каталоге пока нет объявлений' : 'Ничего подходящего не нашлось. Попробуйте переформулировать.', note: d.mode === 'kw' && d.posts.length ? 'ИИ сейчас перегружен — показан простой поиск по словам.' : '' });
     } catch (e) { res.innerHTML = ''; fail(e); }
     btn.disabled = false;
   }
   btn.onclick = run; q.onkeydown = e => { if (e.key === 'Enter') run(); };
+  if (p.q) run();
 };
 
 views.recs = async el => {
   if (S.me.missing.length) return views.gate(el);
   const d = await api('/api/recs');
-  if (!d.posts.length) { el.innerHTML = empty('🌌', S.me.texts.no_posts.replace(/<[^>]+>/g, '')); return; }
-  Feed(el, { title: '⭐ Рекомендации', items: d.posts, hasMore: false });
+  el.innerHTML = `<h2 class="page">⭐ Рекомендации</h2><div id="gb"></div>`;
+  await Grid($('#gb', el), { items: d.posts, hasMore: false, empty: S.me.texts.no_posts.replace(/<[^>]+>/g, '') });
 };
 
-views.more = async el => {
-  const rows = [['favorites', '☆', 'Избранное', 'Сохранённые объявления'], ['submit', '＋', 'Отправить объявление', 'Опубликовать в боте и чате'], ['mine', '▤', 'Мои заявки', 'Статусы и правки админов']];
-  if (S.me.recruit_open && !S.me.role) rows.push(['apply', '🙋', 'Хочу стать админом', 'Набор открыт']);
-  if (isStaff()) rows.push(['admin', '⚙️', 'Админ-панель', isMain() ? 'Полный доступ' : 'Модерация заявок']);
-  el.innerHTML = `<h2 class="page">Ещё</h2><div class="stagger">${rows.map(([g, ic, t, s]) => `<div class="li glass" data-go="${g}"><span class="ic">${ic}</span><span class="t"><b>${t}</b><small>${s}</small></span><span class="arr">›</span></div>`).join('')}
-    <div class="li glass" id="themeToggle"><span class="ic">◐</span><span class="t"><b>Оформление</b><small>Сейчас: ${document.documentElement.dataset.theme==='light'?'светлая тема':'тёмная тема'}</small></span><span class="arr">⇄</span></div></div>`;
-  $('#themeToggle',el).onclick=()=>{const next=document.documentElement.dataset.theme==='light'?'dark':'light';setTheme(next);go('more',{}, {replace:true})};
-};
 views.favorites = async el => {
-  const d=await api('/api/favorites');
-  el.innerHTML=`<h2 class="page">Избранное</h2>`;
-  if(!d.posts.length){el.innerHTML+=empty('☆','Здесь пока нет сохранённых объявлений');return}
-  Feed(el,{title:'Сохранённые объявления',items:d.posts,hasMore:false});
+  const d = await api('/api/favorites');
+  S.favs = new Set(d.posts.map(p => p.id));
+  el.innerHTML = `<h2 class="page">Избранное</h2><div id="gb"></div>`;
+  await Grid($('#gb', el), { items: d.posts, hasMore: false, onUnfav: true, emptyIc: '☆', empty: 'Здесь пока нет сохранённых объявлений' });
 };
 
+// ===== профиль: всё, что раньше было «настройками» на главной =====
+views.more = async el => {
+  const me = S.me, light = document.documentElement.dataset.theme === 'light';
+  const ROLE = { owner: 'Владелец', main: 'Главный админ' };
+  const rows = [['favorites', '☆', 'Избранное', 'Сохранённые объявления'], ['submit', '＋', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', '▤', 'Мои заявки', 'Статусы и правки админов'], ['recs', '✦', 'Рекомендации', 'Подборка специально для вас']];
+  if (me.recruit_open && !me.role) rows.push(['apply', '🙋', 'Хочу стать админом', 'Набор открыт — заполните анкету']);
+  const name = (me.user && me.user.name) || 'друг';
+  el.innerHTML = `<div class="prof glass"><div class="pav">${esc(name.charAt(0).toUpperCase())}</div><div class="pn"><b>${esc(name)}</b><small>${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div></div>
+    <div class="stagger">${rows.map(([g, i, t, s]) => `<div class="li glass" data-go="${g}"><span class="ic">${i}</span><span class="t"><b>${t}</b><small>${s}</small></span><span class="arr">›</span></div>`).join('')}</div>
+    <div class="grp">Настройки</div>
+    <div class="stagger">
+      <div class="li glass" id="themeToggle"><span class="ic">◐</span><span class="t"><b>Оформление</b><small>Сейчас: ${light ? 'светлая тема' : 'тёмная тема'}</small></span><span class="arr">⇄</span></div>
+      ${isStaff() ? `<div class="li glass" data-go="admin"><span class="ic">⚙️</span><span class="t"><b>Админ-панель</b><small>${isMain() ? 'Полный доступ, статистика, жалобы' : 'Модерация заявок'}</small></span><span class="arr">›</span></div>` : ''}
+    </div>
+    ${me.welcome ? `<div class="grp">О сервисе</div><div class="card glass">${me.has_photo ? '<img class="welcome-img" alt="">' : ''}<div class="rich">${safe(me.welcome)}</div></div>` : ''}`;
+  if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
+  $('#themeToggle', el).onclick = () => { const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; setTheme(next); go('more', {}, { replace: true }); };
+};
+
+// ===== подача объявления: 4 этапа + предпросмотр =====
 views.submit = async el => {
   if (S.me.missing.length) return views.gate(el);
-  let topic = null;
-  el.innerHTML = `<h2 class="page">📝 Своё объявление</h2><p class="sub">Заявку проверит админ. После одобрения объявление появится в каталоге.</p>
-    <div class="stagger"><div><span class="lbl">Тема</span><div class="chips" id="tp">${S.me.topics.map(t => `<span class="chip" data-id="${t.id}">${esc(t.name)}</span>`).join('')}</div></div>
-    <div><span class="lbl">Текст объявления</span><textarea class="f" id="tx" maxlength="2700" placeholder="Что вы предлагаете или ищете?"></textarea><div class="counter" id="cn">0 / 2700</div></div>
-    <div><span class="lbl">Картинка (необязательно)</span><input type="file" id="ph" accept="image/*" hidden>
-      <div class="upl" id="upl"><button class="btn ghost small" id="pick" type="button">📷 Добавить картинку</button></div></div>
-    <button class="btn block" id="send" style="margin-top:8px">🚀 Отправить на проверку</button></div>`;
-  $$('#tp .chip', el).forEach(c => c.onclick = () => { $$('#tp .chip', el).forEach(x => x.classList.remove('sel')); c.classList.add('sel'); topic = +c.dataset.id; });
-  const tx = $('#tx', el); tx.oninput = () => $('#cn', el).textContent = tx.value.length + ' / 2700';
-  let photo = null, thumbUrl = null;
-  const upl = $('#upl', el), ph = $('#ph', el);
-  const drawUpl = () => {
-    if (!photo) { upl.innerHTML = '<button class="btn ghost small" id="pick" type="button">📷 Добавить картинку</button>'; $('#pick', upl).onclick = () => ph.click(); return; }
-    upl.innerHTML = `<img class="thumb" src="${thumbUrl}" alt=""><button class="btn ghost small" id="chg" type="button">Заменить</button><button class="btn bad small" id="rm" type="button">✕ Убрать</button>`;
-    $('#chg', upl).onclick = () => ph.click();
-    $('#rm', upl).onclick = () => { photo = null; if (thumbUrl) URL.revokeObjectURL(thumbUrl); thumbUrl = null; ph.value = ''; drawUpl(); };
-  };
-  ph.onchange = async () => {
-    const f = ph.files && ph.files[0]; if (!f) return;
-    try { const b = await shrinkImage(f); if (thumbUrl) URL.revokeObjectURL(thumbUrl); photo = b; thumbUrl = URL.createObjectURL(b); drawUpl(); }
-    catch (er) { photo = null; ph.value = ''; drawUpl(); fail(er); }
-  };
-  drawUpl();
-  $('#send', el).onclick = async e => {
-    if (!topic) { toast('Выберите тему', 'err'); return $('#tp', el).classList.add('shake'), setTimeout(() => $('#tp', el).classList.remove('shake'), 450); }
-    if (!tx.value.trim()) { toast('Введите текст', 'err'); return; }
-    e.currentTarget.disabled = true;
-    try { const fd = new FormData(); fd.append('topic_id', topic); fd.append('text', tx.value); if (photo) fd.append('photo', photo, 'ad.jpg'); await api('/api/submit', fd); celebrate(); toast('Заявка отправлена админам ✅', 'good'); go('mine', {}, { replace: true }); }
-    catch (er) { e.currentTarget.disabled = false; fail(er); }
-  };
+  const STEPS = ['Оформление', 'Категория', 'Цена', 'Описание', 'Предпросмотр'];
+  const D = { photo: null, thumb: null, title: '', topic: null, topicName: '', price: '', deal: false, desc: '' };
+  let step = 0;
+  el.innerHTML = `<h2 class="page">Подать объявление</h2><div id="stp"></div><div id="body"></div>`;
+  const body = $('#body', el), stp = $('#stp', el);
+  const priceLine = () => D.deal ? 'договорная' : `${+D.price || 0} ⭐`;
+  const compose = () => `${D.title.trim()}\nЦена: ${priceLine()}\n\n${D.desc.trim()}`;
+  const fake = () => ({ id: 0, text: compose(), photo: D.thumb, topic: D.topicName, created: 'сейчас', author: (S.me.user && S.me.user.name) || 'вы' });
+  const bad = (node, msg) => { toast(msg, 'err'); if (node) { node.classList.add('shake'); setTimeout(() => node.classList.remove('shake'), 450); } };
+  const nav = (next) => `<div class="wz-nav">${step ? '<button class="btn ghost" id="bk">← Назад</button>' : ''}<button class="btn" id="nx">${next}</button></div>`;
+  const go2 = n => { step = n; $('#main').scrollTop = 0; draw(); buzz('light'); };
+
+  function draw() {
+    stp.innerHTML = `<div class="stp-bar">${STEPS.map((s, i) => `<i class="${i < step ? 'done' : i === step ? 'cur' : ''}"></i>`).join('')}</div><div class="stp-l">Шаг ${step + 1} из ${STEPS.length} · <b>${STEPS[step]}</b></div>`;
+    ([s0, s1, s2, s3, s4][step])();
+  }
+  body.addEventListener('click', e => { if (e.target.closest('#bk')) go2(step - 1); });
+
+  function s0() {
+    body.innerHTML = `<input type="file" id="ph" accept="image/*" hidden>
+      <div class="drop ${D.thumb ? 'has' : ''}" id="drop">${D.thumb ? `<img src="${D.thumb}" alt=""><div class="drop-b"><button class="btn ghost small" id="chg" type="button">Заменить</button><button class="btn bad small" id="rm" type="button">✕ Убрать</button></div>` : `<div>${ic('plus', false)}<b style="color:var(--txt)">Добавить фото</b><div style="font-size:13px;margin-top:4px">Необязательно, но с фото смотрят чаще</div></div>`}</div>
+      <span class="lbl">Название</span><input class="f" id="ti" maxlength="70" placeholder="Например: iPhone 12, 128 ГБ" value="${esc(D.title)}"><div class="counter" id="cn">${D.title.length} / 70</div>
+      ${nav('Далее →')}`;
+    const ph = $('#ph', body), ti = $('#ti', body);
+    $('#drop', body).onclick = e => { if (e.target.closest('#rm')) { if (D.thumb) URL.revokeObjectURL(D.thumb); D.photo = D.thumb = null; ph.value = ''; return s0(); } ph.click(); };
+    ph.onchange = async () => {
+      const f = ph.files && ph.files[0]; if (!f) return;
+      try { const b = await shrinkImage(f); if (D.thumb) URL.revokeObjectURL(D.thumb); D.photo = b; D.thumb = URL.createObjectURL(b); s0(); }
+      catch (er) { ph.value = ''; fail(er); }
+    };
+    ti.oninput = () => { D.title = ti.value; $('#cn', body).textContent = ti.value.length + ' / 70'; };
+    $('#nx', body).onclick = () => { if (!D.title.trim()) return bad(ti, 'Введите название'); go2(1); };
+  }
+
+  function s1() {
+    body.innerHTML = `<div id="opts">${S.me.topics.map(t => `<button class="opt ${D.topic === t.id ? 'sel' : ''}" data-id="${t.id}">${esc(t.name)}</button>`).join('')}</div>${nav('Далее →')}`;
+    $$('.opt', body).forEach(b => b.onclick = () => { D.topic = +b.dataset.id; D.topicName = S.me.topics.find(t => t.id === D.topic).name; $$('.opt', body).forEach(x => x.classList.toggle('sel', x === b)); buzz('light'); });
+    $('#nx', body).onclick = () => { if (!D.topic) return bad($('#opts', body), 'Выберите категорию'); go2(2); };
+  }
+
+  function s2() {
+    body.innerHTML = `<span class="lbl">Цена в звёздах</span><div class="pin"><input class="f" id="pr" inputmode="numeric" maxlength="9" placeholder="0" value="${D.deal ? '' : esc(D.price)}" ${D.deal ? 'disabled' : ''}>${STAR}</div>
+      <div class="chips" style="margin-top:12px">${[10, 50, 100, 500, 1000].map(n => `<span class="chip" data-v="${n}">${fmtN(n)}${STAR}</span>`).join('')}<span class="chip ${D.price === '0' && !D.deal ? 'sel' : ''}" data-v="0">Бесплатно</span><span class="chip ${D.deal ? 'sel' : ''}" data-v="deal">Договорная</span></div>
+      ${nav('Далее →')}`;
+    const pr = $('#pr', body);
+    pr.oninput = () => { pr.value = pr.value.replace(/\D/g, '').replace(/^0+(?=\d)/, ''); D.price = pr.value; D.deal = false; $$('.chip', body).forEach(c => c.classList.remove('sel')); };
+    $$('.chip', body).forEach(c => c.onclick = () => { if (c.dataset.v === 'deal') { D.deal = !D.deal; if (D.deal) D.price = ''; } else { D.deal = false; D.price = c.dataset.v; } s2(); buzz('light'); });
+    $('#nx', body).onclick = () => { if (!D.deal && D.price === '') return bad($('.pin', body), 'Укажите цену или выберите «Договорная»'); go2(3); };
+  }
+
+  function s3() {
+    body.innerHTML = `<span class="lbl">Описание</span><textarea class="f" id="tx" maxlength="2000" style="min-height:190px" placeholder="Состояние, комплектация, условия сделки, как с вами связаться…">${esc(D.desc)}</textarea><div class="counter" id="cn">${D.desc.length} / 2000</div>${nav('Предпросмотр →')}`;
+    const tx = $('#tx', body); tx.oninput = () => { D.desc = tx.value; $('#cn', body).textContent = tx.value.length + ' / 2000'; };
+    $('#nx', body).onclick = () => { if (!D.desc.trim()) return bad(tx, 'Добавьте описание'); go2(4); };
+  }
+
+  function s4() {
+    const p = fake();
+    body.innerHTML = `<p class="sub" style="margin-top:0">Так объявление увидят другие. Проверьте и отправьте — админ рассмотрит заявку.</p>
+      <span class="lbl">В ленте</span><div class="agrid pv-wrap"><article class="ac pv">${cardHtml(p, false)}</article>
+        <article class="ac pv sk"><div class="aph"></div><div class="ab"><div class="sk-l" style="width:85%"></div><div class="sk-l" style="width:45%"></div><div class="sk-l" style="width:65%"></div></div></article></div>
+      <span class="lbl" style="margin-top:20px">Страница объявления</span>${adDetail(p)}
+      <div class="wz-nav"><button class="btn ghost" id="bk">← Изменить</button><button class="btn" id="nx">🚀 Отправить на проверку</button></div>`;
+    $('#nx', body).onclick = async e => {
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        const fd = new FormData(); fd.append('topic_id', D.topic); fd.append('text', compose()); if (D.photo) fd.append('photo', D.photo, 'ad.jpg');
+        await api('/api/submit', fd); celebrate(); toast('Заявка отправлена админам ✅', 'good'); go('mine', {}, { replace: true });
+      } catch (er) { b.disabled = false; fail(er); }
+    };
+  }
+  draw();
 };
 
 const STATUS = { pending: '⏳ На проверке', awaiting_reason: '⏳ Проверяется', awaiting_edit: '✏️ Админ правит', awaiting_user: '💬 Ждёт вашего ответа', approved: '✅ Опубликовано', approved_edited: '✅ Опубликовано (с правкой)', rejected: '❌ Отклонено', declined_by_user: '🚫 Вы отказались' };
@@ -717,7 +910,7 @@ views.mine = async el => {
   el.innerHTML = `<h2 class="page">📨 Мои заявки</h2><div class="stagger">${d.requests.map(r => `<div class="card glass" data-id="${r.id}">
     <div class="row"><span class="status st-${r.status}">${STATUS[r.status] || r.status}</span><span class="grow"></span><small style="color:var(--dim)">#${r.id} · ${esc(r.created)}</small></div>
     <div style="margin:8px 0 4px;color:var(--dim);font-size:13px">📂 ${esc(r.topic)}</div>
-    ${r.photo ? `<img class="req-img" src="${esc(r.photo)}" alt="" loading="lazy">` : ''}<div class="rich">${safe(r.status === 'awaiting_user' && r.edited_text ? r.edited_text : r.text)}</div>
+    ${r.photo ? `<img class="req-img" src="${esc(r.photo)}" alt="" loading="lazy">` : ''}${(() => { const src = r.status === 'awaiting_user' && r.edited_text ? r.edited_text : r.text, a = parseAd({ text: src }); return a.fresh ? `<div class="mtitle">${esc(a.title)}</div><div class="mprice">${priceHtml(a.price)}</div><div class="rich">${esc(a.desc)}</div>` : `<div class="rich">${safe(src)}</div>`; })()}
     ${r.status === 'awaiting_user' ? `<p class="sub" style="margin:10px 0 8px">Админ подправил пост. Отправить так?</p><div class="row"><button class="btn ok small grow acc">✅ Принять</button><button class="btn bad small grow dec">🚫 Отказаться</button></div>` : ''}</div>`).join('')}</div>`;
   $$('.card', el).forEach(c => {
     const id = +c.dataset.id, act = async accept => { try { await api('/api/user_choice', { id, accept }); if (accept) celebrate(); toast(accept ? 'Опубликовано ✅' : 'Вы отказались', accept ? 'good' : ''); go('mine', {}, { replace: true }); } catch (e) { fail(e); } };
