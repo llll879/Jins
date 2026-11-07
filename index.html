@@ -2588,8 +2588,8 @@ views.base_user = async (el, params = {}) => {
       <button class="btn small ghost" id="bpShare">🔗 Поделиться</button>
       ${c.can_rate ? '<button class="btn small ok" id="bpRate">⭐ Изменить рейтинг</button>' : ''}
     </div>
-    ${c.complaints.length ? `<div class="card glass"><b>Жалобы <small class="dim" style="display:inline">· видно только модераторам</small></b>
-      ${c.complaints.map(x => `<div class="cmp ${x.status === 'new' ? 'open' : ''}"><div class="rowsb"><b>${esc(x.by)}</b><span class="badge ${x.status === 'new' ? '' : 'good'}">${x.status === 'new' ? 'активна' : 'закрыта'}</span></div><small class="dim">${esc(x.created)}${x.category ? ' · ' + esc(x.category) : ''}</small><p>${esc(x.reason)}</p></div>`).join('')}</div>` : ''}
+    ${c.complaints.length ? `<div class="card glass"><b>Жалобы на человека</b>
+      ${c.complaints.map(x => `<div class="cmp ${x.status === 'new' ? 'open' : ''}"><div class="rowsb"><b>${esc(x.by||'Жалоба #'+x.id)}</b><span class="badge ${x.status === 'new' ? '' : 'good'}">${x.status === 'new' ? 'активна' : 'закрыта'}</span></div><small class="dim">${esc(x.created)}${x.category ? ' · ' + esc(x.category) : ''}</small><p>${esc(x.reason)}</p></div>`).join('')}</div>` : ''}
   </div>`;
   avFill(el);
   $('#bpLink', el).onclick = () => linkSheet('Ссылка на профиль', lk.code, lk.deep);

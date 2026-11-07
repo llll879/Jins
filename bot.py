@@ -1876,6 +1876,11 @@ def base_card_html(c):
     good = [b for b in c["badges"] if b["tone"] == "good"]
     if bad or good:
         L.append(" · ".join(f"{b['i']} {esc(b['t'])}" for b in bad + good))
+    if c.get("complaints"):
+        L += ["", "🚩 <b>Последние жалобы:</b>"]
+        for x in c["complaints"]:
+            txt = x["reason"][:140] + ("…" if len(x["reason"]) > 140 else "")
+            L.append(f"{'🔴' if x['status'] == 'new' else '⚪️'} <i>{esc(x['created'][:10])}</i> · {esc(txt)}")
     if c["note"]:
         L += ["", f"📝 <b>Заметка модераторов:</b> {esc(c['note'])}"]
     return "\n".join(L)
@@ -1913,6 +1918,18 @@ def base_kb(c, staff=False):
     return kb.as_markup()
 
 
+async def base_complaints(uid, limit=15, staff=False):
+    """Жалобы на человека. Видны всем; кто именно пожаловался — только модераторам."""
+    rows = await pool.fetch(
+        "SELECT x.id,x.reason,x.category,x.status,x.created_at,x.reporter_id,u.username,u.first_name "
+        "FROM user_reports x LEFT JOIN users u ON u.user_id=x.reporter_id "
+        "WHERE x.target_id=$1 ORDER BY x.id DESC LIMIT $2", uid, limit)
+    return [{"id": x["id"], "reason": x["reason"], "category": x["category"], "status": x["status"],
+             "created": fmt_dt(x["created_at"]),
+             "by": (("@" + x["username"]) if x["username"] else (x["first_name"] or str(x["reporter_id"]))) if staff else None}
+            for x in rows]
+
+
 async def do_check(m: Message, bot: Bot, arg: str):
     u = m.from_user
     if not u or u.is_bot:
@@ -1943,6 +1960,7 @@ async def do_check(m: Message, bot: Bot, arg: str):
     if not c:
         return await m.reply(base_missing_html(label))
     c["via"] = via
+    c["complaints"] = await base_complaints(uid, 3)
     staff = m.chat.type == "private" and await is_main(u.id)
     await m.reply(base_card_html(c), reply_markup=base_kb(c, staff))
 
@@ -4499,16 +4517,7 @@ async def api_base_profile(request):
         "SELECT 1 FROM user_reports WHERE target_id=$1 AND reporter_id=$2", uid, me))
     c["can_rate"] = await is_main(me)
     c["role_key"] = c["role"]
-    c["complaints"] = []
-    if await role(me) is not None:
-        rows = await pool.fetch(
-            "SELECT x.id,x.reason,x.category,x.status,x.created_at,x.post_id,x.reporter_id,u.username,u.first_name "
-            "FROM user_reports x LEFT JOIN users u ON u.user_id=x.reporter_id "
-            "WHERE x.target_id=$1 ORDER BY x.id DESC LIMIT 15", uid)
-        c["complaints"] = [{"id": x["id"], "reason": x["reason"], "category": x["category"], "status": x["status"],
-                            "created": fmt_dt(x["created_at"]), "by_id": x["reporter_id"],
-                            "by": ("@" + x["username"]) if x["username"] else (x["first_name"] or str(x["reporter_id"]))}
-                           for x in rows]
+    c["complaints"] = await base_complaints(uid, 15, await role(me) is not None)
     return jr(c)
 
 
