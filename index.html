@@ -988,7 +988,7 @@ body.in-chat #app{max-width:none}
 
 /* ===== v26: действия с сообщениями ===== */
 .cv-msg{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;will-change:transform}
-.cv-msg.sw{transition:none}
+.cv-msg.swp{transition:none}
 .cv-msg.sb{transition:transform .32s cubic-bezier(.22,1,.36,1)}
 .cv-sw{position:absolute;right:12px;width:32px;height:32px;margin-top:-16px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,var(--txt) 14%,transparent);color:var(--txt);opacity:0;transform:scale(.4);pointer-events:none;z-index:0;transition:background .15s,color .15s}
 .cv-sw .mi{width:18px;height:18px}
@@ -2155,14 +2155,14 @@ views.chat = async (el,params={}) => {
   (()=>{const TH=56;let sx=0,sy=0,node=null,dx=0,lock=0,timer=null,fired=false,hit=false,ico=null;
     const damp=x=>{const a=Math.min(-x,260);return -(a<=TH?a:TH+(a-TH)*.28);};
     const drop=()=>{clearTimeout(timer);if(ico){const i=ico;ico=null;i.classList.add('out');setTimeout(()=>i.remove(),240);}
-      if(node){const n=node;n.classList.remove('sw');n.classList.add('sb');n.style.transform='';setTimeout(()=>n.classList.remove('sb'),340);}
+      if(node){const n=node;n.classList.remove('swp');n.classList.add('sb');n.style.transform='';setTimeout(()=>n.classList.remove('sb'),340);}
       node=null;dx=0;lock=0;hit=false;};
     log.addEventListener('touchstart',e=>{const n=e.target.closest('.cv-msg[data-mid]');if(!n||e.touches.length!==1)return;
       node=n;sx=e.touches[0].clientX;sy=e.touches[0].clientY;dx=0;lock=0;fired=false;hit=false;
       timer=setTimeout(()=>{if(node===n&&!lock){fired=true;lpAt=Date.now();const id=n.dataset.mid;drop();msgMenu(id);}},480);},{passive:true});
     log.addEventListener('touchmove',e=>{if(!node)return;const x=e.touches[0].clientX-sx,y=e.touches[0].clientY-sy;
       if(!lock&&(Math.abs(x)>9||Math.abs(y)>9)){clearTimeout(timer);lock=(x<0&&Math.abs(x)>Math.abs(y)*1.6)?1:2;
-        if(lock===1){node.style.animation='none';node.classList.remove('sb');node.classList.add('sw');
+        if(lock===1){node.style.animation='none';node.classList.remove('sb');node.classList.add('swp');
           ico=document.createElement('div');ico.className='cv-sw';ico.innerHTML='<span class="mi mi-x_reply"></span>';
           ico.style.top=(node.offsetTop+node.offsetHeight/2)+'px';log.appendChild(ico);}}
       if(lock===1){dx=damp(x+9);node.style.transform=`translate3d(${dx}px,0,0)`;
