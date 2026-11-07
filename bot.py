@@ -15,7 +15,7 @@ import sys
 from collections import Counter, OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -62,6 +62,12 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 RETRY_CODES = {408, 429, 500, 502, 503, 504}
 
 WEBAPP_URL = (os.getenv("WEBAPP_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+MINIAPP_LINK = (os.getenv("MINIAPP_LINK") or "").rstrip("/")      # например https://t.me/mybot/app
+MINIAPP_SHORT = (os.getenv("MINIAPP_SHORT") or "").strip().strip("/")  # short name мини-аппа из BotFather
+BOT_USERNAME = ""
+_BOT = None
+_typing = {}    # (отправитель, получатель, объявление) -> monotonic последнего «печатает»
+_viewing = {}   # (кто смотрит, с кем, объявление) -> monotonic последнего открытия чата
 INDEX_FILE = Path(__file__).parent / "index.html"
 if not INDEX_FILE.exists():
     INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
@@ -474,6 +480,8 @@ async def init_db():
     global pool
     pool = await asyncpg.create_pool(
         DATABASE_URL, min_size=1, max_size=5, statement_cache_size=0, init=_init_conn)
+    had_read = await pool.fetchval(
+        "SELECT 1 FROM information_schema.columns WHERE table_name='direct_messages' AND column_name='read_at'")
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
@@ -617,8 +625,39 @@ async def init_db():
         ALTER TABLE requests ADD COLUMN IF NOT EXISTS photo_id TEXT;
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS photo_id TEXT;
         ALTER TABLE feeds ADD COLUMN IF NOT EXISTS photo_msg_id BIGINT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS scam BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_data BYTEA;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_mime TEXT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_size INT;
+        CREATE INDEX IF NOT EXISTS direct_messages_unread_idx ON direct_messages(recipient_id) WHERE read_at IS NULL;
+        CREATE TABLE IF NOT EXISTS user_blocks(
+            blocker_id BIGINT NOT NULL, blocked_id BIGINT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY(blocker_id, blocked_id));
+        CREATE TABLE IF NOT EXISTS user_reports(
+            id BIGSERIAL PRIMARY KEY, target_id BIGINT NOT NULL, reporter_id BIGINT NOT NULL, post_id INT,
+            reason TEXT NOT NULL DEFAULT 'Жалоба на пользователя', status TEXT NOT NULL DEFAULT 'new',
+            created_at TIMESTAMPTZ DEFAULT now(), UNIQUE(target_id, reporter_id));
+        CREATE TABLE IF NOT EXISTS ad_photos(
+            id BIGSERIAL PRIMARY KEY, request_id INT NOT NULL, pos INT NOT NULL DEFAULT 0,
+            data BYTEA NOT NULL, mime TEXT NOT NULL DEFAULT 'image/jpeg');
+        CREATE INDEX IF NOT EXISTS ad_photos_req_idx ON ad_photos(request_id, pos, id);
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INT NOT NULL DEFAULT 0;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS expired BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS remind_sent BOOLEAN NOT NULL DEFAULT FALSE;
+        CREATE TABLE IF NOT EXISTS post_views(
+            post_id INT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id BIGINT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY(post_id, user_id));
+        CREATE TABLE IF NOT EXISTS saved_searches(
+            id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, query TEXT NOT NULL,
+            notify BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE(user_id, query));
         """
     )
+    if not had_read:
+        # старые сообщения считаем прочитанными, чтобы не показать «сотни непрочитанных»
+        await pool.execute("UPDATE direct_messages SET read_at=created_at WHERE read_at IS NULL")
     if await pool.fetchval("SELECT count(*) FROM topics") == 0:
         for i, name in enumerate(DEFAULT_TOPICS):
             await pool.execute("INSERT INTO topics(name, sort) VALUES($1, $2)", name, i)
@@ -920,11 +959,14 @@ async def notify_user(bot: Bot, uid, text, markup=None):
 
 
 async def add_post(r, text):
-    await pool.execute(
+    pid = await pool.fetchval(
         "INSERT INTO posts(user_id,username,full_name,topic_id,topic_name,text,request_id,photo_id) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
         r["user_id"], r["username"], r["full_name"], r["topic_id"], r["topic_name"], text, r["id"],
         r["photo_id"])
+    if _BOT is not None and pid:
+        asyncio.create_task(notify_saved(_BOT, pid))
+    return pid
 
 
 async def publish_group(bot: Bot, topic_id, text, photo_id=None) -> bool:
@@ -1675,8 +1717,9 @@ async def cb_report(cb: CallbackQuery):
 async def cb_bump(cb: CallbackQuery):
     pid = int(cb.data.split(":")[1])
     row = await pool.fetchrow(
-        "UPDATE posts SET created_at=now(), bumped_at=now(), expires_at=now()+interval '30 days' "
-        "WHERE id=$1 AND user_id=$2 AND active RETURNING id", pid, cb.from_user.id)
+        "UPDATE posts SET created_at=now(), bumped_at=now(), expires_at=now()+interval '30 days', "
+        "active=TRUE, expired=FALSE, remind_sent=FALSE "
+        "WHERE id=$1 AND user_id=$2 AND (active OR expired) RETURNING id", pid, cb.from_user.id)
     await cb.answer("Объявление поднято ещё на 30 дней" if row else "Можно поднять только своё объявление", show_alert=True)
 
 
@@ -2765,7 +2808,7 @@ async def api_img(request):
         ident = int(request.match_info["id"])
     except ValueError:
         raise web.HTTPNotFound()
-    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r", "rv") else ""
+    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r", "rv", "dm", "ap") else ""
     if not want or not hmac.compare_digest(request.query.get("t", ""), want):
         raise web.HTTPNotFound()
     if kind == "rv":
@@ -2774,6 +2817,23 @@ async def api_img(request):
             raise web.HTTPNotFound()
         return web.Response(body=bytes(row["photo_data"]), content_type=row["photo_mime"] or "image/jpeg",
                             headers={"Cache-Control": "private, max-age=600"})
+    if kind == "ap":
+        row = await pool.fetchrow("SELECT data,mime FROM ad_photos WHERE id=$1", ident)
+        if not row:
+            raise web.HTTPNotFound()
+        return web.Response(body=bytes(row["data"]), content_type=safe_mime(row["mime"], IMG_MIMES),
+                            headers={"Cache-Control": "public, max-age=86400, immutable"})
+    if kind == "dm":
+        row = await pool.fetchrow("SELECT file_data,file_mime,file_name FROM direct_messages WHERE id=$1", ident)
+        if not row or not row["file_data"]:
+            raise web.HTTPNotFound()
+        hdr = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+        if row["file_mime"] in IMG_MIMES:
+            ctype = row["file_mime"]
+        else:
+            ctype = "application/octet-stream"
+            hdr["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(row["file_name"] or "file")
+        return web.Response(body=bytes(row["file_data"]), content_type=ctype, headers=hdr)
     data = _img_cache.get((kind, ident))
     if data is None:
         fid = await pool.fetchval(
@@ -2966,12 +3026,18 @@ async def posts_json(rows, uid=None):
     rows = list(rows)
     rt = await seller_ratings([p["user_id"] for p in rows])
     avs = await avatar_info([p["user_id"] for p in rows])
+    bdg = await user_badges([p["user_id"] for p in rows])
+    extra = await extra_photos([p["request_id"] for p in rows if p["request_id"]])
     out = []
     for p in rows:
         j = post_json(p, uid)
         a, c = rt.get(p["user_id"], (0, 0))
         j["author_id"] = p["user_id"]
         j["author_has_avatar"], j["author_photo"] = avs.get(p["user_id"], (False, None))
+        j["badges"] = bdg.get(p["user_id"], [])
+        j["views"] = p["views"]
+        j["photos"] = ([j["photo"]] if j["photo"] else []) + extra.get(p["request_id"], [])
+        j["days_left"] = max(0, int((p["expires_at"] - datetime.now(timezone.utc)).total_seconds() // 86400)) if p["expires_at"] else None
         j["rating"] = a
         j["reviews"] = c
         out.append(j)
@@ -2984,6 +3050,254 @@ async def posts_by_ids(ids):
     rows = await pool.fetch("SELECT * FROM posts WHERE id = ANY($1::int[]) AND active AND expires_at>now()", ids)
     m = {r["id"]: r for r in rows}
     return [m[i] for i in ids if i in m]
+
+
+
+# ---------------------------------------------------------------- значки, блокировки, жалобы, чат
+IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+BAD_EXT = {"exe", "apk", "bat", "cmd", "scr", "msi", "jar", "com", "vbs", "ps1", "sh", "dmg", "lnk", "pif", "js"}
+MAX_FILE = 8 * 1024 * 1024
+
+
+def safe_mime(m, allowed):
+    return m if m in allowed else allowed[0]
+
+
+async def extra_photos(request_ids):
+    ids = list({int(i) for i in request_ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("SELECT id,request_id FROM ad_photos WHERE request_id=ANY($1::int[]) ORDER BY pos,id", ids)
+    out = {}
+    for r in rows:
+        out.setdefault(r["request_id"], []).append(img_url("ap", r["id"]))
+    return out
+
+
+def _badges(r):
+    deals, rating, reviews = r["deals"] or 0, r["rating"] or 0, r["reviews"] or 0
+    bad, good = [], []
+    if r["scam"]:
+        bad.append({"k": "scam", "t": "Мошенник", "i": "🚫"})
+    if reviews >= 3 and rating < 3.0:
+        bad.append({"k": "badrev", "t": "Плохие отзывы", "i": "👎"})
+    if r["refunds"] >= 2:
+        bad.append({"k": "disputes", "t": "Частые возвраты", "i": "⚠️"})
+    if r["reports"] >= 3:
+        bad.append({"k": "reports", "t": "Много жалоб", "i": "🚩"})
+    if not bad:
+        if r["verified"] or (deals >= 5 and reviews >= 3 and rating >= 4.5):
+            good.append({"k": "verified", "t": "Проверенный", "i": "✅"})
+        if deals >= 100:
+            good.append({"k": "deals100", "t": "100+ сделок", "i": "🤝"})
+        if deals >= 20 and reviews >= 10 and rating >= 4.7:
+            good.append({"k": "top", "t": "Топ-продавец", "i": "🏆"})
+    return [dict(x, tone="bad") for x in bad] + [dict(x, tone="good") for x in good]
+
+
+async def user_badges(ids):
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("""
+        SELECT u.user_id, u.verified, u.scam,
+          (SELECT count(*) FROM escrow_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id))
+          + (SELECT count(*) FROM direct_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id)) deals,
+          (SELECT avg(rating) FROM user_reviews r WHERE r.target_id=u.user_id)::float rating,
+          (SELECT count(*) FROM user_reviews r WHERE r.target_id=u.user_id) reviews,
+          (SELECT count(*) FROM escrow_deals d WHERE d.seller_id=u.user_id AND d.status IN ('refunded','refund_pending')) refunds,
+          (SELECT count(DISTINCT reporter_id) FROM user_reports x WHERE x.target_id=u.user_id AND x.status='new') reports
+        FROM users u WHERE u.user_id=ANY($1::bigint[])""", ids)
+    out = {i: [] for i in ids}
+    for r in rows:
+        out[r["user_id"]] = _badges(r)
+    return out
+
+
+async def block_state(uid, peer):
+    rows = await pool.fetch(
+        "SELECT blocker_id FROM user_blocks WHERE (blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1)",
+        uid, peer)
+    return any(r["blocker_id"] == uid for r in rows), any(r["blocker_id"] == peer for r in rows)
+
+
+async def need_not_blocked(uid, peer):
+    by_me, by_peer = await block_state(uid, peer)
+    if by_me:
+        raise ApiError(403, "blocked_peer")
+    if by_peer:
+        raise ApiError(403, "blocked_by_peer")
+
+
+async def user_name(uid):
+    u = await pool.fetchrow("SELECT username,first_name,last_name FROM users WHERE user_id=$1", uid)
+    if not u:
+        return str(uid)
+    return " ".join(x for x in [u["first_name"], u["last_name"]] if x) or (("@" + u["username"]) if u["username"] else str(uid))
+
+
+def ad_title(text):
+    t = re.sub(r"<[^>]+>", "", html.unescape(text or "")).strip()
+    return (t.split("\n")[0] if t else "Объявление")[:60]
+
+
+def dm_preview(body, fname, fmime):
+    if body:
+        return body
+    if fname:
+        return "📷 Фото" if fmime in IMG_MIMES else "📎 " + fname
+    return ""
+
+
+async def notify_staff(text, markup=None):
+    if _BOT is None:
+        return
+    try:
+        await deliver_card(_BOT, text, markup)
+    except Exception:
+        log.exception("notify_staff failed")
+
+
+async def push_dm(sender_id, peer, post_id, body_txt, fname, fmime):
+    """Пуш получателю в Telegram. Не шлём, если он прямо сейчас читает этот чат, и не чаще раза в 40 с на диалог."""
+    if _BOT is None:
+        return
+    if time.monotonic() - _viewing.get((peer, sender_id, post_id or 0), 0) < 8:
+        return
+    if not rate_ok(("dmpush", peer, sender_id), 40):
+        return
+    name = await user_name(sender_id)
+    msg = f"💬 <b>{esc(name)}</b>" + (f" · объявление #{post_id}" if post_id else "") + f"\n{esc(dm_preview(body_txt, fname, fmime)[:200])}"
+    kb = None
+    if WEBAPP_URL.startswith("https://"):
+        q = f"?chat={sender_id}" + (f"&post={post_id}" if post_id else "")
+        bld = InlineKeyboardBuilder()
+        bld.button(text="Открыть чат", web_app=WebAppInfo(url=WEBAPP_URL + "/app" + q))
+        kb = bld.as_markup()
+    try:
+        await _BOT.send_message(peer, msg, reply_markup=kb)
+    except Exception:
+        pass
+
+
+def share_base():
+    if MINIAPP_LINK:
+        return MINIAPP_LINK
+    if not BOT_USERNAME:
+        return ""
+    return f"https://t.me/{BOT_USERNAME}" + (f"/{MINIAPP_SHORT}" if MINIAPP_SHORT else "")
+
+
+async def notify_saved(bot, pid):
+    """Новое объявление совпало с сохранённым поиском — шлём пуш."""
+    try:
+        p = await pool.fetchrow("SELECT * FROM posts WHERE id=$1", pid)
+        if not p:
+            return
+        plain = (re.sub(r"<[^>]+>", " ", html.unescape(p["text"] or "")) + " " + (p["topic_name"] or "")).lower()
+        rows = await pool.fetch(
+            "SELECT user_id,query FROM saved_searches WHERE notify AND user_id<>$1 ORDER BY id DESC LIMIT 2000", p["user_id"])
+        sent = set()
+        for r in rows:
+            if r["user_id"] in sent:
+                continue
+            words = [w for w in re.split(r"\W+", r["query"].lower()) if len(w) >= 2]
+            if not words or not all(w[:max(3, len(w) - 2)] in plain for w in words):
+                continue
+            sent.add(r["user_id"])
+            kb = None
+            if WEBAPP_URL.startswith("https://"):
+                bld = InlineKeyboardBuilder()
+                bld.button(text="Открыть", web_app=WebAppInfo(url=f"{WEBAPP_URL}/app?ad={pid}"))
+                kb = bld.as_markup()
+            await notify_user(bot, r["user_id"], f"🔔 Новое по вашему поиску «{esc(r['query'])}»:\n<b>{esc(ad_title(p['text']))}</b>", kb)
+            if len(sent) >= 100:
+                break
+            await asyncio.sleep(0.05)
+    except Exception:
+        log.exception("notify_saved failed")
+
+
+async def expiry_tick(bot):
+    # напоминание за 2 дня до конца срока
+    rows = await pool.fetch(
+        "SELECT id,user_id,text,expires_at FROM posts WHERE active AND NOT remind_sent "
+        "AND expires_at>now() AND expires_at<now()+interval '2 days' LIMIT 100")
+    for p in rows:
+        await pool.execute("UPDATE posts SET remind_sent=TRUE WHERE id=$1", p["id"])
+        kb = InlineKeyboardBuilder()
+        kb.button(text="♻️ Продлить на 30 дней", callback_data=f"bump:{p['id']}")
+        await notify_user(bot, p["user_id"],
+            f"⏳ Ваше объявление «{esc(ad_title(p['text']))}» истекает {fmt_dt(p['expires_at'])}.\n"
+            "Продлить, чтобы оно осталось в ленте?", kb.as_markup())
+        await asyncio.sleep(0.05)
+    # автоснятие истёкших
+    rows = await pool.fetch(
+        "UPDATE posts SET active=FALSE, expired=TRUE WHERE active AND expires_at<=now() "
+        "RETURNING id,user_id,text,expires_at")
+    now = datetime.now(timezone.utc)
+    for p in rows:
+        if (now - p["expires_at"]).days > 7:
+            continue   # старый «хвост» снимаем молча
+        kb = InlineKeyboardBuilder()
+        kb.button(text="♻️ Вернуть в ленту на 30 дней", callback_data=f"bump:{p['id']}")
+        await notify_user(bot, p["user_id"],
+            f"📦 Объявление «{esc(ad_title(p['text']))}» снято с публикации — истёк срок.\nМожно вернуть его в один тап.",
+            kb.as_markup())
+        await asyncio.sleep(0.05)
+
+
+async def expiry_loop(bot):
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await expiry_tick(bot)
+        except Exception:
+            log.exception("expiry tick failed")
+        await asyncio.sleep(1800)
+
+
+@router.callback_query(F.data.startswith("ur:"))
+async def cb_user_report(cb: CallbackQuery):
+    if await role(cb.from_user.id) is None:
+        return await cb.answer("Нет доступа", show_alert=True)
+    _, act, rid = cb.data.split(":")
+    r = await pool.fetchrow("SELECT * FROM user_reports WHERE id=$1", int(rid))
+    if not r:
+        return await cb.answer("Жалоба не найдена", show_alert=True)
+    if act == "scam":
+        await pool.execute("UPDATE users SET scam=TRUE WHERE user_id=$1", r["target_id"])
+        await pool.execute("UPDATE user_reports SET status='reviewed' WHERE target_id=$1", r["target_id"])
+        foot = "🚫 Помечен как мошенник"
+    else:
+        await pool.execute("UPDATE user_reports SET status='reviewed' WHERE id=$1", r["id"])
+        foot = "✅ Жалоба закрыта"
+    try:
+        await cb.message.edit_text((cb.message.html_text or "") + f"\n\n{foot} ({esc(label_d(cb.from_user.model_dump()))})", reply_markup=None)
+    except Exception:
+        pass
+    await cb.answer(foot)
+
+
+@router.callback_query(F.data.startswith("pr:"))
+async def cb_post_report(cb: CallbackQuery):
+    if await role(cb.from_user.id) is None:
+        return await cb.answer("Нет доступа", show_alert=True)
+    _, act, rid = cb.data.split(":")
+    r = await pool.fetchrow("SELECT * FROM reports WHERE id=$1", int(rid))
+    if not r:
+        return await cb.answer("Жалоба не найдена", show_alert=True)
+    if act == "del":
+        await pool.execute("UPDATE posts SET active=FALSE WHERE id=$1", r["post_id"])
+        foot = "🗑 Объявление удалено"
+    else:
+        foot = "✅ Жалоба закрыта"
+    await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", r["id"])
+    try:
+        await cb.message.edit_text((cb.message.html_text or "") + f"\n\n{foot}", reply_markup=None)
+    except Exception:
+        pass
+    await cb.answer(foot)
 
 
 async def api_me(request):
@@ -3001,6 +3315,8 @@ async def api_me(request):
                   "username": u.get("username"), "photo_url": u.get("photo_url"),
                   "has_avatar": personalization["has_avatar"] if personalization else False},
         "role": rl,
+        "share": share_base(),
+        "unread": await pool.fetchval("SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL", uid),
         "theme": personalization["theme"] if personalization else "dark",
         "accent": personalization["accent"] if personalization else "#8b7cff",
         "welcome": await get_text("welcome"),
@@ -3047,10 +3363,18 @@ async def api_posts(request):
 
 async def api_view(request):
     d = await body(request)
-    p = await pool.fetchrow("SELECT id, topic_id FROM posts WHERE id=$1", int(d.get("post_id", 0) or 0))
+    p = await pool.fetchrow("SELECT id, topic_id, user_id, views FROM posts WHERE id=$1", int(d.get("post_id", 0) or 0))
+    views = 0
     if p:
-        await log_activity(request["u"]["id"], "view", topic_id=p["topic_id"], post_id=p["id"])
-    return jr({"ok": True})
+        uid = request["u"]["id"]
+        views = p["views"]
+        await log_activity(uid, "view", topic_id=p["topic_id"], post_id=p["id"])
+        if p["user_id"] != uid:
+            ins = await pool.fetchval(
+                "INSERT INTO post_views(post_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING 1", p["id"], uid)
+            if ins:
+                views = await pool.fetchval("UPDATE posts SET views=views+1 WHERE id=$1 RETURNING views", p["id"])
+    return jr({"ok": True, "views": views})
 
 
 async def api_search(request):
@@ -3076,6 +3400,7 @@ async def api_submit(request):
     await need_sub(request)
     u = request["u"]
     photo = None
+    extras = []
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
         d = {"text": form.get("text") or "", "topic_id": form.get("topic_id") or 0}
@@ -3086,6 +3411,13 @@ async def api_submit(request):
                 raise ApiError(400, "bad_size")
             if data:
                 photo = BufferedInputFile(data, "ad.jpg")
+        for xf in form.getall("extra", [])[:4]:
+            if hasattr(xf, "file"):
+                xd = xf.file.read()
+                if len(xd) > MAX_PHOTO:
+                    raise ApiError(400, "bad_size")
+                if xd:
+                    extras.append((xd, safe_mime(getattr(xf, "content_type", None), IMG_MIMES)))
     else:
         d = await body(request)
     text = str(d.get("text") or "").strip()
@@ -3101,13 +3433,17 @@ async def api_submit(request):
         raise ApiError(400, "bad_image")
     if not r:
         raise ApiError(409, "closed")
+    for i, (xd, xm) in enumerate(extras):
+        await pool.execute("INSERT INTO ad_photos(request_id,pos,data,mime) VALUES($1,$2,$3,$4)", r["id"], i, xd, xm)
     return jr({"ok": True})
 
 
 async def api_my_requests(request):
     rows = await pool.fetch(
         "SELECT * FROM requests WHERE user_id=$1 ORDER BY id DESC LIMIT 30", request["u"]["id"])
+    extra = await extra_photos([r["id"] for r in rows])
     return jr({"requests": [{
+        "photos": ([img_url("r", r["id"])] if r["photo_id"] else []) + extra.get(r["id"], []),
         "id": r["id"], "topic": r["topic_name"], "text": r["text"], "status": r["status"],
         "edited_text": r["edited_text"], "created": fmt_dt(r["created_at"]),
         "photo": img_url("r", r["id"]) if r["photo_id"] else None,
@@ -3163,6 +3499,15 @@ async def api_profile(request):
         WHERE buyer_id=$1 OR seller_id=$1
         ORDER BY created_at DESC LIMIT 30""",uid)
     deals = sum(1 for x in deal_rows if x["status"]=="completed")
+    me_id = request["u"]["id"]
+    badges = (await user_badges([uid])).get(uid, [])
+    by_me = by_peer = False
+    if uid != me_id:
+        by_me, by_peer = await block_state(me_id, uid)
+    flags = None
+    if await role(me_id) is not None:
+        fr = await pool.fetchrow("SELECT verified,scam FROM users WHERE user_id=$1", uid)
+        flags = {"verified": bool(fr["verified"]), "scam": bool(fr["scam"])}
     history=[{"id":x["id"],"amount":x["amount"],"status":x["status"],"created":fmt_dt(x["created_at"]),
         "kind":x["kind"],"side":"Покупатель" if x["buyer_id"]==uid else "Продавец"} for x in deal_rows]
     return jr({"id": row["user_id"], "username": row["username"],
@@ -3170,6 +3515,7 @@ async def api_profile(request):
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
         "rating": round(row["rating"],2), "reviews": row["reviews"], "completed_deals": deals, "history": history,
+        "badges": badges, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "is_me": uid == request["u"]["id"]})
 
 
@@ -3255,18 +3601,28 @@ async def api_profile_review_save(request):
 
 async def api_chats(request):
     uid=request["u"]["id"]
-    rows=await pool.fetch("""SELECT DISTINCT ON (peer,post_id) peer,post_id,body,created_at FROM (
-        SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id
+    rows=await pool.fetch("""SELECT DISTINCT ON (peer,post_id) peer,post_id,body,created_at,sender_id,read_at,file_name,file_mime FROM (
+        SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id,sender_id,read_at,file_name,file_mime
         FROM direct_messages WHERE sender_id=$1 OR recipient_id=$1) x
         ORDER BY peer,post_id,created_at DESC LIMIT 150""",uid)
+    unread={ (r["sender_id"],r["post_id"]):r["c"] for r in await pool.fetch(
+        "SELECT sender_id,post_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1,2",uid)}
+    blocked={r["blocked_id"] for r in await pool.fetch("SELECT blocked_id FROM user_blocks WHERE blocker_id=$1",uid)}
     out=[]
     for r in rows:
         u=await pool.fetchrow("SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1",r["peer"])
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
-            "username":u["username"],"last":r["body"],"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
+            "username":u["username"],"last":dm_preview(r["body"],r["file_name"],r["file_mime"]),"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
+            "ts":r["created_at"].timestamp(),"mine":r["sender_id"]==uid,"read":r["read_at"] is not None,
+            "unread":unread.get((r["peer"],r["post_id"]),0),"blocked":r["peer"] in blocked,
             "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"]})
-    out.sort(key=lambda x:x["created"] or "",reverse=True)
-    return jr({"chats":out})
+    out.sort(key=lambda x:x["ts"],reverse=True)
+    return jr({"chats":out,"unread":sum(x["unread"] for x in out)})
+
+
+async def api_unread(request):
+    uid=request["u"]["id"]
+    return jr({"count":await pool.fetchval("SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL",uid)})
 
 
 async def api_messages(request):
@@ -3277,29 +3633,175 @@ async def api_messages(request):
         post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
         if post and post["user_id"] not in (uid, peer):
             raise ApiError(404,"post_chat_not_found")
-    rows=await pool.fetch("""SELECT * FROM (SELECT * FROM direct_messages
+    _viewing[(uid,peer,post_id or 0)]=time.monotonic()
+    await pool.execute("""UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2
+        AND read_at IS NULL AND post_id IS NOT DISTINCT FROM $3""",uid,peer,post_id)
+    rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,
+        (file_data IS NOT NULL) has_file FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
         AND post_id IS NOT DISTINCT FROM $3 ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer,post_id)
-    return jr({"messages":[{"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"])} for r in rows]})
+    by_me,by_peer=await block_state(uid,peer)
+    seen=await pool.fetchval("SELECT last_seen FROM users WHERE user_id=$1",peer)
+    online=bool(seen and (datetime.now(timezone.utc)-seen).total_seconds()<90)
+    typing=time.monotonic()-_typing.get((peer,uid,post_id or 0),0)<5
+    msgs=[]
+    for r in rows:
+        f=None
+        if r["has_file"]:
+            f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
+        msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
+            "read":r["read_at"] is not None,"file":f})
+    return jr({"messages":msgs,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
+
+
+async def api_typing(request):
+    uid=request["u"]["id"]; d=await body(request)
+    peer=int(d.get("peer") or 0); post_id=int(d.get("post_id") or 0)
+    if peer and peer!=uid:
+        _typing[(uid,peer,post_id)]=time.monotonic()
+        if len(_typing)>5000: _typing.clear()
+    return jr({"ok":True})
 
 
 async def api_message_send(request):
-    uid=request["u"]["id"]; d=await body(request); peer=int(d.get("peer") or 0); msg=str(d.get("text") or "").strip()
-    post_id=int(d.get("post_id") or 0) or None
-    if not peer or peer==uid or not msg or len(msg)>3000: raise ApiError(400,"bad_message")
+    uid=request["u"]["id"]
+    fdata=fname=fmime=None
+    if (request.content_type or "").startswith("multipart/"):
+        form=await request.post()
+        d={k:form.get(k) for k in ("peer","text","post_id")}
+        f=form.get("file")
+        if f is not None and hasattr(f,"file"):
+            fdata=f.file.read()
+            if fdata:
+                if len(fdata)>MAX_FILE: raise ApiError(400,"bad_size")
+                fname=(os.path.basename(str(getattr(f,"filename","") or "file")) or "file")[:120]
+                if fname.rsplit(".",1)[-1].lower() in BAD_EXT and "." in fname: raise ApiError(400,"bad_file")
+                fmime=str(getattr(f,"content_type","") or "application/octet-stream")[:100]
+            else: fdata=None
+    else:
+        d=await body(request)
+    try:
+        peer=int(d.get("peer") or 0); post_id=int(d.get("post_id") or 0) or None
+    except (TypeError,ValueError):
+        raise ApiError(400,"bad_message")
+    msg=str(d.get("text") or "").strip()
+    if not peer or peer==uid or (not msg and not fdata) or len(msg)>3000: raise ApiError(400,"bad_message")
     exists=await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",peer)
     if not exists: raise ApiError(404,"user_not_found")
+    await need_not_blocked(uid,peer)
     if post_id:
         post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
         if post is None:
-            # объявление удалено: диалог остаётся обычным личным
-            post_id=None
+            post_id=None   # объявление удалено: диалог остаётся обычным личным
         elif post["user_id"] not in (uid, peer):
             raise ApiError(403,"post_chat_forbidden")
-    row=await pool.fetchrow("INSERT INTO direct_messages(sender_id,recipient_id,body,post_id) VALUES($1,$2,$3,$4) RETURNING id,created_at",uid,peer,msg,post_id)
-    try: await request.app["bot"].send_message(peer, "Новое сообщение по объявлению" + (f" #{post_id}" if post_id else "") + ". Откройте мини-приложение → Сообщения.")
-    except Exception: pass
+    row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None)
+    _typing.pop((uid,peer,post_id or 0),None)
+    asyncio.create_task(push_dm(uid,peer,post_id,msg,fname,fmime))
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
+
+
+async def api_block(request):
+    uid=request["u"]["id"]; d=await body(request)
+    target=int(d.get("user_id") or 0)
+    if not target or target==uid: raise ApiError(400,"bad_input")
+    if d.get("block",True):
+        await pool.execute("INSERT INTO user_blocks(blocker_id,blocked_id) VALUES($1,$2) ON CONFLICT DO NOTHING",uid,target)
+    else:
+        await pool.execute("DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2",uid,target)
+    return jr({"ok":True})
+
+
+async def api_blocks(request):
+    uid=request["u"]["id"]
+    rows=await pool.fetch("""SELECT u.user_id,u.username,u.first_name,u.last_name FROM user_blocks b
+        JOIN users u ON u.user_id=b.blocked_id WHERE b.blocker_id=$1 ORDER BY b.created_at DESC""",uid)
+    return jr({"users":[{"id":r["user_id"],"name":" ".join(x for x in [r["first_name"],r["last_name"]] if x) or r["username"] or "Пользователь"} for r in rows]})
+
+
+async def api_report_user(request):
+    uid=request["u"]["id"]; d=await body(request)
+    target=int(d.get("user_id") or 0); post_id=int(d.get("post_id") or 0) or None
+    reason=(d.get("reason") or "Жалоба на пользователя").strip()[:500]
+    if not target or target==uid: raise ApiError(400,"bad_input")
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
+    row=await pool.fetchrow("INSERT INTO user_reports(target_id,reporter_id,post_id,reason) VALUES($1,$2,$3,$4) "
+        "ON CONFLICT(target_id,reporter_id) DO NOTHING RETURNING id",target,uid,post_id,reason)
+    if row:
+        kb=InlineKeyboardBuilder()
+        kb.button(text="🚫 Мошенник",callback_data=f"ur:scam:{row['id']}")
+        kb.button(text="✅ Закрыть",callback_data=f"ur:ok:{row['id']}")
+        kb.adjust(2)
+        tn, un = await user_name(target), await user_name(uid)
+        asyncio.create_task(notify_staff(
+            f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
+            f"На: <a href=\"tg://user?id={target}\">{esc(tn)}</a> (ID {target})\n"
+            f"От: <a href=\"tg://user?id={uid}\">{esc(un)}</a>\nПричина: {esc(reason)}"
+            + (f"\nОбъявление: #{post_id}" if post_id else ""), kb.as_markup()))
+    return jr({"ok":True,"duplicate":row is None})
+
+
+async def api_admin_user_flag(request):
+    await need_main(request)
+    d=await body(request); target=int(d.get("user_id") or 0); flag=str(d.get("flag") or "")
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
+    if flag=="verified": await pool.execute("UPDATE users SET verified=TRUE,scam=FALSE WHERE user_id=$1",target)
+    elif flag=="scam": await pool.execute("UPDATE users SET scam=TRUE,verified=FALSE WHERE user_id=$1",target)
+    elif flag=="clear":
+        await pool.execute("UPDATE users SET scam=FALSE,verified=FALSE WHERE user_id=$1",target)
+        await pool.execute("UPDATE user_reports SET status='reviewed' WHERE target_id=$1",target)
+    else: raise ApiError(400,"bad_input")
+    return jr({"ok":True})
+
+
+async def api_post_one(request):
+    await need_sub(request)
+    uid=request["u"]["id"]; pid=int(request.query.get("id") or 0)
+    p=await pool.fetchrow("SELECT * FROM posts WHERE id=$1 AND ((active AND expires_at>now()) OR user_id=$2)",pid,uid)
+    if not p: raise ApiError(404,"stale")
+    return jr({"post":(await posts_json([p],uid))[0]})
+
+
+async def api_recent(request):
+    await need_sub(request)
+    uid=request["u"]["id"]
+    ids=[r["post_id"] for r in await pool.fetch(
+        "SELECT post_id FROM activity WHERE user_id=$1 AND kind='view' AND post_id IS NOT NULL "
+        "GROUP BY post_id ORDER BY max(id) DESC LIMIT 20",uid)]
+    return jr({"posts":await posts_json(await posts_by_ids(ids),uid)})
+
+
+async def api_my_posts(request):
+    uid=request["u"]["id"]
+    rows=await pool.fetch("SELECT * FROM posts WHERE user_id=$1 AND (active OR expired) ORDER BY id DESC LIMIT 50",uid)
+    return jr({"posts":await posts_json(rows,uid),"expired":[r["id"] for r in rows if r["expired"] or r["expires_at"]<=datetime.now(timezone.utc)]})
+
+
+async def api_searches(request):
+    uid=request["u"]["id"]
+    rows=await pool.fetch("SELECT id,query,notify FROM saved_searches WHERE user_id=$1 ORDER BY id DESC LIMIT 30",uid)
+    return jr({"searches":[{"id":r["id"],"query":r["query"],"notify":r["notify"]} for r in rows]})
+
+
+async def api_search_save(request):
+    uid=request["u"]["id"]; q=str((await body(request)).get("query") or "").strip()[:200]
+    if len(q)<2: raise ApiError(400,"empty")
+    if await pool.fetchval("SELECT count(*) FROM saved_searches WHERE user_id=$1",uid)>=20: raise ApiError(400,"too_many")
+    await pool.execute("INSERT INTO saved_searches(user_id,query) VALUES($1,$2) ON CONFLICT DO NOTHING",uid,q)
+    return jr({"ok":True})
+
+
+async def api_search_del(request):
+    uid=request["u"]["id"]; sid=int((await body(request)).get("id") or 0)
+    await pool.execute("DELETE FROM saved_searches WHERE id=$1 AND user_id=$2",sid,uid)
+    return jr({"ok":True})
+
+
+async def api_search_notify(request):
+    uid=request["u"]["id"]; d=await body(request)
+    await pool.execute("UPDATE saved_searches SET notify=$3 WHERE id=$1 AND user_id=$2",int(d.get("id") or 0),uid,bool(d.get("notify")))
+    return jr({"ok":True})
 
 
 
@@ -3329,6 +3831,7 @@ async def api_direct_create(request):
         raise ApiError(400,"bad_input")
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",seller_id):
         raise ApiError(404,"seller_not_found")
+    await need_not_blocked(uid,seller_id)
     row=await pool.fetchrow("""INSERT INTO direct_deals(buyer_id,seller_id,amount,terms,status)
         VALUES($1,$2,$3,$4,'pending_acceptance') RETURNING id""",uid,seller_id,amount,terms)
     await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
@@ -3428,6 +3931,17 @@ async def api_report(request):
     row = await pool.fetchrow(
         "INSERT INTO reports(post_id,reporter_id,reason) VALUES($1,$2,$3) "
         "ON CONFLICT(post_id,reporter_id) DO NOTHING RETURNING id", pid, uid, reason)
+    if row:
+        pt = await pool.fetchval("SELECT text FROM posts WHERE id=$1", pid)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🗑 Удалить объявление", callback_data=f"pr:del:{row['id']}")
+        kb.button(text="✅ Закрыть", callback_data=f"pr:ok:{row['id']}")
+        kb.adjust(2)
+        who = await user_name(uid)
+        asyncio.create_task(notify_staff(
+            f"🚩 <b>Жалоба #{row['id']} на объявление #{pid}</b>\n"
+            f"От: <a href=\"tg://user?id={uid}\">{esc(who)}</a>\n"
+            f"Причина: {esc(reason)}\n\n<b>{esc(ad_title(pt))}</b>", kb.as_markup()))
     return jr({"ok": True, "duplicate": row is None})
 
 
@@ -3435,8 +3949,9 @@ async def api_bump(request):
     uid = request["u"]["id"]
     pid = int((await body(request)).get("post_id", 0) or 0)
     row = await pool.fetchrow(
-        "UPDATE posts SET bumped_at=now(), created_at=now(), expires_at=now()+interval '30 days' "
-        "WHERE id=$1 AND user_id=$2 AND active RETURNING id", pid, uid)
+        "UPDATE posts SET bumped_at=now(), created_at=now(), expires_at=now()+interval '30 days', "
+        "active=TRUE, expired=FALSE, remind_sent=FALSE "
+        "WHERE id=$1 AND user_id=$2 AND (active OR expired) RETURNING id", pid, uid)
     if not row:
         raise ApiError(403, "forbidden")
     return jr({"ok": True})
@@ -3487,17 +4002,28 @@ async def api_admin_reports(request):
         FROM reports r LEFT JOIN posts p ON p.id=r.post_id
         WHERE r.status='new' ORDER BY r.created_at DESC LIMIT 100
     """)
-    return jr({"reports": [{
-        "id": r["id"], "post_id": r["post_id"], "reporter": r["reporter_id"],
+    urows = await pool.fetch("""
+        SELECT r.id,r.target_id,r.reporter_id,r.post_id,r.reason,r.created_at FROM user_reports r
+        WHERE r.status='new' ORDER BY r.created_at DESC LIMIT 100""")
+    out = [{
+        "kind": "post", "id": r["id"], "post_id": r["post_id"], "reporter": r["reporter_id"],
         "reason": r["reason"], "created": fmt_dt(r["created_at"]),
         "topic": r["topic_name"] or "Объявление удалено", "text": r["text"] or ""
-    } for r in rows]})
+    } for r in rows]
+    for r in urows:
+        out.append({"kind": "user", "id": r["id"], "target": r["target_id"], "target_name": await user_name(r["target_id"]),
+                    "post_id": r["post_id"], "reporter": r["reporter_id"], "reason": r["reason"], "created": fmt_dt(r["created_at"])})
+    return jr({"reports": out})
 
 
 async def api_admin_report_done(request):
     await need_staff(request)
-    rid = int((await body(request)).get("id", 0) or 0)
-    await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", rid)
+    d = await body(request)
+    rid = int(d.get("id", 0) or 0)
+    if d.get("kind") == "user":
+        await pool.execute("UPDATE user_reports SET status='reviewed' WHERE id=$1", rid)
+    else:
+        await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", rid)
     return jr({"ok": True})
 
 
@@ -3526,7 +4052,9 @@ async def api_admin_broadcast(request):
 async def api_admin_queue(request):
     await need_staff(request)
     reqs = await pool.fetch("SELECT * FROM requests WHERE status='pending' ORDER BY id LIMIT 50")
+    extra = await extra_photos([r["id"] for r in reqs])
     out = {"requests": [{
+        "photos": ([img_url("r", r["id"])] if r["photo_id"] else []) + extra.get(r["id"], []),
         "id": r["id"], "from": ("@" + r["username"]) if r["username"] else (r["full_name"] or str(r["user_id"])),
         "topic": r["topic_name"], "text": r["text"], "created": fmt_dt(r["created_at"]),
         "photo": img_url("r", r["id"]) if r["photo_id"] else None,
@@ -3801,6 +4329,7 @@ async def api_escrow_create(request):
             raise ApiError(400, "listing_seller_mismatch")
     if seller_id <= 0 or seller_id == uid or amount < 1 or amount > 1000000 or not terms or len(terms) > 1500:
         raise ApiError(400, "bad_input")
+    await need_not_blocked(uid, seller_id)
     seller = await pool.fetchrow("SELECT user_id FROM users WHERE user_id=$1", seller_id)
     if not seller:
         raise ApiError(404, "seller_not_found")
@@ -3987,6 +4516,19 @@ def build_web(bot: Bot):
     r.add_get("/api/favorites", api_favorites)
     r.add_post("/api/favorite", api_favorite_toggle)
     r.add_post("/api/report", api_report)
+    r.add_post("/api/report_user", api_report_user)
+    r.add_post("/api/block", api_block)
+    r.add_get("/api/blocks", api_blocks)
+    r.add_post("/api/typing", api_typing)
+    r.add_get("/api/unread", api_unread)
+    r.add_get("/api/post", api_post_one)
+    r.add_get("/api/recent", api_recent)
+    r.add_get("/api/my_posts", api_my_posts)
+    r.add_get("/api/searches", api_searches)
+    r.add_post("/api/searches", api_search_save)
+    r.add_post("/api/searches/del", api_search_del)
+    r.add_post("/api/searches/notify", api_search_notify)
+    r.add_post("/api/admin/user_flag", api_admin_user_flag)
     r.add_post("/api/bump", api_bump)
     r.add_post("/api/view", api_view)
     r.add_post("/api/search", api_search)
@@ -4070,6 +4612,13 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     asyncio.create_task(keepalive())
+    global BOT_USERNAME, _BOT
+    _BOT = bot
+    try:
+        BOT_USERNAME = (await bot.get_me()).username or ""
+    except Exception:
+        log.exception("get_me failed")
+    asyncio.create_task(expiry_loop(bot))
 
     if WEBAPP_URL.startswith("https://"):
         try:
