@@ -519,6 +519,8 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS accent TEXT NOT NULL DEFAULT '#8b7cff';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_dev BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_adm BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_at TIMESTAMPTZ;
         CREATE TABLE IF NOT EXISTS user_reviews(
@@ -3184,12 +3186,22 @@ async def avatar_info(ids):
     return {r["user_id"]: (bool(r["has_avatar"]), r["photo_url"]) for r in rows}
 
 
+async def staff_badges(ids):
+    """{user_id: "d"|"a"|"da"} — значки рядом с ником: d = разработчик (ближе к нику), a = админ (дальше). Выдаёт только OWNER_ID."""
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("SELECT user_id,badge_dev,badge_adm FROM users WHERE user_id=ANY($1::bigint[]) AND (badge_dev OR badge_adm)", ids)
+    return {r["user_id"]: ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else "") for r in rows}
+
+
 async def posts_json(rows, uid=None):
     """post_json + рейтинг и число отзывов продавца (author_id, rating, reviews) + аватар автора."""
     rows = list(rows)
     rt = await seller_ratings([p["user_id"] for p in rows])
     avs = await avatar_info([p["user_id"] for p in rows])
     bdg = await user_badges([p["user_id"] for p in rows])
+    sbs = await staff_badges([p["user_id"] for p in rows])
     extra = await extra_photos([p["request_id"] for p in rows if p["request_id"]])
     out = []
     for p in rows:
@@ -3198,6 +3210,7 @@ async def posts_json(rows, uid=None):
         j["author_id"] = p["user_id"]
         j["author_has_avatar"], j["author_photo"] = avs.get(p["user_id"], (False, None))
         j["badges"] = bdg.get(p["user_id"], [])
+        j["sb"] = sbs.get(p["user_id"], "")
         j["views"] = p["views"]
         j["photos"] = ([j["photo"]] if j["photo"] else []) + extra.get(p["request_id"], [])
         j["days_left"] = max(0, int((p["expires_at"] - datetime.now(timezone.utc)).total_seconds() // 86400)) if p["expires_at"] else None
@@ -3476,7 +3489,8 @@ async def api_me(request):
     return jr({
         "user": {"id": uid, "name": u.get("first_name") or u.get("username") or "друг",
                   "username": u.get("username"), "photo_url": u.get("photo_url"),
-                  "has_avatar": personalization["has_avatar"] if personalization else False},
+                  "has_avatar": personalization["has_avatar"] if personalization else False,
+                  "sb": (await staff_badges([uid])).get(uid, "")},
         "role": rl,
         "share": share_base(),
         "unread": await pool.fetchval("SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL", uid),
@@ -3667,6 +3681,8 @@ async def api_profile(request):
     by_me = by_peer = False
     if uid != me_id:
         by_me, by_peer = await block_state(me_id, uid)
+    sb_row = await pool.fetchrow("SELECT badge_dev,badge_adm FROM users WHERE user_id=$1", uid)
+    sb = ("d" if sb_row and sb_row["badge_dev"] else "") + ("a" if sb_row and sb_row["badge_adm"] else "")
     flags = None
     if await role(me_id) is not None:
         fr = await pool.fetchrow("SELECT verified,scam FROM users WHERE user_id=$1", uid)
@@ -3679,6 +3695,8 @@ async def api_profile(request):
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
         "rating": round(row["rating"],2), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
+        "sb": sb, "can_badge": me_id == OWNER_ID,
+        "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"])} if me_id == OWNER_ID else None,
         "is_me": uid == request["u"]["id"]})
 
 
@@ -3749,7 +3767,8 @@ async def api_profile_reviews(request):
         u.username,u.first_name FROM user_reviews r
         JOIN users u ON u.user_id=r.reviewer_id WHERE r.target_id=$1 ORDER BY r.created_at DESC LIMIT 50""",uid)
     avs=await avatar_info([r["reviewer_id"] for r in rows])
-    return jr({"reviews":[{"id":r["id"],"rating":r["rating"],"text":r["text"],
+    sbs=await staff_badges([r["reviewer_id"] for r in rows])
+    return jr({"reviews":[{"id":r["id"],"rating":r["rating"],"text":r["text"],"author_sb":sbs.get(r["reviewer_id"],""),
         "author_has_avatar":avs.get(r["reviewer_id"],(False,None))[0],
         "author_photo":avs.get(r["reviewer_id"],(False,None))[1],
         "author":r["username"] and "@"+r["username"] or r["first_name"] or "Пользователь",
@@ -3801,13 +3820,14 @@ async def api_chats(request):
         "SELECT sender_id,post_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1,2",uid)}
     blocked={r["blocked_id"] for r in await pool.fetch("SELECT blocked_id FROM user_blocks WHERE blocker_id=$1",uid)}
     out=[]
+    sbs=await staff_badges([r["peer"] for r in rows])
     for r in rows:
         u=await pool.fetchrow("SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1",r["peer"])
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
             "username":u["username"],"last":dm_preview(r["body"],r["file_name"],r["file_mime"]),"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
             "ts":r["created_at"].timestamp(),"mine":r["sender_id"]==uid,"read":r["read_at"] is not None,
             "unread":unread.get((r["peer"],r["post_id"]),0),"blocked":r["peer"] in blocked,
-            "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"]})
+            "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"],"sb":sbs.get(r["peer"],"")})
     out.sort(key=lambda x:x["ts"],reverse=True)
     return jr({"chats":out,"unread":sum(x["unread"] for x in out)})
 
@@ -3944,6 +3964,17 @@ async def api_admin_user_flag(request):
         await pool.execute("UPDATE users SET scam=FALSE,verified=FALSE WHERE user_id=$1",target)
         await pool.execute("UPDATE user_reports SET status='reviewed' WHERE target_id=$1",target)
     else: raise ApiError(400,"bad_input")
+    return jr({"ok":True})
+
+
+async def api_admin_user_badge(request):
+    """Только владелец (OWNER_ID из окружения): выдать/снять значок «разработчик» (dev) и/или «админ» (adm) — можно оба сразу."""
+    if request["u"]["id"] != OWNER_ID: raise ApiError(403,"forbidden")
+    d=await body(request); target=int(d.get("user_id") or 0); badge=str(d.get("badge") or ""); on=bool(d.get("on"))
+    col={"dev":"badge_dev","adm":"badge_adm"}.get(badge)
+    if not col: raise ApiError(400,"bad_input")
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
+    await pool.execute(f"UPDATE users SET {col}=$2 WHERE user_id=$1",target,on)
     return jr({"ok":True})
 
 
@@ -4749,6 +4780,7 @@ def build_web(bot: Bot):
     r.add_post("/api/searches/del", api_search_del)
     r.add_post("/api/searches/notify", api_search_notify)
     r.add_post("/api/admin/user_flag", api_admin_user_flag)
+    r.add_post("/api/admin/user_badge", api_admin_user_badge)
     r.add_post("/api/bump", api_bump)
     r.add_post("/api/view", api_view)
     r.add_post("/api/search", api_search)
