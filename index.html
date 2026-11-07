@@ -985,6 +985,36 @@ body.in-chat #app{max-width:none}
 .an-meter i{display:block;height:100%;background:var(--acc,var(--ink))}
 .an-chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
 .an-chips .chip{flex:none}
+
+/* ===== v26: действия с сообщениями ===== */
+.cv-msg{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:transform .18s var(--out)}
+.cv-msg.sw{transition:none}
+.cv-msg::before{content:"↩";position:absolute;top:50%;right:-34px;width:26px;height:26px;margin-top:-13px;border-radius:50%;display:grid;place-items:center;font-size:15px;background:var(--glass2);color:var(--acc);opacity:var(--sw,0);transform:scale(calc(.5 + var(--sw,0)*.5))}
+.cv-log{overflow-x:hidden}
+.cv-msg.hl{animation:none;outline:2px solid var(--acc);outline-offset:1px}
+.cv-rq{margin:0 0 4px;padding:3px 8px;border-left:3px solid var(--acc);border-radius:4px;background:rgba(127,127,127,.16);cursor:pointer;font-size:13.5px;line-height:1.3;max-width:100%}
+.cv-rq b{display:block;font-size:13px;color:var(--acc)}
+.cv-msg.mine .cv-rq{border-left-color:#fff;background:rgba(255,255,255,.2)}
+.cv-msg.mine .cv-rq b{color:#fff}
+.cv-rq span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:.85}
+.cv-rq.gone{opacity:.6;font-style:italic}
+.cv-fwd{margin:0 0 3px;font-size:13px;color:var(--acc)}
+.cv-fwd b{font-weight:700}
+.cv-msg.mine .cv-fwd{color:#fff;opacity:.9}
+.cv-rp{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:10px;padding:8px 8px 8px 14px;background:var(--navbg);border-top:1px solid var(--line)}
+.cv-rp[hidden]{display:none}
+.cv-rp .rb{flex:none;width:3px;align-self:stretch;border-radius:2px;background:var(--acc)}
+.cv-rp .rt{flex:1;min-width:0;font-size:13.5px}
+.cv-rp .rt b{display:block;color:var(--acc);font-size:13px}
+.cv-rp .rt span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dim)}
+.cv-rp button{flex:none;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--dim);font-size:18px;cursor:pointer}
+.cv-pins{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:10px;padding:6px 8px 6px 14px;background:var(--navbg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);cursor:pointer}
+.cv-pins[hidden]{display:none}
+.cv-pins .rb{flex:none;width:3px;align-self:stretch;border-radius:2px;background:var(--acc)}
+.cv-pins .rt{flex:1;min-width:0;font-size:13.5px}
+.cv-pins .rt b{display:block;color:var(--acc);font-size:12.5px}
+.cv-pins .rt span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cv-pins button{flex:none;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--dim);font-size:16px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -1452,12 +1482,14 @@ async function copyText(t, msg) {
   catch (e) { const x = document.createElement('textarea'); x.value = t; document.body.appendChild(x); x.select(); try { document.execCommand('copy'); toast(msg || 'Скопировано', 'good'); } catch (_) { toast(t); } x.remove(); }
 }
 function linkSheet(title, code, deep) {
-  const rows = [{ t: 'Скопировать ' + code, fn: () => copyText(code, 'Ссылка скопирована') }];
-  if (deep) rows.push({ t: 'Поделиться в Telegram', fn: () => openLink(`https://t.me/share/url?url=${encodeURIComponent(deep)}&text=${encodeURIComponent(code)}`) }, { t: 'Скопировать ссылку Telegram', fn: () => copyText(deep, 'Ссылка скопирована') });
+  // главная ссылка — прямая (t.me/…?startapp=…): открывает именно этот профиль/объявление/сделку, а не просто мини-апп
+  const rows = [{ t: 'Скопировать ссылку', fn: () => copyText(deep || code, 'Ссылка скопирована') }];
+  if (deep) rows.push({ t: 'Поделиться в Telegram', fn: () => openLink(`https://t.me/share/url?url=${encodeURIComponent(deep)}&text=${encodeURIComponent(code)}`) });
+  rows.push({ t: 'Скопировать код ' + code, fn: () => copyText(code, 'Код скопирован') });
   sheet(title, rows);
 }
 const profLink = (id, un) => ({ code: 'Exg:/' + (un ? '@' + un : 'u' + id), deep: xlDeep(un ? 'n' : 'u', un || id) });
-const copyProfileLink = (id, un) => copyText(profLink(id, un).code, 'Ссылка на профиль скопирована');
+const copyProfileLink = (id, un) => { const l = profLink(id, un); return copyText(l.deep || l.code, 'Ссылка на профиль скопирована'); };
 async function openXl(c) {
   try {
     if (c[0] === '@') { const r = await api('/api/resolve?q=' + encodeURIComponent(c.slice(1))); return go('profile', { id: r.user_id }); }
@@ -1842,7 +1874,7 @@ views.more = async el => {
 views.admin_escrow = async el => {
   if(!isMain()) { el.innerHTML='<div class="card glass">Недостаточно прав.</div>'; return; }
   const d=await api('/api/admin/escrow');const c=d.config;
-  el.innerHTML=`<h2 class="page">Управление гарантом</h2><div class="card glass"><b>Подключение Telegram-аккаунта</b><p class="sub">Юзербот подключается в боте: /admin → «🤖 Юзербот гаранта» → «Подключить юзербота». Бот попросит номер, код (в формате 12.345) и, если нужно, пароль 2FA.</p></div><div class="card glass"><b>Настройки и резерв</b><div class="kv"><span>Юзербот</span><b>${c.userbot_connected?'Подключён':'Не подключён'}${c.userbot_online?' · воркер онлайн':' · воркер офлайн'}</b></div><label class="lbl">Комиссия для сумм выше 1000 ⭐ (%)</label><input class="f" id="ecPct" type="number" step="0.1" value="${c.fee_percent}"><label class="lbl">Таймаут оплаты комиссии (минуты)</label><input class="f" id="ecTimeout" type="number" value="${c.payment_timeout_minutes}"><label class="chk"><input type="checkbox" id="ecEnabled" ${c.enabled?'checked':''}> Разрешить новые сделки</label><button class="btn block" id="ecSave">Сохранить настройки</button></div><h3 class="page" style="font-size:19px">Последние сделки</h3><div class="stagger">${d.deals.map(x=>`<div class="card glass"><b>Сделка #${x.id} · ${x.amount} ⭐</b><p class="sub">${DEAL_ST[x.status]||x.status} · комиссия ${x.fee} ⭐<br>Покупатель ${x.buyer_id} → продавец ${x.seller_id}</p>${x.last_error?`<small class="dim">Ошибка: ${esc(x.last_error)}</small>`:''}<div class="acts"><button class="btn small" data-admin-deal="${x.id}">Открыть</button>${x.status==='disputed'?`<button class="btn small" data-admin-action="release" data-id="${x.id}">Выдать</button><button class="btn small danger" data-admin-action="refund" data-id="${x.id}">Вернуть</button>`:''}</div></div>`).join('')||'<div class="card glass">Сделок пока нет.</div>'}</div>`;
+  el.innerHTML=`<h2 class="page">Управление гарантом</h2><div class="card glass"><b>Подключение Telegram-аккаунта</b><p class="sub">Юзербот подключается в боте: /admin → «🤖 Юзербот гаранта» → «Подключить юзербота». Бот попросит номер, код (в формате 12.345) и, если нужно, пароль 2FA.</p></div><div class="card glass"><b>Настройки и резерв</b><div class="kv"><span>Юзербот</span><b>${c.userbot_connected?'Подключён':'Не подключён'}${c.userbot_online?' · воркер онлайн':' · воркер офлайн'}</b></div><label class="lbl">Комиссия для сумм выше 1000 ⭐ (%)</label><input class="f" id="ecPct" type="number" step="0.1" value="${+c.fee_percent}"><label class="lbl">Таймаут оплаты комиссии (минуты)</label><input class="f" id="ecTimeout" type="number" value="${c.payment_timeout_minutes}"><label class="chk"><input type="checkbox" id="ecEnabled" ${c.enabled?'checked':''}> Разрешить новые сделки</label><button class="btn block" id="ecSave">Сохранить настройки</button></div><h3 class="page" style="font-size:19px">Последние сделки</h3><div class="stagger">${d.deals.map(x=>`<div class="card glass"><b>Сделка #${x.id} · ${x.amount} ⭐</b><p class="sub">${DEAL_ST[x.status]||x.status} · комиссия ${x.fee} ⭐<br>Покупатель ${x.buyer_id} → продавец ${x.seller_id}</p>${x.last_error?`<small class="dim">Ошибка: ${esc(x.last_error)}</small>`:''}<div class="acts"><button class="btn small" data-admin-deal="${x.id}">Открыть</button>${x.status==='disputed'?`<button class="btn small" data-admin-action="release" data-id="${x.id}">Выдать</button><button class="btn small danger" data-admin-action="refund" data-id="${x.id}">Вернуть</button>`:''}</div></div>`).join('')||'<div class="card glass">Сделок пока нет.</div>'}</div>`;
   $('#ecSave',el).onclick=async()=>{try{await api('/api/admin/escrow_config',{enabled:$('#ecEnabled',el).checked,fee_percent:+$('#ecPct',el).value,payment_timeout_minutes:+$('#ecTimeout',el).value});toast('Настройки сохранены','good');go('admin_escrow',{}, {replace:true});}catch(e){fail(e)}};
   $$('[data-admin-deal]',el).forEach(b=>b.onclick=()=>go('escrow_deal',{id:+b.dataset.adminDeal}));
   $$('[data-admin-action]',el).forEach(b=>b.onclick=async()=>{const note=prompt('Комментарий к решению (необязательно)')||'';try{await api('/api/admin/escrow_action',{deal_id:+b.dataset.id,action:b.dataset.adminAction,note});toast('Решение сохранено. Автоматическая передача возможна только для бесплатных переводимых коллекционных подарков.','good');go('admin_escrow',{}, {replace:true});}catch(e){fail(e)}});
@@ -2011,12 +2043,14 @@ views.chat = async (el,params={}) => {
     <div class="tg-top"><button class="tg-back" id="cvBack" aria-label="Назад"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px;stroke-width:2.2"><path d="M15 5l-7 7 7 7"/></svg></button>${avHtml('cav',peer,pname,pu&&pu.has_avatar,pu&&pu.photo_url)}<div class="ct" id="peerProfile"><b>${esc(pname)}${nameBadges(pu&&pu.sb)}</b><small id="cvSub"></small></div><button class="tg-more" id="cvMore" aria-label="Меню">⋮</button></div>
     ${badB.length?`<div class="cv-warn">⚠️ ${badB.map(b=>esc(b.t)).join(', ')}. Будьте осторожны — проводите сделку через гаранта.</div>`:''}
     ${post_id?'<div class="tg-pin"><i>🛡</i><span>Безопасная сделка по объявлению #'+post_id+'</span><button id="startEscrow">Сделка</button></div>':''}
+    <div class="cv-pins" id="cvPins" hidden><div class="rb"></div><div class="rt"><b></b><span></span></div><button id="cvUnpin" aria-label="Открепить">📌</button></div>
     <div class="cv-log" id="chatLog"></div>
     <div class="cv-blocked" id="cvBlocked" style="display:none"></div>
+    <div class="cv-rp" id="cvRp" hidden><div class="rb"></div><div class="rt"><b></b><span></span></div><button id="cvRpX" aria-label="Отмена">✕</button></div>
     <div class="cv-bar" id="cvBar"><input type="file" id="cvFile" accept="image/*" multiple hidden><input type="file" id="cvCam" accept="image/*" capture="environment" hidden><input type="file" id="cvDoc" hidden><button class="cv-att" id="cvAtt" aria-label="Прикрепить">${CLIP}</button><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
   </div>`;
   const log=$('#chatLog',el),ta=$('#chatText',el),sendBtn=$('#chatSend',el);
-  let last='',st=d,lastTyp=0,tick=0;const seen=new Set();let firstDraw=true;
+  let last='',st=d,lastTyp=0,tick=0,cur=d.messages||[],replyTo=null,editing=null,pinIdx=0,pinList=[],lpAt=0;const seen=new Set();let firstDraw=true;
   const fileHtml=f=>!f?'':(f.image?`<img class="cv-img" src="${esc(f.url)}" data-u="${esc(f.url)}" alt="" loading="lazy">`:`<div class="cv-file" data-u="${esc(f.url)}"><i>📎</i><span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span></div>`);
   const dealCard=(m,mine,tm)=>{
     const d=m.deal,me=Number(S.me.user.id),buyer=me===Number(d.buyer_id),seller=me===Number(d.seller_id);
@@ -2029,7 +2063,7 @@ views.chat = async (el,params={}) => {
     return `<div class="cvd ${mine?'mine':'theirs'}" data-deal="${d.id}"><div class="cd-h"><b>🤝 Сделка #${d.id}</b><span class="cd-st${cls}">${L[d.status]||d.status}</span></div>${d.amount?`<div class="cd-am">${d.amount} ⭐</div>`:''}<div class="cd-tx">${esc(d.terms)}</div><div class="cd-pr">${esc(buyer?'Вы покупатель':seller?'Вы продавец':'')}${pr?' · '+esc(pr):''}</div>${bt?`<div class="cd-bt">${bt}</div>`:''}<div class="cd-ft"><span>${esc(tm)}</span><span><a data-dlink="1">🔗 Ссылка</a> · <a data-drep="1">⚑ Жалоба</a> · <a data-dgo="open">Подробнее ›</a></span></div></div>`;
   };
   const draw=(rows,force)=>{
-    const sig=rows.length+':'+(rows.length?rows[rows.length-1].id:0)+':'+rows.filter(m=>m.read).length+':'+rows.map(m=>m.deal?m.deal.status+(m.deal.bc?1:0)+(m.deal.sc?1:0):'').join('');
+    const sig=rows.length+':'+(rows.length?rows[rows.length-1].id:0)+':'+rows.filter(m=>m.read).length+':'+rows.map(m=>(m.deal?m.deal.status+(m.deal.bc?1:0)+(m.deal.sc?1:0):'')+(m.edited?'e'+m.body:'')+(m.pinned?'p':'')+(m.reply&&m.reply.gone?'g':'')).join('');
     if(sig===last&&!force)return;last=sig;
     const near=log.scrollHeight-log.scrollTop-log.clientHeight<120;
     if(!rows.length){log.innerHTML='<div class="cv-empty"><i>👋</i>Начните диалог —<br>напишите первое сообщение</div>';return;}
@@ -2045,7 +2079,9 @@ views.chat = async (el,params={}) => {
       if(prevPost===undefined?mp:mp!==prevPost){html+=`<div class="cv-day">${mp?`<a class="xl" data-xl="a${mp}">Объявление #${mp}</a>`:'Личные сообщения'}</div>`;prevSender=null;}
       prevPost=mp;
       if(m.deal){html+=dealCard(m,mine,tm);prevSender=null;return;}
-      html+=`<div class="cv-msg ${mine?'mine':'theirs'}${prevSender!==m.sender?' first':''}${cls}"${cls===' in'?` style="--i:${ci}"`:''}>${fileHtml(m.file)}${m.body?linkify(esc(m.body)):''}<span class="tm">${esc(tm)}${mine?` <span class="tk ${m.read?'r':''}">${m.read?'✓✓':'✓'}</span>`:''}</span></div>`;
+      const rq=m.reply?`<div class="cv-rq${m.reply.gone?' gone':''}" data-rq="${m.reply.id}"><b>${esc(m.reply.gone?'Ответ':(Number(m.reply.sender)===Number(S.me.user.id)?'Вы':pname))}</b><span>${esc(m.reply.text)}</span></div>`:'';
+      const fw=m.fwd?`<div class="cv-fwd">↪ Переслано от <b>${esc(m.fwd)}</b></div>`:'';
+      html+=`<div class="cv-msg ${mine?'mine':'theirs'}${prevSender!==m.sender?' first':''}${cls}" data-mid="${m.id}"${cls===' in'?` style="--i:${ci}"`:''}>${fw}${rq}${fileHtml(m.file)}${m.body?linkify(esc(m.body)):''}<span class="tm">${m.pinned?'📌 ':''}${m.edited?'изм. ':''}${esc(tm)}${mine?` <span class="tk ${m.read?'r':''}">${m.read?'✓✓':'✓'}</span>`:''}</span></div>`;
       prevSender=m.sender;
     });
     log.innerHTML=html;firstDraw=false;
@@ -2058,10 +2094,70 @@ views.chat = async (el,params={}) => {
     const bb=$('#cvBlocked',el);bb.style.display=blk?'':'none';
     if(blk){bb.innerHTML=n.blocked_by_me?'Вы заблокировали этого пользователя <button class="btn small" id="cvUnblock">Разблокировать</button>':'Пользователь ограничил вам сообщения';
       const u=$('#cvUnblock',el);if(u)u.onclick=async()=>{try{await api('/api/block',{user_id:peer,block:false});apply(await api('/api/messages?'+qs),true);}catch(e){fail(e)}};}
-    draw(n.messages,force);
+    cur=n.messages||[];pinList=n.pins||[];drawPins();draw(n.messages,force);
   };
+  const byId=id=>cur.find(x=>Number(x.id)===Number(id));
+  const preview=m=>m?(m.body||(m.file?(m.file.image?'📷 Фото':'📎 '+m.file.name):'')):'';
+  const jump=id=>{const n=log.querySelector('[data-mid="'+id+'"]');if(!n){toast('Сообщение далеко вверху истории','err');return;}n.scrollIntoView({block:'center',behavior:'smooth'});n.classList.add('hl');setTimeout(()=>n.classList.remove('hl'),1300);};
+  function drawPins(){
+    const bar=$('#cvPins',el);if(!bar)return;
+    if(!pinList.length){bar.hidden=true;return;}
+    if(pinIdx>=pinList.length)pinIdx=0;const p=pinList[pinIdx];
+    bar.hidden=false;$('b',bar).textContent='Закреплённое сообщение'+(pinList.length>1?` #${pinList.length-pinIdx}`:'');$('span',bar).textContent=p.text;
+  }
+  const pinsBar=$('#cvPins',el);
+  pinsBar.onclick=e=>{if(e.target.closest('#cvUnpin')){const p=pinList[pinIdx];if(p)act('pin',{id:p.id,pin:false},'Откреплено');return;}
+    const p=pinList[pinIdx];if(p)jump(p.id);pinIdx=(pinIdx+1)%Math.max(1,pinList.length);drawPins();};
+  const refresh=async()=>apply(await api('/api/messages?'+qs),true);
+  async function act(kind,body,okMsg){try{await api('/api/messages/'+kind,body);if(okMsg)toast(okMsg,'good');await refresh();}catch(e){fail(e);}}
+  const rpBar=$('#cvRp',el);
+  function showBar(){
+    if(editing){rpBar.hidden=false;$('b',rpBar).textContent='✏️ Редактирование';$('span',rpBar).textContent=editing.orig;}
+    else if(replyTo){rpBar.hidden=false;$('b',rpBar).textContent='Ответ '+(replyTo.mine?'себе':pname);$('span',rpBar).textContent=replyTo.text;}
+    else rpBar.hidden=true;
+  }
+  function clearBar(){const wasEdit=!!editing;replyTo=null;editing=null;showBar();if(wasEdit){ta.value='';fit();}}
+  $('#cvRpX',el).onclick=clearBar;
+  function startReply(m){if(!m||m.deal)return;editing=null;replyTo={id:m.id,text:preview(m)||'Сообщение',mine:Number(m.sender)===Number(S.me.user.id)};showBar();ta.focus();buzz('light');}
+  function startEdit(m){editing={id:m.id,orig:m.body||preview(m)};replyTo=null;showBar();ta.value=m.body||'';fit();ta.focus();}
+  async function forwardMsg(m){
+    let list;try{list=(await api('/api/chats')).chats;}catch(e){return fail(e);}
+    if(!list.length)return toast('Нет диалогов для пересылки','err');
+    sheet('Переслать',list.map(c=>({t:c.name+(c.id===peer?' (этот чат)':''),fn:async()=>{
+      try{await api('/api/messages/forward',{ids:[m.id],to:c.id});toast('Переслано','good');if(c.id===peer)await refresh();}catch(e){fail(e);}}})));
+  }
+  function msgMenu(mid){
+    const m=byId(mid);if(!m)return;buzz('medium');
+    const mine=Number(m.sender)===Number(S.me.user.id);const rows=[];
+    rows.push({t:'↩ Ответить',fn:()=>startReply(m)});
+    if(m.body)rows.push({t:'📋 Копировать текст',fn:()=>copyText(m.body,'Скопировано')});
+    if(mine)rows.push({t:'✏️ Изменить',fn:()=>startEdit(m)});
+    rows.push({t:m.pinned?'📌 Открепить':'📌 Закрепить',fn:()=>act('pin',{id:m.id,pin:!m.pinned},m.pinned?'Откреплено':'Закреплено')});
+    rows.push({t:'↪ Переслать',fn:()=>forwardMsg(m)});
+    rows.push({t:'🗑 Удалить',cls:'bad',fn:async()=>{
+      if(mine)return sheet('Удалить сообщение?',[{t:'Удалить у всех',cls:'bad',fn:()=>act('delete',{ids:[m.id],for_all:true},'Удалено')},{t:'Удалить только у меня',cls:'bad',fn:()=>act('delete',{ids:[m.id],for_all:false},'Удалено')}]);
+      if(await confirmBox('Удалить сообщение у вас? У собеседника оно останется.'))act('delete',{ids:[m.id],for_all:false},'Удалено');}});
+    sheet('Сообщение',rows);
+  }
+  // свайп влево — ответить; долгое нажатие / правый клик — меню
+  (()=>{let sx=0,sy=0,node=null,dx=0,lock=0,timer=null,fired=false;
+    const reset=()=>{if(node){node.classList.remove('sw');node.style.transform='';node.style.removeProperty('--sw');}node=null;dx=0;lock=0;clearTimeout(timer);};
+    log.addEventListener('touchstart',e=>{const n=e.target.closest('.cv-msg[data-mid]');if(!n||e.touches.length!==1)return;
+      node=n;sx=e.touches[0].clientX;sy=e.touches[0].clientY;dx=0;lock=0;fired=false;
+      timer=setTimeout(()=>{if(node===n&&!lock){fired=true;lpAt=Date.now();const id=n.dataset.mid;reset();msgMenu(id);}},480);},{passive:true});
+    log.addEventListener('touchmove',e=>{if(!node)return;const x=e.touches[0].clientX-sx,y=e.touches[0].clientY-sy;
+      if(!lock){if(Math.abs(x)>8||Math.abs(y)>8){clearTimeout(timer);lock=Math.abs(x)>Math.abs(y)*1.4&&x<0?1:2;}}
+      if(lock===1){dx=Math.max(x,-80);node.classList.add('sw');node.style.transform=`translateX(${dx}px)`;node.style.setProperty('--sw',Math.min(1,-dx/55));
+        if(dx<=-55&&!node._hit){node._hit=1;buzz('light');}if(dx>-55)node._hit=0;}
+      else if(lock===2){reset();}},{passive:true});
+    const end=()=>{if(!node)return;const n=node,hit=lock===1&&dx<=-55;n._hit=0;reset();if(hit&&!fired){lpAt=Date.now();startReply(byId(n.dataset.mid));}};
+    log.addEventListener('touchend',end);log.addEventListener('touchcancel',reset);
+    log.addEventListener('contextmenu',e=>{const n=e.target.closest('.cv-msg[data-mid]');if(!n)return;e.preventDefault();if(Date.now()-lpAt<900)return;lpAt=Date.now();msgMenu(n.dataset.mid);});
+  })();
   apply(d,true);refreshUnread();
   log.onclick=async e=>{
+    if(Date.now()-lpAt<700)return;
+    const rq=e.target.closest('[data-rq]');if(rq){return jump(rq.dataset.rq);}
     const xl=e.target.closest('[data-xl]');if(xl){e.preventDefault();return openXl(xl.dataset.xl);}
     const dl=e.target.closest('[data-dlink]');if(dl){const did=Number(dl.closest('[data-deal]').dataset.deal);return linkSheet('Ссылка на сделку','Exg:/d'+did,xlDeep('d',did));}
     const dr=e.target.closest('[data-drep]');if(dr)return reportDeal(Number(dr.closest('[data-deal]').dataset.deal));
@@ -2078,10 +2174,12 @@ views.chat = async (el,params={}) => {
   const escrowBtn=$('#startEscrow',el);if(escrowBtn)escrowBtn.onclick=()=>go('escrow',{seller_id:peer,post_id,terms:'Сделка по объявлению #'+post_id+'\nУсловия согласовать в чате.'});
   const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';sendBtn.disabled=!ta.value.trim();};
   ta.addEventListener('input',()=>{fit();const now=Date.now();if(ta.value.trim()&&now-lastTyp>3000){lastTyp=now;api('/api/typing',{peer,post_id}).catch(()=>{});}});
-  const send=async file=>{const t=ta.value.trim();if((!t&&!file)||sendBtn.dataset.busy)return false;sendBtn.dataset.busy=1;try{
-    if(file){const fd=new FormData();fd.append('peer',peer);fd.append('post_id',post_id||'');fd.append('text',t);fd.append('file',file,file.name||'file');await api('/api/messages',fd);}
-    else await api('/api/messages',{peer,text:t,post_id:post_id||null});
-    ta.value='';fit();apply(await api('/api/messages?'+qs),true);return true;}catch(e){fail(e);return false;}finally{delete sendBtn.dataset.busy;}};
+  const send=async file=>{if(file&&editing){editing=null;showBar();}const t=ta.value.trim();if((!t&&!file)||sendBtn.dataset.busy)return false;sendBtn.dataset.busy=1;try{
+    if(editing&&!file){await api('/api/messages/edit',{id:editing.id,text:t});editing=null;showBar();ta.value='';fit();apply(await api('/api/messages?'+qs),true);return true;}
+    const rt=replyTo?replyTo.id:null;
+    if(file){const fd=new FormData();fd.append('peer',peer);fd.append('post_id',post_id||'');fd.append('text',t);if(rt)fd.append('reply_to',rt);fd.append('file',file,file.name||'file');await api('/api/messages',fd);}
+    else await api('/api/messages',{peer,text:t,post_id:post_id||null,reply_to:rt});
+    replyTo=null;showBar();ta.value='';fit();apply(await api('/api/messages?'+qs),true);return true;}catch(e){fail(e);return false;}finally{delete sendBtn.dataset.busy;}};
   sendBtn.onclick=()=>send();
   $('#cvAtt',el).onclick=()=>sheet('Прикрепить',[{ic:'gal',t:'Галерея',fn:()=>$('#cvFile',el).click()},{ic:'cam',t:'Камера',fn:()=>$('#cvCam',el).click()},{ic:'clip',t:'Файл',fn:()=>$('#cvDoc',el).click()}]);
   const picked=async list=>{

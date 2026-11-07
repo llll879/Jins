@@ -642,6 +642,11 @@ async def init_db():
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_name TEXT;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_size INT;
         CREATE INDEX IF NOT EXISTS direct_messages_unread_idx ON direct_messages(recipient_id) WHERE read_at IS NULL;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS reply_to BIGINT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS fwd_from BIGINT;
+        CREATE TABLE IF NOT EXISTS dm_hidden(user_id BIGINT NOT NULL, msg_id BIGINT NOT NULL, PRIMARY KEY(user_id,msg_id));
         CREATE TABLE IF NOT EXISTS user_blocks(
             blocker_id BIGINT NOT NULL, blocked_id BIGINT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY(blocker_id, blocked_id));
@@ -3500,7 +3505,7 @@ def jr(data, status=200):
     return web.json_response(
         data, status=status,
         dumps=lambda o: json.dumps(
-            o, ensure_ascii=False, default=lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x)))
+            o, ensure_ascii=False, default=lambda x: x.isoformat() if hasattr(x, "isoformat") else (float(x) if x.__class__.__name__ == "Decimal" else str(x))))
 
 
 def check_init_data(init_data: str):
@@ -4499,7 +4504,8 @@ async def api_chats(request):
     uid=request["u"]["id"]
     rows=await pool.fetch("""SELECT DISTINCT ON (peer) peer,post_id,body,created_at,sender_id,read_at,file_name,file_mime FROM (
         SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id,sender_id,read_at,file_name,file_mime
-        FROM direct_messages WHERE sender_id=$1 OR recipient_id=$1) x
+        FROM direct_messages WHERE (sender_id=$1 OR recipient_id=$1)
+        AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)) x
         ORDER BY peer,created_at DESC,id DESC LIMIT 150""",uid)
     unread={ r["sender_id"]:r["c"] for r in await pool.fetch(
         "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1",uid)}
@@ -4534,8 +4540,10 @@ async def api_messages(request):
     await pool.execute("""UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2
         AND read_at IS NULL""",uid,peer)
     rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,deal_id,post_id,
+        reply_to,edited_at,pinned_at,fwd_from,
         (file_data IS NOT NULL) has_file FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
+        AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
         ORDER BY id DESC LIMIT 150) q ORDER BY id""",uid,peer)
     by_me,by_peer=await block_state(uid,peer)
     seen=await pool.fetchval("SELECT last_seen FROM users WHERE user_id=$1",peer)
@@ -4547,14 +4555,34 @@ async def api_messages(request):
         for dr in await pool.fetch("SELECT id,buyer_id,seller_id,amount,terms,status,buyer_confirmed_at,seller_confirmed_at FROM direct_deals WHERE id=ANY($1::bigint[])",dids):
             deals[dr["id"]]={"id":dr["id"],"buyer_id":dr["buyer_id"],"seller_id":dr["seller_id"],"amount":int(dr["amount"] or 0),
                 "terms":dr["terms"],"status":dr["status"],"bc":dr["buyer_confirmed_at"] is not None,"sc":dr["seller_confirmed_at"] is not None}
+    # ответы: подтягиваем оригиналы (они могут быть вне окна из 150 сообщений)
+    rids=list({r["reply_to"] for r in rows if r["reply_to"]})
+    replies={}
+    if rids:
+        for q in await pool.fetch("""SELECT id,sender_id,body,file_name,file_mime,(file_data IS NOT NULL) has_file FROM direct_messages
+            WHERE id=ANY($1::bigint[]) AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))""",rids,uid,peer):
+            replies[q["id"]]={"id":q["id"],"sender":q["sender_id"],"text":dm_preview(q["body"],q["file_name"],q["file_mime"])[:120] or ("📎 Файл" if q["has_file"] else "")}
+    fwd_names={}
+    fids=list({r["fwd_from"] for r in rows if r["fwd_from"]})
+    if fids:
+        for q in await pool.fetch("SELECT user_id,username,first_name,last_name FROM users WHERE user_id=ANY($1::bigint[])",fids):
+            fwd_names[q["user_id"]]=" ".join(x for x in [q["first_name"],q["last_name"]] if x) or q["username"] or "Пользователь"
+    pins=[{"id":q["id"],"text":dm_preview(q["body"],q["file_name"],q["file_mime"])[:120] or "Сообщение"} for q in await pool.fetch(
+        """SELECT id,body,file_name,file_mime FROM direct_messages
+        WHERE pinned_at IS NOT NULL AND ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
+        AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
+        ORDER BY pinned_at DESC LIMIT 20""",uid,peer)]
     msgs=[]
     for r in rows:
         f=None
         if r["has_file"]:
             f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
         msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
-            "read":r["read_at"] is not None,"file":f,"post_id":r["post_id"],"deal":deals.get(r["deal_id"]) if r["deal_id"] else None})
-    return jr({"messages":msgs,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
+            "read":r["read_at"] is not None,"file":f,"post_id":r["post_id"],"deal":deals.get(r["deal_id"]) if r["deal_id"] else None,
+            "edited":r["edited_at"] is not None,"pinned":r["pinned_at"] is not None,
+            "reply":(replies.get(r["reply_to"]) or {"id":r["reply_to"],"sender":None,"text":"Сообщение удалено","gone":True}) if r["reply_to"] else None,
+            "fwd":fwd_names.get(r["fwd_from"],"Пользователь") if r["fwd_from"] else None})
+    return jr({"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
 
 
 async def api_typing(request):
@@ -4571,7 +4599,7 @@ async def api_message_send(request):
     fdata=fname=fmime=None
     if (request.content_type or "").startswith("multipart/"):
         form=await request.post()
-        d={k:form.get(k) for k in ("peer","text","post_id")}
+        d={k:form.get(k) for k in ("peer","text","post_id","reply_to")}
         f=form.get("file")
         if f is not None and hasattr(f,"file"):
             fdata=f.file.read()
@@ -4598,11 +4626,86 @@ async def api_message_send(request):
             post_id=None   # объявление удалено: диалог остаётся обычным личным
         elif post["user_id"] not in (uid, peer):
             raise ApiError(403,"post_chat_forbidden")
-    row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None)
+    reply_to=None
+    try: rt=int(d.get("reply_to") or 0)
+    except (TypeError,ValueError): rt=0
+    if rt and await pool.fetchval("""SELECT 1 FROM direct_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))""",rt,uid,peer):
+        reply_to=rt
+    row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size,reply_to)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None,reply_to)
     _typing.pop((uid,peer,0),None)
     asyncio.create_task(push_dm(uid,peer,post_id,msg,fname,fmime))
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
+
+
+async def _dm_get(uid, mid):
+    """Сообщение, в котором участвует uid (иначе 404)."""
+    try: mid=int(mid)
+    except (TypeError, ValueError): raise ApiError(400,"bad_id")
+    r=await pool.fetchrow("""SELECT id,sender_id,recipient_id,body,deal_id,(file_data IS NOT NULL) has_file
+        FROM direct_messages WHERE id=$1 AND (sender_id=$2 OR recipient_id=$2)""",mid,uid)
+    if not r: raise ApiError(404,"message_not_found")
+    return r
+
+
+async def api_message_edit(request):
+    uid=request["u"]["id"]; d=await body(request)
+    r=await _dm_get(uid,d.get("id"))
+    if r["sender_id"]!=uid or r["deal_id"]: raise ApiError(403,"forbidden")
+    txt=str(d.get("text") or "").strip()
+    if len(txt)>3000: raise ApiError(400,"too_long")
+    if not txt and not r["has_file"]: raise ApiError(400,"empty")
+    peer=r["recipient_id"]
+    await need_not_blocked(uid,peer)
+    if txt!=r["body"]:
+        await pool.execute("UPDATE direct_messages SET body=$2,edited_at=now() WHERE id=$1",r["id"],txt)
+    return jr({"ok":True})
+
+
+async def api_message_delete(request):
+    uid=request["u"]["id"]; d=await body(request)
+    ids=d.get("ids") if isinstance(d.get("ids"),list) else [d.get("id")]
+    for_all=bool(d.get("for_all"))
+    for mid in ids[:50]:
+        r=await _dm_get(uid,mid)
+        if r["deal_id"]: continue
+        if for_all and r["sender_id"]==uid:
+            await pool.execute("DELETE FROM direct_messages WHERE id=$1",r["id"])
+            await pool.execute("DELETE FROM dm_hidden WHERE msg_id=$1",r["id"])
+        else:
+            await pool.execute("INSERT INTO dm_hidden(user_id,msg_id) VALUES($1,$2) ON CONFLICT DO NOTHING",uid,r["id"])
+    return jr({"ok":True})
+
+
+async def api_message_pin(request):
+    uid=request["u"]["id"]; d=await body(request)
+    r=await _dm_get(uid,d.get("id"))
+    if r["deal_id"]: raise ApiError(403,"forbidden")
+    if d.get("pin",True):
+        await pool.execute("UPDATE direct_messages SET pinned_at=now() WHERE id=$1",r["id"])
+    else:
+        await pool.execute("UPDATE direct_messages SET pinned_at=NULL WHERE id=$1",r["id"])
+    return jr({"ok":True})
+
+
+async def api_message_forward(request):
+    uid=request["u"]["id"]; d=await body(request)
+    try: to=int(d.get("to") or 0)
+    except (TypeError, ValueError): raise ApiError(400,"bad_peer")
+    ids=d.get("ids") if isinstance(d.get("ids"),list) else [d.get("id")]
+    if not to or to==uid or not ids: raise ApiError(400,"bad_peer")
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",to): raise ApiError(404,"user_not_found")
+    await need_not_blocked(uid,to)
+    n=0; last=None
+    for mid in sorted({int(x) for x in ids[:20] if str(x).isdigit()}):
+        r=await _dm_get(uid,mid)
+        if r["deal_id"]: continue
+        await pool.execute("""INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,fwd_from)
+            SELECT $1,$2,body,file_data,file_mime,file_name,file_size,COALESCE(fwd_from,sender_id) FROM direct_messages WHERE id=$3""",uid,to,r["id"])
+        n+=1; last=r
+    if n:
+        asyncio.create_task(push_dm(uid,to,None,"↪️ Пересланное сообщение" if n==1 and not (last["body"] or "") else (last["body"] or "↪️ Пересланное сообщение"),None,None))
+    return jr({"ok":True,"count":n})
 
 
 async def api_block(request):
@@ -5746,6 +5849,9 @@ async def api_admin_escrow(request):
     await need_main(request)
     cfg=await pool.fetchrow("SELECT * FROM escrow_config WHERE id=1")
     config=dict(cfg) if cfg else {}
+    if config.get("fee_percent") is not None:
+        # NUMERIC(6,3) приходит как Decimal('15.000') -> "15.000"; в интерфейсе это читалось как 15 000
+        config["fee_percent"]=float(config["fee_percent"])
     # Never expose the userbot's private Stars balance in Mini App responses.
     config.pop("userbot_balance", None)
     config.pop("reserve_balance", None)
@@ -5827,6 +5933,10 @@ def build_web(bot: Bot):
     r.add_get("/api/chats", api_chats)
     r.add_get("/api/messages", api_messages)
     r.add_post("/api/messages", api_message_send)
+    r.add_post("/api/messages/edit", api_message_edit)
+    r.add_post("/api/messages/delete", api_message_delete)
+    r.add_post("/api/messages/pin", api_message_pin)
+    r.add_post("/api/messages/forward", api_message_forward)
     r.add_get("/api/photo", api_photo)
     r.add_get("/api/emoji/{id}", api_emoji)
     r.add_post("/api/clean", api_clean)
