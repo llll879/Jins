@@ -559,7 +559,7 @@ input.f:focus,textarea.f:focus,select.f:focus{border-color:var(--acc);box-shadow
 
 /* профиль */
 .profile-hero{padding:20px;border-radius:24px}
-.profile-avatar{border-radius:26px}
+.profile-avatar{border-radius:26px}#pAvatar{cursor:zoom-in}
 .profile-stat{padding:14px 6px;border-radius:18px}
 .profile-stat b{font-size:21px}
 .review{border-radius:18px;padding:14px}
@@ -833,6 +833,35 @@ body.in-chat #app{max-width:none}
 .viewer-s>div{flex:none;width:100%;height:100%;scroll-snap-align:center;display:grid;place-items:center;overflow:auto}
 .viewer-s img{max-width:100%;max-height:100%;object-fit:contain;transition:transform .2s;touch-action:manipulation}
 .viewer-s img.z{transform:scale(2.2)}
+.ped{position:fixed;inset:0;z-index:9600;background:#0b0c10;display:flex;flex-direction:column;color:#fff;animation:fadeIn .2s}
+.ped-top{display:flex;align-items:center;justify-content:space-between;padding:calc(10px + env(safe-area-inset-top)) 12px 6px}
+.ped-b{width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:19px;cursor:pointer;display:grid;place-items:center;padding:0}
+.ped-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:4px 8px;position:relative}
+.ped-stage canvas{max-width:100%;max-height:100%;border-radius:10px;touch-action:none;cursor:crosshair;background:#000}
+.ped-tools{display:flex;gap:8px;align-items:center;justify-content:center;padding:6px 10px;flex-wrap:wrap}
+.ped-t{width:42px;height:42px;border-radius:13px;border:0;background:rgba(255,255,255,.12);color:#fff;font-size:19px;cursor:pointer;padding:0;display:grid;place-items:center}
+.ped-t.on{background:var(--acc,#8b7cff)}
+.ped-sp{width:6px}
+.ped-c{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.35);padding:0;cursor:pointer;transition:transform .15s}
+.ped-c.on{border-color:#fff;transform:scale(1.22)}
+.ped-bar{display:flex;gap:8px;align-items:center;padding:6px 10px calc(10px + env(safe-area-inset-bottom))}
+.ped-bar input{flex:1;min-width:0;height:44px;border-radius:22px;border:0;background:rgba(255,255,255,.12);color:#fff;padding:0 16px;font-size:16px;outline:none}
+.ped-bar input::placeholder{color:rgba(255,255,255,.5)}
+.ped-send{width:46px;height:46px;border-radius:50%;border:0;background:var(--acc,#8b7cff);color:#fff;font-size:20px;cursor:pointer;padding:0;flex:none}
+.ped-txt{position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;background:rgba(20,22,28,.96);padding:8px;border-radius:14px;z-index:2}
+.ped-txt input{flex:1;min-width:0;height:40px;border-radius:10px;border:0;background:rgba(255,255,255,.12);color:#fff;padding:0 12px;font-size:16px;outline:none}
+.ptr{position:fixed;inset:0;z-index:9550;background:#0b0c10;display:flex;flex-direction:column;color:#fff;animation:fadeIn .2s}
+.ptr .ped-top b{font-size:16px}
+.ptr-grid{flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 10px;align-content:start}
+.ptr-t{position:relative;aspect-ratio:1/1;border-radius:12px;overflow:hidden;background:rgba(255,255,255,.08);cursor:pointer}
+.ptr-t img{width:100%;height:100%;object-fit:cover;display:block}
+.ptr-x{position:absolute;top:5px;right:5px;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:13px;padding:0;cursor:pointer}
+.ptr-e{position:absolute;left:5px;bottom:5px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.6);display:grid;place-items:center;font-style:normal;font-size:14px}
+.ptr-d{position:absolute;right:5px;bottom:5px;padding:2px 7px;border-radius:99px;background:var(--acc,#8b7cff);font-style:normal;font-size:11px;font-weight:700}
+.ptr-add{border:2px dashed rgba(255,255,255,.3);color:#fff;font-size:34px;display:grid;place-items:center;padding:0}
+.ptr .ped-send:disabled{opacity:.4}
+.ped-txt button{border:0;border-radius:10px;background:var(--acc,#8b7cff);color:#fff;padding:0 16px;font-weight:700;cursor:pointer}
+
 .viewer-x{position:absolute;top:calc(12px + env(safe-area-inset-top));right:14px;width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:20px;cursor:pointer}
 .viewer-c{position:absolute;top:calc(22px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);color:#fff;font-size:14px;font-weight:700;background:rgba(0,0,0,.4);padding:3px 12px;border-radius:99px}
 .ph-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -1080,8 +1109,8 @@ function avSet(node, src) {
 async function avBlob(id) {
   if (!AVC.has(id)) {
     AVC.set(id, fetch('/api/profile/avatar?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '' } })
-      .then(r => { if (!r.ok) throw Error('avatar'); return r.blob(); })
-      .then(b => URL.createObjectURL(b)).catch(() => { AVC.delete(id); return null; }));
+      .then(r => { if (r.status === 404) return null; if (!r.ok) throw Error('avatar'); return r.blob(); })
+      .then(b => b ? URL.createObjectURL(b) : null).catch(() => { AVC.delete(id); return null; }));
   }
   return AVC.get(id);
 }
@@ -1091,6 +1120,7 @@ function avFill(root) {
     const id = n.dataset.av, photo = n.dataset.avPhoto;
     if (n.dataset.avHas === '1' && id) avBlob(id).then(u => { if (u) avSet(n, u); else if (photo) avSet(n, photo); });
     else if (photo) avSet(n, photo);
+    else if (id) avBlob(id).then(u => { if (u) avSet(n, u); });
   });
 }
 const bdgHtml = list => (list && list.length) ? `<div class="bdgs">${list.map(b => `<span class="bdg ${b.tone}">${b.i} ${esc(b.t)}</span>`).join('')}</div>` : '';
@@ -1106,6 +1136,147 @@ function openViewer(urls, idx) {
   s.addEventListener('scroll', () => { if (c) c.textContent = (Math.round(s.scrollLeft / s.clientWidth) + 1) + ' / ' + urls.length; });
   document.body.appendChild(bg);
   s.scrollLeft = (idx || 0) * s.clientWidth;
+}
+// редактор фото перед отправкой: карандаш, маркер, стрелка, рамка, текст
+function photoEditor(file, caption) {
+  return new Promise(async (resolve, reject) => {
+    let base;
+    try {
+      const b = await shrinkImage(file, 1600, .92);
+      base = await new Promise((res, rej) => { const u = URL.createObjectURL(b), im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(Object.assign(new Error('bad_image'), { code: 'bad_image' })); }; im.src = u; });
+    } catch (e) { return reject(e); }
+    const W = base.naturalWidth, H = base.naturalHeight, M = Math.max(W, H);
+    const COLORS = ['#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#ffffff', '#000000'];
+    const root = document.createElement('div'); root.className = 'ped';
+    root.innerHTML = `<div class="ped-top"><button class="ped-b" id="pdX" aria-label="Закрыть">✕</button><button class="ped-b" id="pdU" aria-label="Отменить">↶</button></div>
+      <div class="ped-stage"><canvas></canvas></div>
+      <div class="ped-tools">
+        <button class="ped-t on" data-t="pen" aria-label="Карандаш">✏️</button><button class="ped-t" data-t="marker" aria-label="Маркер">🖍</button><button class="ped-t" data-t="arrow" aria-label="Стрелка">➜</button><button class="ped-t" data-t="rect" aria-label="Рамка">▭</button><button class="ped-t" data-t="text" aria-label="Текст"><b>T</b></button>
+        <span class="ped-sp"></span>${COLORS.map((c, i) => `<button class="ped-c${i ? '' : ' on'}" data-c="${c}" style="background:${c}" aria-label="Цвет"></button>`).join('')}
+      </div>
+      <div class="ped-tools"><input type="range" id="pdS" min="2" max="24" value="6" aria-label="Толщина" style="width:min(320px,80%)"></div>
+      <div class="ped-bar"><input id="pdCap" maxlength="1000" placeholder="Подпись…"><button class="ped-send" id="pdOk" aria-label="Отправить">➤</button></div>`;
+    const cv = $('canvas', root), cx = cv.getContext('2d'); cv.width = W; cv.height = H;
+    const items = []; let cur = null, tool = 'pen', color = COLORS[0], size = 6;
+    $('#pdCap', root).value = caption || '';
+    const drawItem = it => {
+      cx.save(); cx.lineCap = 'round'; cx.lineJoin = 'round'; cx.strokeStyle = cx.fillStyle = it.c; cx.lineWidth = it.w;
+      const p = it.pts;
+      if (it.t === 'pen' || it.t === 'marker') {
+        if (it.t === 'marker') cx.globalAlpha = .4;
+        cx.beginPath(); cx.moveTo(p[0].x, p[0].y); if (p.length === 1) cx.lineTo(p[0].x + .01, p[0].y); else for (let i = 1; i < p.length; i++) cx.lineTo(p[i].x, p[i].y); cx.stroke();
+      } else if (it.t === 'rect' && p.length > 1) {
+        cx.strokeRect(p[0].x, p[0].y, p[1].x - p[0].x, p[1].y - p[0].y);
+      } else if (it.t === 'arrow' && p.length > 1) {
+        const a = Math.atan2(p[1].y - p[0].y, p[1].x - p[0].x), hl = it.w * 4.5;
+        cx.beginPath(); cx.moveTo(p[0].x, p[0].y); cx.lineTo(p[1].x - Math.cos(a) * hl * .6, p[1].y - Math.sin(a) * hl * .6); cx.stroke();
+        cx.beginPath(); cx.moveTo(p[1].x, p[1].y); cx.lineTo(p[1].x - hl * Math.cos(a - .45), p[1].y - hl * Math.sin(a - .45)); cx.lineTo(p[1].x - hl * Math.cos(a + .45), p[1].y - hl * Math.sin(a + .45)); cx.closePath(); cx.fill();
+      } else if (it.t === 'text') {
+        const fs = it.w * 5; cx.font = `700 ${fs}px -apple-system,Segoe UI,Roboto,sans-serif`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+        cx.lineWidth = fs / 6; cx.strokeStyle = it.c === '#000000' ? '#fff' : '#000'; cx.globalAlpha = .85;
+        it.s.split('\n').forEach((ln, i, arr) => { const y = p[0].y + (i - (arr.length - 1) / 2) * fs * 1.15; cx.strokeText(ln, p[0].x, y); }); cx.globalAlpha = 1;
+        it.s.split('\n').forEach((ln, i, arr) => { const y = p[0].y + (i - (arr.length - 1) / 2) * fs * 1.15; cx.fillText(ln, p[0].x, y); });
+      }
+      cx.restore();
+    };
+    const render = () => { cx.clearRect(0, 0, W, H); cx.drawImage(base, 0, 0, W, H); items.forEach(drawItem); if (cur) drawItem(cur); };
+    const pt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height }; };
+    const lw = () => size * M / 900 * (tool === 'marker' ? 3.5 : 1);
+    const close = v => { document.removeEventListener('keydown', onKey); root.remove(); resolve(v); };
+    const onKey = e => { if (e.key === 'Escape') close(null); };
+    document.addEventListener('keydown', onKey);
+    const askText = p => {
+      const box = document.createElement('div'); box.className = 'ped-txt';
+      box.innerHTML = '<input maxlength="80" placeholder="Текст на фото"><button>OK</button>';
+      $('.ped-stage', root).appendChild(box); const inp = $('input', box); inp.focus();
+      const done = ok => { const v = inp.value.trim(); box.remove(); if (ok && v) { items.push({ t: 'text', c: color, w: size * M / 900, pts: [p], s: v }); render(); } };
+      $('button', box).onclick = () => done(true);
+      inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+    };
+    cv.addEventListener('pointerdown', e => {
+      if (e.button > 0) return; e.preventDefault(); const p = pt(e);
+      if (tool === 'text') { if (!$('.ped-txt', root)) askText(p); return; }
+      try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+      cur = { t: tool, c: color, w: lw(), pts: [p] }; render();
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!cur) return; const p = pt(e);
+      if (cur.t === 'pen' || cur.t === 'marker') cur.pts.push(p); else cur.pts[1] = p; render();
+    });
+    const up = () => { if (!cur) return; const p = cur.pts; if (!((cur.t === 'rect' || cur.t === 'arrow') && (p.length < 2 || Math.hypot(p[1].x - p[0].x, p[1].y - p[0].y) < 6))) items.push(cur); cur = null; render(); };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+    root.addEventListener('click', e => {
+      const t = e.target.closest('[data-t]'), c = e.target.closest('[data-c]');
+      if (t) { tool = t.dataset.t; $$('.ped-t', root).forEach(b => b.classList.toggle('on', b === t)); }
+      if (c) { color = c.dataset.c; $$('.ped-c', root).forEach(b => b.classList.toggle('on', b === c)); }
+    });
+    $('#pdS', root).oninput = e => { size = +e.target.value; };
+    $('#pdU', root).onclick = () => { items.pop(); render(); };
+    $('#pdX', root).onclick = () => close(null);
+    $('#pdOk', root).onclick = () => cv.toBlob(b => b ? close({ blob: b, caption: $('#pdCap', root).value }) : close(null), 'image/jpeg', .88);
+    render(); document.body.appendChild(root);
+  });
+}
+// «корзина» вложений перед отправкой: плитки фото, правка в редакторе, удаление, добавление, одна подпись
+function photoTray(files, caption) {
+  return new Promise(resolve => {
+    const MAX = 10, EDIT = /^image\/(jpeg|png|webp)$/;
+    const items = []; let idc = 0;
+    const root = document.createElement('div'); root.className = 'ptr';
+    root.innerHTML = `<div class="ped-top"><button class="ped-b" id="ptX" aria-label="Закрыть">✕</button><b id="ptN"></b><span style="width:42px"></span></div>
+      <div class="ptr-grid" id="ptG"></div>
+      <div class="ped-bar"><input id="ptCap" maxlength="1000" placeholder="Подпись…"><button class="ped-send" id="ptOk" aria-label="Отправить">➤</button></div>
+      <input type="file" id="ptAddF" accept="image/*" multiple hidden>`;
+    $('#ptCap', root).value = caption || '';
+    const grid = $('#ptG', root);
+    const add = list => {
+      for (const f of list) {
+        if (items.length >= MAX) { toast('Максимум ' + MAX + ' фото', 'err'); break; }
+        if (!/^image\//.test(f.type)) continue;
+        if (f.size > 25 * 1024 * 1024) { toast('Фото слишком большое', 'err'); continue; }
+        items.push({ id: ++idc, orig: f, edited: null, url: URL.createObjectURL(f) });
+      }
+      draw();
+    };
+    const draw = () => {
+      $('#ptN', root).textContent = items.length ? items.length + ' из ' + MAX : '';
+      grid.innerHTML = items.map(it => `<div class="ptr-t" data-id="${it.id}"><img src="${it.url}" alt="">${EDIT.test(it.orig.type) ? '<i class="ptr-e">✎</i>' : ''}${it.edited ? '<i class="ptr-d">изм.</i>' : ''}<button class="ptr-x" data-rm="${it.id}" aria-label="Убрать">✕</button></div>`).join('')
+        + (items.length < MAX ? '<button class="ptr-t ptr-add" id="ptAdd" aria-label="Добавить">＋</button>' : '');
+      $('#ptOk', root).disabled = !items.length;
+    };
+    const close = v => { document.removeEventListener('keydown', onKey); items.forEach(it => URL.revokeObjectURL(it.url)); root.remove(); resolve(v); };
+    const onKey = e => { if (e.key === 'Escape' && !$('.ped')) close(null); };
+    document.addEventListener('keydown', onKey);
+    grid.addEventListener('click', async e => {
+      const rm = e.target.closest('[data-rm]');
+      if (rm) { const k = items.findIndex(x => x.id == rm.dataset.rm); if (k >= 0) { URL.revokeObjectURL(items[k].url); items.splice(k, 1); } if (!items.length) return close(null); return draw(); }
+      if (e.target.closest('#ptAdd')) return $('#ptAddF', root).click();
+      const t = e.target.closest('.ptr-t[data-id]'); if (!t) return;
+      const it = items.find(x => x.id == t.dataset.id); if (!it || !EDIT.test(it.orig.type)) return;
+      try {
+        const r = await photoEditor(it.edited || it.orig, $('#ptCap', root).value);
+        if (!r) return; $('#ptCap', root).value = r.caption;
+        URL.revokeObjectURL(it.url); it.edited = new File([r.blob], 'photo.jpg', { type: 'image/jpeg' }); it.url = URL.createObjectURL(it.edited); draw();
+      } catch (er) { fail(er); }
+    });
+    $('#ptAddF', root).onchange = e => { const l = [...e.target.files]; e.target.value = ''; add(l); };
+    $('#ptX', root).onclick = () => close(null);
+    $('#ptOk', root).onclick = async () => {
+      const ok = $('#ptOk', root); ok.disabled = true;
+      try {
+        const out = [];
+        for (const it of items) {
+          if (it.edited) out.push(it.edited);
+          else if (EDIT.test(it.orig.type)) { const b = await shrinkImage(it.orig, 1600, .85); out.push(new File([b], 'photo.jpg', { type: 'image/jpeg' })); }
+          else if (it.orig.size <= 8 * 1024 * 1024) out.push(it.orig);
+          else toast('Файл больше 8 МБ — пропущен', 'err');
+        }
+        close({ files: out, caption: $('#ptCap', root).value });
+      } catch (er) { ok.disabled = false; fail(er); }
+    };
+    add(files); if (!items.length) return resolve(null);
+    document.body.appendChild(root);
+  });
 }
 function galHtml(urls) {
   if (urls.length === 1) return `<img class="ad-big" src="${esc(urls[0])}" alt="" data-gal="0">`;
@@ -1496,7 +1667,8 @@ views.more = async el => {
     </div>
     ${me.welcome ? `<div class="grp">О сервисе</div><div class="card glass">${me.has_photo ? '<img class="welcome-img" alt="">' : ''}<div class="rich">${safe(me.welcome)}</div></div>` : ''}`;
   if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
-  if (me.user && (me.user.photo_url || me.user.has_avatar)) { const av=$('#meAvatar',el); if(av){const src=me.user.has_avatar?'/api/profile/avatar':me.user.photo_url;if(me.user.has_avatar){fetch(src,{headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.blob()).then(b=>{if($('#meAvatar',el))$('#meAvatar',el).innerHTML=`<img src="${URL.createObjectURL(b)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`}).catch(()=>{})}else av.innerHTML=`<img src="${esc(src)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`; } }
+  if (me.user) { const av=$('#meAvatar',el); if(av){const put=u=>{const a=$('#meAvatar',el);if(a)a.innerHTML=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`};
+    if(me.user.has_avatar||!me.user.photo_url)avBlob(String(me.user.id)).then(u=>{if(u)put(u);else if(me.user.photo_url)put(me.user.photo_url)});else put(me.user.photo_url);} }
   $('#tourBtn', el).onclick = () => showTour();
   $('#themeToggle', el).onclick = () => { const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; setTheme(next); go('more', {}, { replace: true }); };
 };
@@ -1591,20 +1763,20 @@ views.escrow_deal = async (el,p={}) => {
 };
 
 // ===== профили пользователей, отзывы и персонализация =====
-function avatarSrc(user){return user && user.has_avatar ? '/api/profile/avatar' : (user && user.photo_url) || '';}
+function avatarSrc(user){return (user && user.photo_url) || '';}
 views.profile = async (el, params={}) => {
   const id=Number(params.id || (S.me.user && S.me.user.id));
   const [u,rv]=await Promise.all([api('/api/profile?id='+id),api('/api/profile/reviews?id='+id)]);
   const img=avatarSrc(u);
   const own=!!u.is_me;
   el.innerHTML=`<h2 class="page">Профиль</h2><div class="profile-hero glass">
-    ${img?`<img class="profile-avatar" id="pAvatar" src="${esc(img)}" alt="Аватар">`:`<div class="profile-avatar" style="display:grid;place-items:center;font-size:30px">${esc(u.name.slice(0,1).toUpperCase())}</div>`}
+    ${img?`<img class="profile-avatar" id="pAvatar" src="${esc(img)}" alt="Аватар">`:`<div class="profile-avatar" id="pAvatar" style="display:grid;place-items:center;font-size:30px">${esc(u.name.slice(0,1).toUpperCase())}</div>`}
     <div style="min-width:0;flex:1"><b style="font-size:19px">${esc(u.name)}</b><div class="sub" style="margin:4px 0">${u.username?'@'+esc(u.username):'Telegram ID: '+u.id}</div><small class="dim">В KMBP с ${esc(u.created||'')}</small>${bdgHtml(u.badges)}${!own?`<div class="row" style="margin-top:8px;gap:8px"><button class="btn small" id="openPeerChat">Написать</button><button class="btn small ghost" id="peerMore" aria-label="Ещё">⋯</button></div>${u.blocked_by_me?'<small class="dim" style="display:block;margin-top:6px">Вы заблокировали этого пользователя</small>':''}`:''}</div>
   </div>
   <div class="profile-stats"><div class="profile-stat"><b>${u.rating||'—'}</b><small>Рейтинг ★</small></div><div class="profile-stat"><b>${u.reviews}</b><small>Отзывов</small></div><div class="profile-stat"><b>${u.completed_deals}</b><small>Сделок</small></div></div>
   <div class="card glass"><b>О себе</b><p class="rich" id="bioText">${esc(u.bio||'Пользователь пока ничего не рассказал о себе.')}</p>
   ${own?`<label class="lbl">Описание профиля</label><textarea class="f" id="bioEdit" maxlength="500" placeholder="Расскажите о себе…">${esc(u.bio||'')}</textarea>
-  <div class="acts"><input type="file" id="avatarFile" accept="image/jpeg,image/png,image/webp" hidden><button class="btn small" id="changeAvatar">Изменить фото</button><button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
+  <div class="acts"><input type="file" id="avatarFile" accept="image/*" hidden><button class="btn small" id="changeAvatar">Изменить фото</button>${u.has_avatar?'<button class="btn small ghost" id="delAvatar">Удалить фото</button>':''}<button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
   ${[['dark','Тёмная','#15171d'],['light','Светлая','#edf0f5'],['midnight','Полночь','#090d20'],['ocean','Океан','#0d2634'],['forest','Лес','#14291e']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
   <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv hist"><span>Сделка #${d.id}<small class="dim">${esc(d.side)} · ${esc(d.created||'')} · ${d.kind==='direct'?'без гаранта':'через гаранта'}</small></span><b>${d.amount?d.amount+' ⭐':'Без суммы'}<small class="dim">${esc(DEAL_ST[d.status]||d.status)}</small></b></div>`).join(''):'<div class="sub">Здесь отображаются сделки через гаранта и прямые сделки.</div>'}</div>
@@ -1613,11 +1785,12 @@ views.profile = async (el, params={}) => {
   ${!own?`<div class="rform"><h3>${(rv.reviews.find(r=>r.mine))?'Изменить отзыв':'Оставить отзыв'}</h3><p class="rsub">Оценка для ${esc(u.name)}. Отзыв доступен участникам завершённой сделки.</p>
     <div class="rstars" id="rStars">${[1,2,3,4,5].map(k=>`<button type="button" data-v="${k}" aria-label="${k}">★</button>`).join('')}</div><div class="rlabel" id="rLabel">Нажмите на звезду</div>
     <textarea id="reviewText" maxlength="1000" placeholder="Расскажите, как прошла сделка…"></textarea><div class="rcount"><span id="rCnt">0</span> / 1000</div>
-    <input type="file" id="reviewFile" accept="image/jpeg,image/png,image/webp" hidden>
+    <input type="file" id="reviewFile" accept="image/*" hidden>
     <div class="rshot" id="rShot"><div class="ri">📎</div><div>Добавить скриншот<small>необязательно</small></div></div>
     <button class="rsubmit" id="saveReview" disabled>Опубликовать отзыв</button></div>`:''}`;
   avFill(el);
-  if(u.has_avatar){fetch('/api/profile/avatar?id='+id,{headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>{if(!r.ok)throw Error('avatar');return r.blob()}).then(b=>{const im=$('#pAvatar',el);if(im)im.src=URL.createObjectURL(b)}).catch(()=>{});}
+  avBlob(String(id)).then(b=>{if(!b)return;const a=$('#pAvatar',el);if(!a)return;if(a.tagName==='IMG'){a.src=b;}else{const im=document.createElement('img');im.className='profile-avatar';im.id='pAvatar';im.alt='Аватар';im.src=b;a.replaceWith(im);}});
+  el.addEventListener('click',async e=>{const a=e.target.closest('#pAvatar');if(!a||a.tagName!=='IMG')return;openViewer([(await avBlob(String(id)))||a.currentSrc||a.src],0);});
   $$('[data-zoom]',el).forEach(im=>im.onclick=()=>{const bg=document.createElement('div');bg.className='zoom-bg';bg.innerHTML='<img src="'+im.dataset.zoom+'" alt="">';bg.onclick=()=>bg.remove();document.body.appendChild(bg);});
   if(!own){
     const pc=$('#openPeerChat',el);if(pc)pc.onclick=()=>go('chat',{peer:id});
@@ -1638,7 +1811,8 @@ views.profile = async (el, params={}) => {
   }
   if(own){
     $('#changeAvatar',el).onclick=()=>$('#avatarFile',el).click();
-    $('#avatarFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();fd.append('file',await shrinkImage(f,900,.88),'avatar.jpg');await api('/api/profile/avatar',fd);toast('Аватар обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
+    $('#avatarFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();fd.append('file',await shrinkImage(f,900,.88),'avatar.jpg');await api('/api/profile/avatar',fd);AVC.clear();if(S.me.user)S.me.user.has_avatar=true;toast('Аватар обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
+    const da=$('#delAvatar',el);if(da)da.onclick=async()=>{if(!await confirmBox('Удалить фото профиля? Вернётся фото из Telegram.'))return;try{await api('/api/profile/avatar',undefined,'DELETE');AVC.clear();if(S.me.user)S.me.user.has_avatar=false;toast('Фото удалено','good');go('profile',{},{replace:true});}catch(er){fail(er)}};
     $('#saveProfile',el).onclick=async()=>{try{await api('/api/profile',{bio:$('#bioEdit',el).value,theme:document.documentElement.dataset.theme||'dark',accent:$('#accentPick',el).value});toast('Профиль сохранён','good');}catch(er){fail(er)}};
     $$('[data-theme-pick]',el).forEach(b=>b.onclick=async()=>{const t=b.dataset.themePick;setTheme(t);await api('/api/profile',{bio:$('#bioEdit',el).value,theme:t,accent:$('#accentPick',el).value});go('profile',{}, {replace:true});});
     $('#accentPick',el).onchange=async e=>{document.documentElement.style.setProperty('--acc',e.target.value);await api('/api/profile',{bio:$('#bioEdit',el).value,theme:document.documentElement.dataset.theme||'dark',accent:e.target.value});};
@@ -1664,7 +1838,7 @@ views.chat = async (el,params={}) => {
     ${post_id?'<div class="tg-pin"><i>🛡</i><span>Безопасная сделка по объявлению #'+post_id+'</span><button id="startEscrow">Сделка</button></div>':''}
     <div class="cv-log" id="chatLog"></div>
     <div class="cv-blocked" id="cvBlocked" style="display:none"></div>
-    <div class="cv-bar" id="cvBar"><input type="file" id="cvFile" hidden><button class="cv-att" id="cvAtt" aria-label="Прикрепить файл">${CLIP}</button><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
+    <div class="cv-bar" id="cvBar"><input type="file" id="cvFile" accept="image/*" multiple hidden><input type="file" id="cvCam" accept="image/*" capture="environment" hidden><input type="file" id="cvDoc" hidden><button class="cv-att" id="cvAtt" aria-label="Прикрепить">${CLIP}</button><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
   </div>`;
   const log=$('#chatLog',el),ta=$('#chatText',el),sendBtn=$('#chatSend',el);
   let last='',st=d,lastTyp=0,tick=0;const seen=new Set();let firstDraw=true;
@@ -1706,14 +1880,20 @@ views.chat = async (el,params={}) => {
   const escrowBtn=$('#startEscrow',el);if(escrowBtn)escrowBtn.onclick=()=>go('escrow',{seller_id:peer,post_id,terms:'Сделка по объявлению #'+post_id+'\nУсловия согласовать в чате.'});
   const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';sendBtn.disabled=!ta.value.trim();};
   ta.addEventListener('input',()=>{fit();const now=Date.now();if(ta.value.trim()&&now-lastTyp>3000){lastTyp=now;api('/api/typing',{peer,post_id}).catch(()=>{});}});
-  const send=async file=>{const t=ta.value.trim();if((!t&&!file)||sendBtn.dataset.busy)return;sendBtn.dataset.busy=1;try{
+  const send=async file=>{const t=ta.value.trim();if((!t&&!file)||sendBtn.dataset.busy)return false;sendBtn.dataset.busy=1;try{
     if(file){const fd=new FormData();fd.append('peer',peer);fd.append('post_id',post_id||'');fd.append('text',t);fd.append('file',file,file.name||'file');await api('/api/messages',fd);}
     else await api('/api/messages',{peer,text:t,post_id:post_id||null});
-    ta.value='';fit();apply(await api('/api/messages?'+qs),true);}catch(e){fail(e)}finally{delete sendBtn.dataset.busy;}};
+    ta.value='';fit();apply(await api('/api/messages?'+qs),true);return true;}catch(e){fail(e);return false;}finally{delete sendBtn.dataset.busy;}};
   sendBtn.onclick=()=>send();
-  $('#cvAtt',el).onclick=()=>$('#cvFile',el).click();
-  $('#cvFile',el).onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;if(f.size>8*1024*1024)return toast('Файл больше 8 МБ','err');
-    try{let up=f;if(/^image\/(jpeg|png|webp)$/.test(f.type)){const b=await shrinkImage(f,1600,.85);up=new File([b],(f.name||'photo').replace(/\.\w+$/,'')+'.jpg',{type:'image/jpeg'});}await send(up);}catch(er){fail(er)}};
+  $('#cvAtt',el).onclick=()=>sheet('Прикрепить',[{t:'🖼 Галерея',fn:()=>$('#cvFile',el).click()},{t:'📷 Камера',fn:()=>$('#cvCam',el).click()},{t:'📎 Файл',fn:()=>$('#cvDoc',el).click()}]);
+  const picked=async list=>{
+    const imgs=[],others=[];list.forEach(f=>(/^image\//.test(f.type)?imgs:others).push(f));
+    for(const f of others){if(f.size>8*1024*1024){toast('Файл больше 8 МБ','err');continue;}if(!await send(f))return;}
+    if(!imgs.length)return;
+    try{const r=await photoTray(imgs,ta.value);if(!r)return;ta.value=r.caption;fit();
+      for(const f of r.files){if(!await send(f))break;}}catch(er){fail(er)}};
+  ['cvFile','cvCam','cvDoc'].forEach(id=>{$('#'+id,el).onchange=e=>{const l=[...e.target.files];e.target.value='';if(l.length)picked(l);};});
+  const hav=$('.tg-top .cav',el);if(hav){hav.style.cursor='zoom-in';hav.onclick=async()=>{const im=hav.querySelector('img');if(!im)return;openViewer([(await avBlob(String(peer)))||im.src],0);};}
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&window.matchMedia('(hover:hover)').matches){e.preventDefault();send();}});
   const timer=setInterval(async()=>{if(!el.isConnected){clearInterval(timer);return;}if(document.hidden)return;try{apply(await api('/api/messages?'+qs));if(++tick%6===0)refreshUnread();}catch(e){}},2500);
 };

@@ -519,6 +519,8 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS accent TEXT NOT NULL DEFAULT '#8b7cff';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_data BYTEA;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_at TIMESTAMPTZ;
         CREATE TABLE IF NOT EXISTS user_reviews(
             id BIGSERIAL PRIMARY KEY, reviewer_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
             target_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -3693,14 +3695,40 @@ async def api_profile_update(request):
     return jr({"ok":True})
 
 
+async def tg_avatar_fetch(bot, target):
+    """Фото профиля из Telegram (кэш в БД на 12 часов). None, если у пользователя нет фото или оно скрыто."""
+    row=await pool.fetchrow("SELECT tg_avatar_data,tg_avatar_at FROM users WHERE user_id=$1",target)
+    if row and row["tg_avatar_at"] and (datetime.now(timezone.utc)-row["tg_avatar_at"]).total_seconds()<12*3600:
+        return bytes(row["tg_avatar_data"]) if row["tg_avatar_data"] else None
+    data=None
+    try:
+        photos=await bot.get_user_profile_photos(target,limit=1)
+        if photos.total_count and photos.photos:
+            buf=io.BytesIO()
+            await bot.download(photos.photos[0][-1].file_id,destination=buf)
+            data=buf.getvalue() or None
+    except Exception as e:
+        log.info("tg avatar %s: %s",target,e)
+    await pool.execute("UPDATE users SET tg_avatar_data=$2,tg_avatar_at=now() WHERE user_id=$1",target,data)
+    return data
+
+
 async def api_profile_avatar(request):
     target=int(request.query.get("id") or request["u"]["id"])
     row=await pool.fetchrow("SELECT avatar_data,avatar_mime FROM users WHERE user_id=$1",target)
-    if not row or not row["avatar_data"]:
-        # Telegram's photo_url is returned by api_me and used as the automatic fallback in the client.
+    if row and row["avatar_data"]:
+        return web.Response(body=bytes(row["avatar_data"]),content_type=row["avatar_mime"] or "image/jpeg",
+            headers={"Cache-Control":"private, max-age=300"})
+    data=await tg_avatar_fetch(request.app["bot"],target)
+    if not data:
         raise web.HTTPNotFound()
-    return web.Response(body=bytes(row["avatar_data"]),content_type=row["avatar_mime"] or "image/jpeg",
-        headers={"Cache-Control":"private, max-age=300"})
+    return web.Response(body=data,content_type="image/jpeg",headers={"Cache-Control":"private, max-age=300"})
+
+
+async def api_profile_avatar_delete(request):
+    uid=request["u"]["id"]
+    await pool.execute("UPDATE users SET avatar_data=NULL,avatar_mime=NULL,tg_avatar_at=NULL WHERE user_id=$1",uid)
+    return jr({"ok":True})
 
 
 async def api_profile_avatar_upload(request):
@@ -4695,6 +4723,7 @@ def build_web(bot: Bot):
     r.add_post("/api/profile", api_profile_update)
     r.add_get("/api/profile/avatar", api_profile_avatar)
     r.add_post("/api/profile/avatar", api_profile_avatar_upload)
+    r.add_delete("/api/profile/avatar", api_profile_avatar_delete)
     r.add_get("/api/profile/reviews", api_profile_reviews)
     r.add_post("/api/profile/reviews", api_profile_review_save)
     r.add_get("/api/chats", api_chats)
