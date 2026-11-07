@@ -645,6 +645,9 @@ async def init_db():
             data BYTEA NOT NULL, mime TEXT NOT NULL DEFAULT 'image/jpeg');
         CREATE INDEX IF NOT EXISTS ad_photos_req_idx ON ad_photos(request_id, pos, id);
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INT NOT NULL DEFAULT 0;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS pub_chat_id BIGINT;
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS pub_msg_ids BIGINT[] NOT NULL DEFAULT '{}';
+        ALTER TABLE direct_deals ADD COLUMN IF NOT EXISTS listing_post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS expired BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS remind_sent BOOLEAN NOT NULL DEFAULT FALSE;
         CREATE TABLE IF NOT EXISTS post_views(
@@ -969,26 +972,101 @@ async def add_post(r, text):
     return pid
 
 
-async def publish_group(bot: Bot, topic_id, text, photo_id=None) -> bool:
-    """Дублирование поста в чат KMBP EXCHANGE (если чат и тема привязаны). Не критично при сбое."""
+async def publish_group(bot: Bot, topic_id, text, photo_id=None, post_id=None) -> bool:
+    """Дублирование поста в чат KMBP EXCHANGE (если чат и тема привязаны). Не критично при сбое.
+    id сообщений сохраняются в posts, чтобы при удалении объявления убрать и пост в группе."""
     pub = await get_setting("pub_chat")
     t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", topic_id)
     if not pub or not t or t["thread_id"] is None:
         return False
     thread = t["thread_id"] or None
+    ids = []
     try:
         if photo_id:
             if len(text) <= 1024:
-                await bot.send_photo(int(pub), photo_id, caption=text, message_thread_id=thread)
+                ids.append((await bot.send_photo(int(pub), photo_id, caption=text, message_thread_id=thread)).message_id)
             else:
-                await bot.send_photo(int(pub), photo_id, message_thread_id=thread)
-                await bot.send_message(int(pub), text, message_thread_id=thread)
+                ids.append((await bot.send_photo(int(pub), photo_id, message_thread_id=thread)).message_id)
+                ids.append((await bot.send_message(int(pub), text, message_thread_id=thread)).message_id)
         else:
-            await bot.send_message(int(pub), text, message_thread_id=thread)
+            ids.append((await bot.send_message(int(pub), text, message_thread_id=thread)).message_id)
         return True
     except Exception:
         log.exception("publish to group failed")
+        return bool(ids)
+    finally:
+        if post_id and ids:
+            try:
+                await pool.execute("UPDATE posts SET pub_chat_id=$2, pub_msg_ids=$3 WHERE id=$1",
+                                   post_id, int(pub), ids)
+            except Exception:
+                log.exception("cannot save group message ids")
+
+
+async def remove_post(bot, pid) -> bool:
+    """Снимает объявление и удаляет его пост(ы) из группы. Вызывать при любом удалении объявления."""
+    row = await pool.fetchrow(
+        "UPDATE posts SET active=FALSE WHERE id=$1 RETURNING pub_chat_id,pub_msg_ids", int(pid))
+    if not row:
         return False
+    bot = bot or _BOT
+    if bot is not None and row["pub_chat_id"] and row["pub_msg_ids"]:
+        for mid in row["pub_msg_ids"]:
+            try:
+                await bot.delete_message(int(row["pub_chat_id"]), int(mid))
+            except Exception:
+                log.warning("cannot delete group message %s (нужны права «Удаление сообщений» у бота)", mid)
+        await pool.execute("UPDATE posts SET pub_msg_ids='{}' WHERE id=$1", int(pid))
+    return True
+
+
+def sold_kb(post_ids_titles):
+    kb = InlineKeyboardBuilder()
+    for pid, title in post_ids_titles:
+        kb.button(text=f"🗑 Удалить «{title[:28]}»", callback_data=f"pd:y:{pid}")
+    kb.button(text="Оставить", callback_data="pd:n:0")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def offer_delete_listing(bot, seller_id, post_id=None):
+    """После успешной сделки предлагает продавцу удалить объявление (по сделке или из его активных)."""
+    rows = []
+    if post_id:
+        rows = await pool.fetch("SELECT id,text FROM posts WHERE id=$1 AND user_id=$2 AND active", int(post_id), int(seller_id))
+    if not rows:
+        rows = await pool.fetch(
+            "SELECT id,text FROM posts WHERE user_id=$1 AND active AND expires_at>now() ORDER BY id DESC LIMIT 5", int(seller_id))
+    if not rows:
+        return
+    items = [(r["id"], ad_title(r["text"])) for r in rows]
+    txt = ("🎉 Сделка успешно завершена!\nОбъявление уже неактуально? Удалите его, чтобы оно не висело в ленте и в группе."
+           if post_id and len(items) == 1 else
+           "🎉 Сделка успешно завершена!\nПродали товар? Выберите объявление, которое нужно удалить (из ленты и из группы).")
+    try:
+        await bot.send_message(int(seller_id), txt, reply_markup=sold_kb(items))
+    except Exception:
+        log.warning("cannot offer listing deletion to %s", seller_id)
+
+
+@router.callback_query(F.data.startswith("pd:"))
+async def cb_post_sold_delete(cb: CallbackQuery, bot: Bot):
+    _, act, pid = cb.data.split(":")
+    if act != "y":
+        try:
+            await cb.message.edit_text("Хорошо, объявление оставлено.", reply_markup=None)
+        except Exception:
+            pass
+        return await cb.answer()
+    own = await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND user_id=$2", int(pid), cb.from_user.id)
+    if not own:
+        return await cb.answer("Можно удалить только своё объявление", show_alert=True)
+    await remove_post(bot, int(pid))
+    try:
+        await cb.message.edit_text("🗑 Объявление удалено (в ленте и в группе).", reply_markup=None)
+    except Exception:
+        pass
+    await cb.answer("Удалено")
 
 
 def contact_url(p):
@@ -1162,8 +1240,8 @@ async def op_approve(bot: Bot, rid, uid, label):
         "WHERE id=$1 AND status='pending' RETURNING *", rid, uid, label)
     if not r:
         return False, "Заявка уже обрабатывается"
-    await add_post(r, r["text"])
-    sent = await publish_group(bot, r["topic_id"], r["text"], r["photo_id"])
+    pid = await add_post(r, r["text"])
+    sent = await publish_group(bot, r["topic_id"], r["text"], r["photo_id"], pid)
     await refresh_review(bot, r, f"✅ Одобрено: {esc(label)}")
     await notify_user(bot, r["user_id"], await get_text("approved"))
     return True, "Опубликовано" if sent else "Добавлено в каталог бота"
@@ -1202,8 +1280,8 @@ async def op_user_choice(bot: Bot, rid, uid, accept):
     if not r:
         return None
     if accept:
-        await add_post(r, r["edited_text"])
-        await publish_group(bot, r["topic_id"], r["edited_text"], r["photo_id"])
+        pid = await add_post(r, r["edited_text"])
+        await publish_group(bot, r["topic_id"], r["edited_text"], r["photo_id"], pid)
     who = esc(r["handler_label"] or "админ")
     await refresh_review(
         bot, r,
@@ -1727,7 +1805,7 @@ async def cb_bump(cb: CallbackQuery):
 async def cb_feed_del(cb: CallbackQuery, bot: Bot):
     if await role(cb.from_user.id) is None:
         return await cb.answer("Нет доступа", show_alert=True)
-    await pool.execute("UPDATE posts SET active=FALSE WHERE id=$1", int(cb.data.split(":")[2]))
+    await remove_post(bot, int(cb.data.split(":")[2]))
     fr = await pool.fetchrow("SELECT photo_msg_id FROM feeds WHERE user_id=$1", cb.from_user.id)
     if fr and fr["photo_msg_id"]:
         await drop_feed_photo(bot, cb.message.chat.id, fr["photo_msg_id"])
@@ -3280,7 +3358,7 @@ async def cb_user_report(cb: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("pr:"))
-async def cb_post_report(cb: CallbackQuery):
+async def cb_post_report(cb: CallbackQuery, bot: Bot):
     if await role(cb.from_user.id) is None:
         return await cb.answer("Нет доступа", show_alert=True)
     _, act, rid = cb.data.split(":")
@@ -3288,7 +3366,7 @@ async def cb_post_report(cb: CallbackQuery):
     if not r:
         return await cb.answer("Жалоба не найдена", show_alert=True)
     if act == "del":
-        await pool.execute("UPDATE posts SET active=FALSE WHERE id=$1", r["post_id"])
+        await remove_post(bot, r["post_id"])
         foot = "🗑 Объявление удалено"
     else:
         foot = "✅ Жалоба закрыта"
@@ -3559,7 +3637,10 @@ async def api_profile_reviews(request):
     rows=await pool.fetch("""SELECT r.id,r.rating,r.text,r.created_at,r.reviewer_id,(r.photo_data IS NOT NULL) has_photo,
         u.username,u.first_name FROM user_reviews r
         JOIN users u ON u.user_id=r.reviewer_id WHERE r.target_id=$1 ORDER BY r.created_at DESC LIMIT 50""",uid)
+    avs=await avatar_info([r["reviewer_id"] for r in rows])
     return jr({"reviews":[{"id":r["id"],"rating":r["rating"],"text":r["text"],
+        "author_has_avatar":avs.get(r["reviewer_id"],(False,None))[0],
+        "author_photo":avs.get(r["reviewer_id"],(False,None))[1],
         "author":r["username"] and "@"+r["username"] or r["first_name"] or "Пользователь",
         "author_id":r["reviewer_id"],
         "photo":img_url("rv",r["id"]) if r["has_photo"] else None,
@@ -3806,6 +3887,14 @@ async def api_search_notify(request):
 
 
 # ---- direct deals (без гаранта)
+async def seller_listing(deal, uid):
+    """Активное объявление по завершённой сделке — только для продавца (чтобы предложить удалить)."""
+    if deal["status"] != "completed" or deal["seller_id"] != uid or not deal["listing_post_id"]:
+        return None
+    p = await pool.fetchrow("SELECT id,text FROM posts WHERE id=$1 AND user_id=$2 AND active", deal["listing_post_id"], uid)
+    return {"id": p["id"], "title": ad_title(p["text"])} if p else None
+
+
 async def direct_member(deal_id, uid):
     row = await pool.fetchrow("SELECT * FROM direct_deals WHERE id=$1 AND (buyer_id=$2 OR seller_id=$2)", deal_id, uid)
     if not row:
@@ -3826,14 +3915,18 @@ async def api_direct_create(request):
         seller_id=int(d.get("seller_id") or 0); amount=int(d.get("amount") or 0)
     except (TypeError,ValueError):
         raise ApiError(400,"bad_input")
+    post_id=None
+    try: post_id=int(d.get("post_id") or 0) or None
+    except (TypeError,ValueError): post_id=None
+    if post_id and not await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND user_id=$2",post_id,seller_id): post_id=None
     terms=str(d.get("terms") or "").strip()
     if seller_id<=0 or seller_id==uid or amount<0 or amount>1000000000 or not terms or len(terms)>1500:
         raise ApiError(400,"bad_input")
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",seller_id):
         raise ApiError(404,"seller_not_found")
     await need_not_blocked(uid,seller_id)
-    row=await pool.fetchrow("""INSERT INTO direct_deals(buyer_id,seller_id,amount,terms,status)
-        VALUES($1,$2,$3,$4,'pending_acceptance') RETURNING id""",uid,seller_id,amount,terms)
+    row=await pool.fetchrow("""INSERT INTO direct_deals(buyer_id,seller_id,amount,terms,status,listing_post_id)
+        VALUES($1,$2,$3,$4,'pending_acceptance',$5) RETURNING id""",uid,seller_id,amount,terms,post_id)
     await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
         row["id"],uid,"Предложение прямой сделки создано. Гарант не участвует, деньги и товар сервис не удерживает.")
     try: await request.app["bot"].send_message(seller_id,f"Вам предложили прямую сделку #{row['id']}. Откройте KMBP EXCHANGE → Сделки без гаранта.")
@@ -3844,7 +3937,8 @@ async def api_direct_create(request):
 async def api_direct_detail(request):
     deal_id=int(request.query.get("id") or 0); row=await direct_member(deal_id,request["u"]["id"])
     msgs=await pool.fetch("SELECT sender_id,body,system,created_at FROM direct_deal_messages WHERE deal_id=$1 ORDER BY id LIMIT 200",deal_id)
-    return jr({"deal":dict(row),"messages":[dict(m) for m in msgs]})
+    return jr({"deal":dict(row),"messages":[dict(m) for m in msgs],
+               "listing":await seller_listing(row,request["u"]["id"])})
 
 
 async def api_direct_action(request):
@@ -3871,6 +3965,7 @@ async def api_direct_action(request):
             updated_at=now() WHERE id=$1 RETURNING *""",deal_id,uid)
         if fresh["status"]=="completed":
             msg="Обе стороны подтвердили завершение. Сделка завершена — теперь можно оставить отзыв."
+            asyncio.create_task(offer_delete_listing(request.app["bot"],row["seller_id"],row["listing_post_id"]))
         else:
             msg="Ваше подтверждение записано. Для завершения нужно подтверждение второй стороны."
     elif action=="cancel":
@@ -4101,7 +4196,17 @@ async def api_admin_app_decide(request):
 async def api_admin_post_del(request):
     await need_staff(request)
     d = await body(request)
-    await pool.execute("UPDATE posts SET active=FALSE WHERE id=$1", int(d.get("id", 0) or 0))
+    await remove_post(request.app["bot"], int(d.get("id", 0) or 0))
+    return jr({"ok": True})
+
+
+async def api_post_delete(request):
+    """Автор удаляет своё объявление: из ленты и из группы."""
+    d = await body(request)
+    pid = int(d.get("id", 0) or 0)
+    if not await pool.fetchval("SELECT 1 FROM posts WHERE id=$1 AND user_id=$2", pid, request["u"]["id"]):
+        raise ApiError(403, "forbidden")
+    await remove_post(request.app["bot"], pid)
     return jr({"ok": True})
 
 
@@ -4369,7 +4474,8 @@ async def api_escrow_detail(request):
     msgs = await pool.fetch("SELECT sender_id,body,system,created_at FROM escrow_messages WHERE deal_id=$1 ORDER BY id LIMIT 200", deal_id)
     dispute = await pool.fetchrow("SELECT status,reason,resolution FROM escrow_disputes WHERE deal_id=$1", deal_id)
     return jr({"deal": dict(row), "messages": [dict(m) for m in msgs], "dispute": dict(dispute) if dispute else None,
-               "can_dispute": row["status"] not in ("completed","cancelled","refunded")})
+               "can_dispute": row["status"] not in ("completed","cancelled","refunded"),
+               "listing": await seller_listing(row, request["u"]["id"])})
 
 
 async def api_escrow_message(request):
@@ -4546,6 +4652,7 @@ def build_web(bot: Bot):
     r.add_post("/api/admin/review", api_admin_review)
     r.add_post("/api/admin/app_decide", api_admin_app_decide)
     r.add_post("/api/admin/post_del", api_admin_post_del)
+    r.add_post("/api/post_del", api_post_delete)
     r.add_get("/api/admin/texts", api_admin_texts)
     r.add_post("/api/admin/text_set", api_admin_text_set)
     r.add_get("/api/admin/topics", api_admin_topics)

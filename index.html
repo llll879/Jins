@@ -631,7 +631,7 @@ nav.bar button.on .e .mi{transform:translateY(-1px) scale(1.06);filter:drop-shad
 .rv-bars div span:last-child{width:18px}
 .rcard{padding:14px 16px;margin:10px 0;border-radius:22px;border:1px solid var(--line);background:var(--card);box-shadow:var(--sh),var(--shin)}
 .rcard-h{display:flex;align-items:center;gap:12px}
-.rcard-av{flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 50%,#000))}
+.rcard-av img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}.rcard-av{overflow:hidden;flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 50%,#000))}
 .rcard-h>div:not(.rcard-av){min-width:0;flex:1}
 .rcard-h b{display:block;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rcard-h small{color:var(--dim);font-size:12px}
@@ -1167,12 +1167,18 @@ function sheet(title, rows) {
   document.body.appendChild(bg);
 }
 
+async function deleteOwnAd(id, done) {
+  if (!await confirmBox('Удалить объявление? Оно пропадёт из ленты и из группы.')) return;
+  try { await api('/api/post_del', { id }); toast('Объявление удалено', 'good'); done && done(); } catch (e) { fail(e); }
+}
+
 function adMenu(p, onGone) {
   const rows = [{ t: p.author_url ? 'Написать автору' : 'Профиль автора', fn: () => openLink(p.author_url || p.contact) }];
   rows.push({ t: 'Поделиться', fn: () => shareAd(p) });
   if (p.mine) rows.push({ t: 'Поднять объявление', fn: async () => { try { await api('/api/bump', { post_id: p.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } } });
   else { rows.push({ t: 'Пожаловаться на объявление', fn: () => reportPost(p) }); if (p.author_id) rows.push({ t: 'Пожаловаться на продавца', fn: () => reportUser(p.author_id, p.author, p.id) }); }
-  if (isStaff()) rows.push({ t: 'Удалить', cls: 'bad', fn: async () => { if (!await confirmBox('Удалить объявление?')) return; try { await api('/api/admin/post_del', { id: p.id }); toast('Удалено', 'good'); onGone && onGone(p.id); } catch (e) { fail(e); } } });
+  if (p.mine) rows.push({ t: 'Удалить объявление', cls: 'bad', fn: () => deleteOwnAd(p.id, () => onGone && onGone(p.id)) });
+  else if (isStaff()) rows.push({ t: 'Удалить', cls: 'bad', fn: async () => { if (!await confirmBox('Удалить объявление?')) return; try { await api('/api/admin/post_del', { id: p.id }); toast('Удалено', 'good'); onGone && onGone(p.id); } catch (e) { fail(e); } } });
   sheet(parseAd(p).title, rows);
 }
 
@@ -1291,7 +1297,7 @@ views.ad = async (el, p) => {
       ${a.author_id && !a.mine ? '<button class="btn ghost small seller-btn">★ Отзывы о продавце</button><button class="btn small direct-deal">🤝 Сделка напрямую</button>' : ''}
       <button class="btn ghost small share">📤 Поделиться</button><button class="btn ghost small copylink">🔗 Ссылка</button>
       ${a.mine ? '' : '<button class="btn ghost small report">🚩 Пожаловаться</button>'}
-      ${a.mine ? '<button class="btn ok small bump">Продлить</button>' : ''}
+      ${a.mine ? '<button class="btn ok small bump">Продлить</button><button class="btn bad small mydel">Удалить</button>' : ''}
       ${isStaff() ? '<button class="btn bad small del">Удалить</button>' : ''}
     </div>
     ${a.expires ? `<div class="post-meta">Действует до ${esc(a.expires)}${a.mine && a.days_left !== null && a.days_left <= 3 ? ' · скоро истечёт, нажмите «Продлить»' : ''}</div>` : ''}`;
@@ -1306,6 +1312,7 @@ views.ad = async (el, p) => {
   $('.fav', el).onclick = async e => { try { const s = await toggleFav(a.id); e.target.textContent = s ? '★ В избранном' : '☆ В избранное'; } catch (er) { fail(er); } };
   const rp = $('.report', el); if (rp) rp.onclick = () => { const rows = [{ t: 'Пожаловаться на объявление', fn: () => reportPost(a) }]; if (a.author_id) rows.push({ t: 'Пожаловаться на продавца', fn: () => reportUser(a.author_id, a.author, a.id) }); sheet('Жалоба', rows); };
   const bp = $('.bump', el); if (bp) bp.onclick = async () => { try { await api('/api/bump', { post_id: a.id }); toast('Объявление поднято ещё на 30 дней', 'good'); } catch (e) { fail(e); } };
+  const md = $('.mydel', el); if (md) md.onclick = () => deleteOwnAd(a.id, () => { S.ads.delete(a.id); back(); });
   const d = $('.del', el); if (d) d.onclick = async () => { if (!await confirmBox('Удалить объявление?')) return; try { await api('/api/admin/post_del', { id: a.id }); toast('Удалено', 'good'); S.ads.delete(a.id); back(); } catch (e) { fail(e); } };
   api('/api/view', { post_id: a.id }).then(r => { const c = $('#viewsChip', el); if (c && r && r.views !== undefined) { c.textContent = '👁 ' + r.views; a.views = r.views; } }).catch(() => {});
 };
@@ -1451,7 +1458,7 @@ views.direct_deals = async (el, params={}) => {
     <h3 class="page" style="font-size:19px">Мои прямые сделки</h3>
     <div class="stagger">${ds.deals.length?ds.deals.map(d=>{const other=Number(d.buyer_id)===uid?d.seller_id:d.buyer_id;return `<div class="li glass" data-direct-id="${d.id}"><span class="ic">${nic('deals')}</span><span class="t"><b>Сделка #${d.id}</b><small>${[labels[d.status]||d.status,Number(d.amount)?Number(d.amount)+' ⭐':'',Number(d.buyer_id)===uid?'Вы покупатель':'Вы продавец','ID '+other].filter(Boolean).join(' · ')}</small></span><span class="arr">›</span></div>`}).join(''):'<div class="card glass sub">Прямых сделок пока нет.</div>'}</div>
     <div class="card glass"><small class="dim">Важно: в прямой сделке проверяйте контрагента и договорённости самостоятельно. Не отправляйте деньги или ценности, пока не уверены в условиях.</small></div>`;
-  $('#ddCreate',el).onclick=async()=>{const seller_id=Number($('#ddSeller',el).value),amount=Number($('#ddAmount',el).value||0),terms=$('#ddTerms',el).value.trim();if(!seller_id||!terms)return toast('Укажите ID и условия сделки','err');try{const r=await api('/api/direct/deals',{seller_id,amount,terms});toast('Предложение отправлено','good');go('direct_deal',{id:r.id});}catch(e){fail(e)}};
+  $('#ddCreate',el).onclick=async()=>{const seller_id=Number($('#ddSeller',el).value),amount=Number($('#ddAmount',el).value||0),terms=$('#ddTerms',el).value.trim();if(!seller_id||!terms)return toast('Укажите ID и условия сделки','err');try{const r=await api('/api/direct/deals',{seller_id,amount,terms,post_id:Number(params.post_id)||null});toast('Предложение отправлено','good');go('direct_deal',{id:r.id});}catch(e){fail(e)}};
   $$('[data-direct-id]',el).forEach(x=>x.onclick=()=>go('direct_deal',{id:Number(x.dataset.directId)}));
 };
 
@@ -1461,6 +1468,7 @@ views.direct_deal = async (el,p={}) => {
   const labels={pending_acceptance:'Ожидает принятия продавцом',in_progress:'В процессе',completed:'Завершена',cancelled:'Отменена'};
   el.innerHTML=`<h2 class="page">Прямая сделка #${x.id}</h2>
     <div class="card glass"><div class="kv"><span>Статус</span><b>${labels[x.status]||x.status}</b></div><div class="kv"><span>Покупатель</span><b>${x.buyer_id}</b></div><div class="kv"><span>Продавец</span><b>${x.seller_id}</b></div><div class="kv"><span>Сумма</span><b>${Number(x.amount)?Number(x.amount)+' ⭐':'Не указана'}</b></div><p class="rich">${esc(x.terms)}</p><small class="dim">Сделка проходит напрямую. KMBP EXCHANGE не принимает и не удерживает оплату.</small></div>
+    ${d.listing?`<div class="card glass" id="soldBox"><b>🎉 Сделка завершена</b><p class="sub">Объявление «${esc(d.listing.title)}» ещё в ленте и в группе. Удалить его?</p><div class="acts"><button class="btn small danger" id="soldDel">🗑 Удалить объявление</button></div></div>`:''}
     <div class="card glass"><b>Переписка по сделке</b><div style="display:grid;gap:8px;margin:12px 0">${d.messages.map(m=>`<div class="review"><small class="dim">${m.system?'Система':'ID '+m.sender_id}</small><p class="rich">${esc(m.body)}</p></div>`).join('')}</div>${x.status!=='completed'&&x.status!=='cancelled'?'<textarea class="f" id="ddMsg" maxlength="2000" placeholder="Сообщение"></textarea><button class="btn small" id="ddSend" style="margin-top:8px">Отправить</button>':''}</div>
     <div class="card glass"><b>Действия</b><div class="acts">
       ${seller&&x.status==='pending_acceptance'?'<button class="btn small" id="ddAccept">Принять условия</button><button class="btn small danger" id="ddDecline">Отклонить</button>':''}
@@ -1468,6 +1476,7 @@ views.direct_deal = async (el,p={}) => {
       ${x.status==='completed'?`<button class="btn small" id="ddReview">★ Оставить отзыв</button>`:''}
       ${['pending_acceptance','in_progress'].includes(x.status)?'<button class="btn small danger" id="ddCancel">Отменить</button>':''}
     </div><p class="sub">Сделка считается завершённой только после подтверждения обеими сторонами. После этого можно оставить отзыв.</p></div>`;
+  if($('#soldDel',el))$('#soldDel',el).onclick=()=>deleteOwnAd(d.listing.id,()=>{const sb=$('#soldBox',el);if(sb)sb.remove();});
   const act=async(action)=>{try{await api('/api/direct/action',{deal_id:x.id,action});toast('Статус обновлён','good');go('direct_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   if($('#ddAccept',el))$('#ddAccept',el).onclick=()=>act('accept');
   if($('#ddDecline',el))$('#ddDecline',el).onclick=()=>act('decline');
@@ -1481,8 +1490,10 @@ views.escrow_deal = async (el,p={}) => {
   const d=await api('/api/escrow/deal?id='+Number(p.id));const x=d.deal, labels={awaiting_fee:'Ожидание комиссии',awaiting_asset:'Ожидание подарка',in_progress:'Сделка идёт',awaiting_seller:'Ожидание продавца',payout_pending:'Ожидание выдачи',refund_pending:'Ожидание возврата',disputed:'Спор',completed:'Завершена',cancelled:'Отменена',refunded:'Возвращена'};
   const mineBuyer=Number(x.buyer_id)===Number(S.me.user.id),mineSeller=Number(x.seller_id)===Number(S.me.user.id);
   el.innerHTML=`<h2 class="page">Сделка #${x.id}</h2><div class="card glass"><div class="kv"><span>Статус</span><b>${labels[x.status]||x.status}</b></div><div class="kv"><span>Сумма</span><b>${x.amount} ⭐</b></div><div class="kv"><span>Комиссия</span><b>${x.fee} ⭐ · ${x.fee_paid?'оплачена':'не оплачена'}</b></div><div class="kv"><span>Покупатель</span><b>${x.buyer_id}</b></div><div class="kv"><span>Продавец</span><b>${x.seller_id}</b></div><p class="rich">${esc(x.terms)}</p></div>
+  ${d.listing?`<div class="card glass" id="soldBox"><b>🎉 Сделка завершена</b><p class="sub">Объявление «${esc(d.listing.title)}» ещё в ленте и в группе. Удалить его?</p><div class="acts"><button class="btn small danger" id="soldDel">🗑 Удалить объявление</button></div></div>`:''}
   <div class="card glass"><b>Чат сделки</b><div id="escChat" style="display:grid;gap:8px;margin:12px 0">${d.messages.map(m=>`<div class="review"><small class="dim">${m.system?'Система':'ID '+m.sender_id} · ${esc(m.created_at||'')}</small><p class="rich">${esc(m.body)}</p></div>`).join('')}</div><textarea class="f" id="escMsg" maxlength="2000" placeholder="Сообщение участнику сделки"></textarea><button class="btn small" id="escSend" style="margin-top:8px">Отправить</button></div>
   <div class="card glass"><b>Действия</b><div class="acts">${mineBuyer&&x.status==='in_progress'?'<button class="btn small" id="escDone">Сделка выполнена</button>':''}${mineSeller&&x.status==='awaiting_seller'?'<button class="btn small" id="escConfirm">Подтвердить</button>':''}${x.status==='completed'?'<button class="btn small" id="escReview">★ Оставить отзыв</button>':''}${d.can_dispute?'<button class="btn small danger" id="escDispute">Открыть диспут</button>':''}<button class="btn small" id="escReceipt">Чек PDF</button></div></div>`;
+  if($('#soldDel',el))$('#soldDel',el).onclick=()=>deleteOwnAd(d.listing.id,()=>{const sb=$('#soldBox',el);if(sb)sb.remove();});
   $('#escSend',el).onclick=async()=>{const body=$('#escMsg',el).value.trim();if(!body)return;try{await api('/api/escrow/message',{deal_id:x.id,body});toast('Сообщение отправлено','good');go('escrow_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   const act=async(path)=>{try{await api(path,{deal_id:x.id});toast('Действие принято','good');go('escrow_deal',{id:x.id},{replace:true});}catch(e){fail(e)}};
   if($('#escDone',el))$('#escDone',el).onclick=()=>act('/api/escrow/buyer_done');
@@ -1511,13 +1522,14 @@ views.profile = async (el, params={}) => {
   ${[['dark','Тёмная','#15171d'],['light','Светлая','#edf0f5'],['midnight','Полночь','#090d20'],['ocean','Океан','#0d2634'],['forest','Лес','#14291e']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
   <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv hist"><span>Сделка #${d.id}<small class="dim">${esc(d.side)} · ${esc(d.created||'')} · ${d.kind==='direct'?'без гаранта':'через гаранта'}</small></span><b>${d.amount?d.amount+' ⭐':'Без суммы'}<small class="dim">${esc(DEAL_ST[d.status]||d.status)}</small></b></div>`).join(''):'<div class="sub">Здесь отображаются сделки через гаранта и прямые сделки.</div>'}</div>
   <h3 class="page" style="font-size:19px">Отзывы</h3>${rv.reviews.length?(()=>{const c=[0,0,0,0,0,0];rv.reviews.forEach(r=>c[r.rating]++);const n=rv.reviews.length;return `<div class="rv-sum glass"><div class="rv-big"><b>${u.rating||'—'}</b><span class="stars">${'★'.repeat(Math.round(u.rating||0))}${'☆'.repeat(5-Math.round(u.rating||0))}</span><small>${n} ${n%10===1&&n%100!==11?'отзыв':(n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?'отзыва':'отзывов')}</small></div><div class="rv-bars">${[5,4,3,2,1].map(k=>`<div><span>${k}</span><i><u style="width:${Math.round(c[k]/n*100)}%"></u></i><span>${c[k]}</span></div>`).join('')}</div></div>`})():''}
-  <div id="reviews">${rv.reviews.length?rv.reviews.map(r=>`<div class="rcard"><div class="rcard-h"><div class="rcard-av">${esc((r.author||'?').slice(0,1).toUpperCase())}</div><div><b>${esc(r.author)}${r.mine?'<span class="mine-tag">ваш</span>':''}</b><small>${esc(r.created||'')}</small></div><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div>${r.text?`<p>${esc(r.text)}</p>`:''}${r.photo?`<img class="rv-photo" src="${esc(r.photo)}" alt="Скриншот" loading="lazy" data-zoom="${esc(r.photo)}">`:''}</div>`).join(''):empty('☆','Отзывов пока нет')}</div>
+  <div id="reviews">${rv.reviews.length?rv.reviews.map(r=>`<div class="rcard"><div class="rcard-h">${avHtml('rcard-av',r.author_id,r.author,r.author_has_avatar,r.author_photo)}<div><b>${esc(r.author)}${r.mine?'<span class="mine-tag">ваш</span>':''}</b><small>${esc(r.created||'')}</small></div><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div>${r.text?`<p>${esc(r.text)}</p>`:''}${r.photo?`<img class="rv-photo" src="${esc(r.photo)}" alt="Скриншот" loading="lazy" data-zoom="${esc(r.photo)}">`:''}</div>`).join(''):empty('☆','Отзывов пока нет')}</div>
   ${!own?`<div class="rform"><h3>${(rv.reviews.find(r=>r.mine))?'Изменить отзыв':'Оставить отзыв'}</h3><p class="rsub">Оценка для ${esc(u.name)}. Отзыв доступен участникам завершённой сделки.</p>
     <div class="rstars" id="rStars">${[1,2,3,4,5].map(k=>`<button type="button" data-v="${k}" aria-label="${k}">★</button>`).join('')}</div><div class="rlabel" id="rLabel">Нажмите на звезду</div>
     <textarea id="reviewText" maxlength="1000" placeholder="Расскажите, как прошла сделка…"></textarea><div class="rcount"><span id="rCnt">0</span> / 1000</div>
     <input type="file" id="reviewFile" accept="image/jpeg,image/png,image/webp" hidden>
     <div class="rshot" id="rShot"><div class="ri">📎</div><div>Добавить скриншот<small>необязательно</small></div></div>
     <button class="rsubmit" id="saveReview" disabled>Опубликовать отзыв</button></div>`:''}`;
+  avFill(el);
   if(u.has_avatar){fetch('/api/profile/avatar?id='+id,{headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>{if(!r.ok)throw Error('avatar');return r.blob()}).then(b=>{const im=$('#pAvatar',el);if(im)im.src=URL.createObjectURL(b)}).catch(()=>{});}
   $$('[data-zoom]',el).forEach(im=>im.onclick=()=>{const bg=document.createElement('div');bg.className='zoom-bg';bg.innerHTML='<img src="'+im.dataset.zoom+'" alt="">';bg.onclick=()=>bg.remove();document.body.appendChild(bg);});
   if(!own){
@@ -1700,12 +1712,13 @@ function wireMine(el) {
   $$('[data-post]', el).forEach(c => { const id = +c.dataset.post;
     $('.ext', c).onclick = async () => { try { await api('/api/bump', { post_id: id }); toast('Объявление продлено на 30 дней', 'good'); go('mine', {}, { replace: true }); } catch (e) { fail(e); } };
     const o = $('.opn', c); if (o) o.onclick = () => go('ad', { id });
+    const dl = $('.mdel', c); if (dl) dl.onclick = () => deleteOwnAd(id, () => go('mine', {}, { replace: true }));
   });
 }
 views.mine = async el => {
   const [d, mp] = await Promise.all([api('/api/my_requests'), api('/api/my_posts').catch(() => ({ posts: [], expired: [] }))]);
   const exp = new Set(mp.expired); mp.posts.forEach(p => S.ads.set(p.id, p));
-  const postsHtml = mp.posts.length ? `<h3 class="page" style="font-size:19px">Мои объявления</h3><div class="stagger">${mp.posts.map(p => { const a = parseAd(p), gone = exp.has(p.id); return `<div class="card glass" data-post="${p.id}"><div class="row"><b class="grow">${esc(a.title)}</b><span class="status">${gone ? '📦 Снято: истёк срок' : `⏳ ещё ${p.days_left} дн.`}</span></div><div class="post-meta" style="text-align:left">👁 ${p.views || 0} · ${esc(p.topic)}</div><div class="row" style="margin-top:8px;gap:8px"><button class="btn ${gone ? '' : 'ghost'} small grow ext">${gone ? '♻️ Вернуть в ленту' : '↻ Продлить на 30 дней'}</button>${gone ? '' : '<button class="btn ghost small opn">Открыть</button>'}</div></div>`; }).join('')}</div>` : '';
+  const postsHtml = mp.posts.length ? `<h3 class="page" style="font-size:19px">Мои объявления</h3><div class="stagger">${mp.posts.map(p => { const a = parseAd(p), gone = exp.has(p.id); return `<div class="card glass" data-post="${p.id}"><div class="row"><b class="grow">${esc(a.title)}</b><span class="status">${gone ? '📦 Снято: истёк срок' : `⏳ ещё ${p.days_left} дн.`}</span></div><div class="post-meta" style="text-align:left">👁 ${p.views || 0} · ${esc(p.topic)}</div><div class="row" style="margin-top:8px;gap:8px"><button class="btn ${gone ? '' : 'ghost'} small grow ext">${gone ? '♻️ Вернуть в ленту' : '↻ Продлить на 30 дней'}</button>${gone ? '' : '<button class="btn ghost small opn">Открыть</button>'}<button class="btn bad small mdel">🗑</button></div></div>`; }).join('')}</div>` : '';
   if (!d.requests.length) { el.innerHTML = `<h2 class="page">📨 Мои заявки</h2>${postsHtml}` + (postsHtml ? '' : empty('📭', 'Вы ещё ничего не отправляли')); wireMine(el); return; }
   el.innerHTML = `<h2 class="page">📨 Мои заявки</h2>${postsHtml}${postsHtml ? '<h3 class="page" style="font-size:19px">Заявки</h3>' : ''}<div class="stagger">${d.requests.map(r => `<div class="card glass" data-id="${r.id}">
     <div class="row"><span class="status st-${r.status}">${STATUS[r.status] || r.status}</span><span class="grow"></span><small style="color:var(--dim)">#${r.id} · ${esc(r.created)}</small></div>

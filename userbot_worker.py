@@ -8,7 +8,9 @@ held for an administrator's manual resolution.
 import asyncio
 import json
 import logging
+import html
 import os
+import re
 import signal
 import sys
 from datetime import datetime, timezone
@@ -30,12 +32,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
 
-async def notify(http, user_id, text):
+async def notify(http, user_id, text, reply_markup=None):
     if not BOT_TOKEN or not user_id:
         return
     try:
+        payload = {"chat_id": int(user_id), "text": text}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         async with http.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                             json={"chat_id": int(user_id), "text": text}) as response:
+                             json=payload) as response:
             if response.status >= 300:
                 log.warning("Bot notification failed: %s", response.status)
     except Exception:
@@ -176,6 +181,7 @@ async def try_release_collectible(client, pool, http):
             else:
                 await notify(http, row["buyer_id"], f"Сделка #{row['id']} завершена. Подарок передан продавцу.")
                 await notify(http, row["seller_id"], f"Сделка #{row['id']} завершена. Подарок поступил вам.")
+                await offer_delete_listing(pool, http, row["seller_id"], row["id"])
         except Exception as exc:
             log.exception("Gift transfer failed for deal %s", row["id"])
             error_text = str(exc)[:500]
@@ -183,6 +189,33 @@ async def try_release_collectible(client, pool, http):
                 await pool.execute("UPDATE escrow_deals SET last_error=$2,updated_at=now() WHERE id=$1",
                                    row["id"], error_text)
                 await notify(http, OWNER_ID, f"Сделка #{row['id']}: Telegram не разрешил автоматическую передачу. Требуется ручное решение.")
+
+
+def _ad_title(text):
+    t = re.sub(r"<[^>]+>", "", html.unescape(text or "")).strip()
+    return (t.split("\n")[0] if t else "Объявление")[:60]
+
+
+async def offer_delete_listing(pool, http, seller_id, deal_id):
+    """После успешной сделки предлагает продавцу удалить объявление (кнопки обрабатывает bot.py: pd:y:<id>)."""
+    try:
+        listing = await pool.fetchval("SELECT listing_post_id FROM escrow_deals WHERE id=$1", deal_id)
+        rows = []
+        if listing:
+            rows = await pool.fetch("SELECT id,text FROM posts WHERE id=$1 AND user_id=$2 AND active", listing, int(seller_id))
+        if not rows:
+            rows = await pool.fetch(
+                "SELECT id,text FROM posts WHERE user_id=$1 AND active AND expires_at>now() ORDER BY id DESC LIMIT 5", int(seller_id))
+        if not rows:
+            return
+        kb = [[{"text": f"🗑 Удалить «{_ad_title(r['text'])[:28]}»", "callback_data": f"pd:y:{r['id']}"}] for r in rows]
+        kb.append([{"text": "Оставить", "callback_data": "pd:n:0"}])
+        text = ("🎉 Сделка успешно завершена!\nОбъявление уже неактуально? Удалите его, чтобы оно не висело в ленте и в группе."
+                if listing and len(rows) == 1 else
+                "🎉 Сделка успешно завершена!\nПродали товар? Выберите объявление, которое нужно удалить (из ленты и из группы).")
+        await notify(http, seller_id, text, {"inline_keyboard": kb})
+    except Exception:
+        log.exception("offer_delete_listing failed")
 
 
 async def expire_unpaid(pool, http):
