@@ -957,6 +957,7 @@ body.in-chat #app{max-width:none}
 .bp-stat.warn b{color:var(--bad)}
 .chip.al.now{background:color-mix(in srgb,var(--tc) 14%,transparent);border-color:color-mix(in srgb,var(--tc) 45%,transparent);color:var(--tc);font-weight:700}
 .chip.al.now small{opacity:.7;font-weight:600}
+.rp-ph,.cmp-ph{display:flex;gap:8px;flex-wrap:wrap}.rp-ph{margin:8px 0}.rp-ph:empty{display:none}.rp-ph .th{position:relative;width:64px;height:64px;border-radius:12px;overflow:hidden}.rp-ph img{width:100%;height:100%;object-fit:cover;display:block}.rp-ph .x{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;font-size:13px;line-height:20px;padding:0;cursor:pointer}.cmp-ph{margin-top:8px}.cmp-ph img{width:84px;height:84px;object-fit:cover;border-radius:12px;cursor:pointer;display:block}.cmp .cmp-del{margin-top:8px}
 .cmp{padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}.cmp:last-child{border:0}
 .cmp p{margin:4px 0 0;color:var(--dim);word-break:break-word}.cmp.open>.rowsb b{color:var(--bad)}
 .bchip{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 12px;border-radius:99px;border:1px solid color-mix(in srgb,var(--tc) 45%,transparent);background:color-mix(in srgb,var(--tc) 13%,transparent);color:var(--tc);font-weight:700;font-size:12.5px;cursor:pointer}
@@ -964,6 +965,26 @@ body.in-chat #app{max-width:none}
 .rate-stars button{padding:11px 0;border-radius:13px;border:1px solid var(--line);background:var(--glass2);font-weight:800;font-size:16px;cursor:pointer;color:var(--tc);transition:transform .18s var(--spring),background .2s}
 .rate-stars button.on{background:var(--tc);color:#fff;border-color:transparent;transform:translateY(-2px)}
 .rate-prev{text-align:center;font-weight:800;margin:6px 0 8px;color:var(--tc);min-height:20px}
+
+/* аналитика */
+.an-kpi{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:0 0 12px}
+.an-kpi>div{padding:12px;border-radius:16px;background:var(--glass2);border:1px solid var(--line)}
+.an-kpi small{display:block;color:var(--dim);font-size:12px}
+.an-kpi b{display:block;font-size:22px;margin-top:2px}
+.an-kpi i{font-style:normal;font-size:12px;color:var(--dim)}
+.an-h{font-size:16px;margin:18px 2px 8px;font-weight:700}
+.an-bars{display:flex;align-items:flex-end;gap:2px;height:96px;margin:10px 0 4px}
+.an-bars span{flex:1;min-width:2px;background:var(--acc,var(--ink));border-radius:3px 3px 0 0;opacity:.85}
+.an-axis{display:flex;justify-content:space-between;font-size:11px;color:var(--dim)}
+.an-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+.an-row:last-child{border:0}
+.an-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-row .v{font-weight:700;white-space:nowrap}
+.an-row .s{color:var(--dim);font-size:12px;white-space:nowrap}
+.an-meter{height:6px;border-radius:99px;background:var(--line);overflow:hidden;flex:0 0 70px}
+.an-meter i{display:block;height:100%;background:var(--acc,var(--ink))}
+.an-chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
+.an-chips .chip{flex:none}
 </style>
 </head>
 <body>
@@ -1157,7 +1178,7 @@ const ERR = {
   unauthorized: 'Откройте мини-апп из Telegram', forbidden: 'Нет доступа', slow: 'Не так быстро, подождите пару секунд',
   closed: 'Приём сейчас закрыт', exists: 'Анкета уже на рассмотрении', already_admin: 'Вы уже админ', empty: 'Заполните все поля',
   too_long: 'Слишком длинный текст', stale: 'Это уже неактуально', limit: 'Достигнут лимит', bad_id: 'Неверный ID',
-  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
+  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', too_many_photos: 'Можно приложить не больше 5 скриншотов', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
 };
 let toastT;
 function toast(msg, kind = '') {
@@ -1372,23 +1393,55 @@ function galInit(root, urls) {
   $$('[data-gal]', root).forEach(im => im.onclick = () => openViewer(urls, +im.dataset.gal));
 }
 const REPORT_REASONS = ['Мошенничество', 'Спам или реклама', 'Оскорбления', 'Запрещённый контент', 'Другое'];
-function reportSheet(title, send, reasons) {
+function reportSheet(title, send, reasons, withPhotos) {
   const RS = reasons || REPORT_REASONS;
-  const bg = document.createElement('div'); bg.className = 'sheet-bg'; let reason = '';
-  bg.innerHTML = `<div class="sheet"><div class="sh-t">${esc(title)}</div><div class="chips" style="margin:10px 0">${RS.map(r => `<span class="chip" data-r="${esc(r)}">${esc(r)}</span>`).join('')}</div><textarea class="f" id="rpText" maxlength="400" placeholder="Подробности (необязательно)" style="min-height:80px"></textarea><button class="sh-b" id="rpSend" disabled style="background:var(--acc);color:#fff;border:0">Отправить жалобу</button><button class="sh-b cancel">Отмена</button></div>`;
+  const bg = document.createElement('div'); bg.className = 'sheet-bg'; let reason = ''; const files = [];
+  const proofUi = withPhotos ? `<div class="rp-ph" id="rpPh"></div><button class="btn small ghost" id="rpAdd" type="button" style="margin:2px 0 6px">📎 Добавить скриншоты-доказательства (до 5)</button><input type="file" id="rpFile" accept="image/*" multiple hidden>` : '';
+  bg.innerHTML = `<div class="sheet"><div class="sh-t">${esc(title)}</div><div class="chips" style="margin:10px 0">${RS.map(r => `<span class="chip" data-r="${esc(r)}">${esc(r)}</span>`).join('')}</div><textarea class="f" id="rpText" maxlength="400" placeholder="Подробности (необязательно)" style="min-height:80px"></textarea>${proofUi}<button class="sh-b" id="rpSend" disabled style="background:var(--acc);color:#fff;border:0">Отправить жалобу</button><button class="sh-b cancel">Отмена</button></div>`;
   const close = () => { bg.classList.add('out'); setTimeout(() => bg.remove(), 180); };
+  const paintPh = () => {
+    const box = $('#rpPh', bg); if (!box) return;
+    box.innerHTML = files.map((f, i) => `<div class="th"><img src="${f.url}" alt=""><button class="x" type="button" data-x="${i}" aria-label="Убрать">×</button></div>`).join('');
+    const add = $('#rpAdd', bg); if (add) add.style.display = files.length >= 5 ? 'none' : '';
+  };
+  if (withPhotos) {
+    $('#rpAdd', bg).onclick = () => $('#rpFile', bg).click();
+    $('#rpFile', bg).onchange = async e => {
+      const list = [...e.target.files]; e.target.value = '';
+      for (const f of list) {
+        if (files.length >= 5) { toast('Не больше 5 скриншотов', 'err'); break; }
+        try { const blob = await shrinkImage(f, 1600, .85); files.push({ blob, url: URL.createObjectURL(blob) }); } catch (er) { toast('Не удалось принять картинку', 'err'); }
+      }
+      paintPh();
+    };
+  }
   bg.onclick = async e => {
     if (e.target === bg || e.target.closest('.cancel')) return close();
+    const x = e.target.closest('[data-x]'); if (x) { const f = files.splice(+x.dataset.x, 1)[0]; if (f) URL.revokeObjectURL(f.url); return paintPh(); }
     const c = e.target.closest('[data-r]');
     if (c) { reason = c.dataset.r; $$('[data-r]', bg).forEach(x => x.classList.toggle('sel', x === c)); $('#rpSend', bg).disabled = false; return; }
-    if (e.target.closest('#rpSend')) { const t = $('#rpText', bg).value.trim(); close(); try { const r = await send(reason + (t ? ': ' + t : ''), reason, t); toast(r && r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (er) { fail(er); } }
+    if (e.target.closest('#rpSend')) { const t = $('#rpText', bg).value.trim(); const blobs = files.map(f => f.blob); close(); try { const r = await send(reason + (t ? ': ' + t : ''), reason, t, blobs); toast(r && r.duplicate ? 'Вы уже жаловались' : 'Жалоба отправлена админам', 'good'); } catch (er) { fail(er); } }
   };
   document.body.appendChild(bg);
 }
+// тело запроса жалобы: JSON, а если есть скриншоты — FormData
+function reportBody(obj, blobs) {
+  if (!blobs || !blobs.length) return obj;
+  const fd = new FormData();
+  Object.entries(obj).forEach(([k, v]) => { if (v !== null && v !== undefined && v !== '') fd.append(k, v); });
+  blobs.forEach((b, i) => fd.append('photo', b, 'proof' + (i + 1) + '.jpg'));
+  return fd;
+}
+// просмотр картинки-доказательства на весь экран
+document.addEventListener('click', e => {
+  const im = e.target.closest('.cmp-ph img'); if (!im) return;
+  const bg = document.createElement('div'); bg.className = 'zoom-bg'; bg.innerHTML = '<img src="' + im.getAttribute('src') + '" alt="">';
+  bg.onclick = () => bg.remove(); document.body.appendChild(bg);
+});
 const reportPost = p => reportSheet('Жалоба на объявление', reason => api('/api/report', { post_id: p.id, reason }));
 const reportReview = id => reportSheet('Жалоба на отзыв', reason => api('/api/report_any', { kind: 'review', id, reason }));
 const reportDeal = id => reportSheet('Жалоба на сделку', reason => api('/api/report_any', { kind: 'deal', id, reason }));
-const reportUser = (id, name, post_id) => reportSheet('Жалоба на ' + (name || 'пользователя'), reason => api('/api/report_user', { user_id: id, reason, post_id: post_id || null }));
+const reportUser = (id, name, post_id) => reportSheet('Жалоба на ' + (name || 'пользователя'), (reason, cat, t, blobs) => api('/api/report_user', reportBody({ user_id: id, reason, post_id: post_id || null }, blobs)), undefined, true);
 // ===== красивые ссылки Exg:/… (профиль, отзыв, объявление, сделка) =====
 const XL_RE = /Exg:\/(@[A-Za-z0-9_]{3,32}|[uUrRaAdD]\d{1,12})/g;
 const linkify = t => t.replace(XL_RE, (m, c) => `<a class="xl" data-xl="${c}">${m}</a>`);
@@ -1562,7 +1615,7 @@ function cardHtml(p, isFav) {
     <div class="ab">
       <div class="arow"><div class="at">${esc(a.title)}</div><button class="afav ${isFav ? 'on' : ''}" aria-label="В избранное">${ic('heart', !!isFav)}</button></div>
       <div class="arow"><div class="ap">${priceHtml(a.price) || `<span class="ap-t">${esc(p.topic)}</span>`}</div><button class="adots" aria-label="Меню">${DOTS}</button></div>
-      <div class="am">${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span> (${p.reviews}) · ` : ''}${esc(p.topic)} · ${esc(p.created)}${p.views ? ` · <span class="vw">👁 ${p.views}</span>` : ''}</div>
+      <div class="am">${p.rating ? `<span class="rt">★ ${esc(p.rating)}</span>${p.reviews ? ` (${p.reviews})` : ''} · ` : ''}${esc(p.topic)} · ${esc(p.created)}${p.views ? ` · <span class="vw">👁 ${p.views}</span>` : ''}</div>
       ${p.badges && p.badges.length ? `<div class="am2">${bdgMini(p.badges)}</div>` : ''}
     </div>`;
 }
@@ -1577,7 +1630,7 @@ function adDetail(p) {
       <h3 class="ad-title">${esc(a.title)}</h3>
       <div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span>${p.id ? `<span class="chip dim" id="viewsChip">👁 ${p.views || 0}</span>` : ''}</div>
       ${a.desc ? `<div class="rich ad-desc">${esc(a.desc)}</div>` : ''}
-      <div class="ad-au seller" data-seller="${p.author_id || ''}">${avHtml('sav',p.author_id,p.author,p.author_has_avatar,p.author_photo)}<b>${esc(p.author)}</b>${nameBadges(p.sb)} ${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span><span>· ${p.reviews} отзыв.</span>` : '<span>· пока без отзывов</span>'}${p.author_id ? '<span class="arr">›</span>' : ''}</div>
+      <div class="ad-au seller" data-seller="${p.author_id || ''}">${avHtml('sav',p.author_id,p.author,p.author_has_avatar,p.author_photo)}<b>${esc(p.author)}</b>${nameBadges(p.sb)} ${p.rating ? `<span class="rt">★ ${esc(p.rating)}</span>${p.reviews ? `<span>· ${p.reviews} отзыв.</span>` : ''}` : '<span>· пока без отзывов</span>'}${p.author_id ? '<span class="arr">›</span>' : ''}</div>
       ${bdgHtml(p.badges)}
     </div></div>`;
 }
@@ -2170,7 +2223,7 @@ views.admin = async el => {
   if (!isStaff()) { el.innerHTML = empty('🔒', 'Нет доступа'); return; }
   const o = await api('/api/admin/overview');
   const items = [['admin_queue', 'mail', 'Очередь заявок', `Объявлений: ${o.pending_requests}${isMain() ? ' · анкет: ' + o.pending_apps : ''}`, o.pending_requests + (isMain() ? o.pending_apps : 0)]];
-  if (isMain()) items.push(['admin_reports', 'security', 'Жалобы', 'Проверка обращений'], ['admin_stats', 'crown', 'Статистика', 'Активность и объявления'], ['admin_broadcast', 'write', 'Рассылка', 'Сообщение всем пользователям'], ['admin_texts', 'doc', 'Тексты', 'Все сообщения бота'], ['admin_topics', 'sliders', 'Темы', 'Категории объявлений'], ['admin_admins', 'admin', 'Админы', 'Главные и младшие'], ['admin_subs', 'bell', 'Подписка', 'Обязательные каналы'], ['admin_recruit', 'profile', 'Набор в админы', o.recruit_open ? 'Открыт' : 'Закрыт'], ['admin_pic', 'gift', 'Картинка приветствия', o.has_photo ? 'Есть' : 'Нет'], ['admin_status', 'info', 'Статус системы', `Объявлений: ${o.posts}`]);
+  if (isMain()) items.push(['admin_reports', 'security', 'Жалобы', 'Проверка обращений'], ['admin_stats', 'crown', 'Аналитика', 'Пользователи, сделки, отзывы, жалобы'], ['admin_broadcast', 'write', 'Рассылка', 'Сообщение всем пользователям'], ['admin_texts', 'doc', 'Тексты', 'Все сообщения бота'], ['admin_topics', 'sliders', 'Темы', 'Категории объявлений'], ['admin_admins', 'admin', 'Админы', 'Главные и младшие'], ['admin_subs', 'bell', 'Подписка', 'Обязательные каналы'], ['admin_recruit', 'profile', 'Набор в админы', o.recruit_open ? 'Открыт' : 'Закрыт'], ['admin_pic', 'gift', 'Картинка приветствия', o.has_photo ? 'Есть' : 'Нет'], ['admin_status', 'info', 'Статус системы', `Объявлений: ${o.posts}`]);
   el.innerHTML = `<h2 class="page">⚙️ Админ-панель</h2><div class="tiles stagger">${items.map(([g, nm, t, s, n]) => `<button class="tile col" data-go="${g}"><span class="in"></span>${n ? `<span class="badge">${n}</span>` : ''}<span class="ic">${nic(nm)}</span><b>${t}</b><small>${s}</small></button>`).join('')}</div>`;
 };
 
@@ -2262,24 +2315,101 @@ views.admin_pic = async el => {
 views.admin_status = async el => {
   const o = await api('/api/admin/overview');
   el.innerHTML = `<h2 class="page">ℹ️ Статус</h2><div class="card glass stagger">
-    ${[['Группа модерации', o.mod_chat ? o.mod_chat + (o.mod_ok ? ' ✅' : ' ⚠️ бот не видит группу — заявки идут в личку') : 'не задана — заявки приходят в личку главным админам (/setmod в группе)'], ['Группа публикации', o.pub_chat ? o.pub_chat + ((o.pub_problems || []).length ? ' ⚠️ ' + o.pub_problems.join('; ') : ' ✅') : 'не задана — добавьте бота админом в группу с темами и отправьте там /setgroup'], ['Непривязанных тем', o.unbound], ['Объявлений в каталоге', o.posts], ['Заявок в очереди', o.pending_requests], ['Анкет в очереди', o.pending_apps], ['Gemini', o.gemini ? o.models.join(', ') : 'ключ не задан'], ['Премиум-эмодзи', 'Встроенные стили бота']].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</div>`;
+    ${[['Группа модерации', o.mod_chat ? o.mod_chat + (o.mod_ok ? ' ✅' : ' ⚠️ бот не видит группу — заявки идут в личку') : 'не задана — заявки приходят в личку главным админам (/setmod в группе)'], ['Группа публикации', o.pub_chat ? o.pub_chat + ((o.pub_problems || []).length ? ' ⚠️ ' + o.pub_problems.join('; ') : ' ✅') : 'не задана — добавьте бота админом в группу с темами и отправьте там /setgroup'], ['Тема для отзывов', o.rev_chat ? o.rev_chat + (o.rev_thread && o.rev_thread !== '0' ? ' · тема ' + o.rev_thread + ' ✅' : ' · общий чат ✅') : 'не выбрана — отправьте /setreviews внутри нужной темы группы'], ['Непривязанных тем', o.unbound], ['Объявлений в каталоге', o.posts], ['Заявок в очереди', o.pending_requests], ['Анкет в очереди', o.pending_apps], ['Gemini', o.gemini ? o.models.join(', ') : 'ключ не задан'], ['Премиум-эмодзи', 'Встроенные стили бота']].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</div>`;
 };
 
 views.admin_stats = async el => {
-  const d=await api('/api/admin/stats');
-  const rows=[['Пользователей',d.users],['Активных за 7 дней',d.active7],['Активных объявлений',d.active_posts],['Истекших объявлений',d.expired_posts],['Новых жалоб',d.new_reports],['Сохранений в избранное',d.favorites],['Действий за 7 дней',d.activity7]];
-  el.innerHTML=`<h2 class="page">Статистика</h2><div class="card glass">${rows.map(([k,v])=>`<div class="kv"><span>${k}</span><b>${v}</b></div>`).join('')}</div>`;
+  let days = S.anDays ?? 30, metric = S.anMetric || 'users';
+  const N = v => fmtN(Math.round(v || 0)), pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '—';
+  const STAT = {pending:'ждут',approved:'одобрено',rejected:'отклонено',edit:'на правке',editing:'на правке',completed:'завершена',cancelled:'отменена',declined:'отклонена',
+    pending_acceptance:'ждёт принятия',accepted:'принята',disputed:'спор',refunded:'возврат',awaiting_payment:'ждёт оплаты',new:'новые',reviewed:'закрыты'};
+  const st = x => STAT[x] || x;
+  const kpi = (t, v, sub) => `<div><small>${t}</small><b>${v}</b>${sub ? `<i>${sub}</i>` : ''}</div>`;
+  const rowsHtml = (arr, f) => arr.length ? arr.map(f).join('') : '<div class="sub">Пока пусто</div>';
+  const who = x => `<span class="nm">${esc(x.name || x.author || '')}</span>`;
+  const card = (t, inner) => `<div class="an-h">${t}</div><div class="card glass">${inner}</div>`;
+  const load = async () => {
+    el.innerHTML = `<h2 class="page">📊 Аналитика</h2><div class="sub">Загрузка…</div>`;
+    const d = await api('/api/admin/analytics?days=' + days);
+    const u = d.users, p = d.posts, ds = d.deals_sum, rv = d.reviews, ch = d.chat, f = d.funnel;
+    const per = days ? ({1:'за 24 часа',7:'за 7 дней',30:'за 30 дней',90:'за 90 дней'}[days]) : 'за всё время';
+    const chips = [[1,'24 ч'],[7,'7 дн'],[30,'30 дн'],[90,'90 дн'],[0,'Всё']].map(([v, t]) => `<button class="chip ${v === days ? 'sel' : ''}" data-days="${v}">${t}</button>`).join('');
+    const MET = {users:'Новые пользователи',active:'Активные',posts:'Объявления',deals:'Завершённые сделки',reviews:'Отзывы',msgs:'Сообщения'};
+    const ser = d.daily.map(x => x[metric] || 0), mx = Math.max(1, ...ser);
+    const bars = `<div class="an-chips">${Object.entries(MET).map(([k, t]) => `<button class="chip ${k === metric ? 'sel' : ''}" data-met="${k}">${t}</button>`).join('')}</div>
+      <div class="an-bars">${d.daily.map(x => `<span title="${x.d}: ${x[metric] || 0}" style="height:${Math.max(3, Math.round(100 * (x[metric] || 0) / mx))}%"></span>`).join('')}</div>
+      <div class="an-axis"><span>${d.daily[0] ? d.daily[0].d : ''}</span><span>всего ${N(ser.reduce((a, b) => a + b, 0))} · макс ${N(mx)}/день</span><span>${d.daily.length ? d.daily[d.daily.length - 1].d : ''}</span></div>`;
+    const dist = [5, 4, 3, 2, 1].map(n => `<div class="an-row"><span class="nm">${'★'.repeat(n)}${'☆'.repeat(5 - n)}</span><span class="an-meter"><i style="width:${rv.total ? Math.round(100 * rv['r' + n] / rv.total) : 0}%"></i></span><span class="v">${N(rv['r' + n])}</span><span class="s">${pct(rv['r' + n], rv.total)}</span></div>`).join('');
+    const dealTbl = d.deals.map(x => `<div class="an-row"><span class="nm">${x.kind === 'escrow' ? '🛡 Гарант' : '🤝 Напрямую'} · ${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">${N(x.vol)} ⭐${x.n_period ? ' · +' + N(x.n_period) : ''}</span></div>`).join('');
+    const funnel = [['Пользователей', f.users], ['Подавали объявление', f.posted], ['Писали в чатах', f.chatted], ['Были в сделке', f.dealt], ['Оставили отзыв', f.reviewed]]
+      .map(([t, n]) => `<div class="an-row"><span class="nm">${t}</span><span class="an-meter"><i style="width:${f.users ? Math.round(100 * n / f.users) : 0}%"></i></span><span class="v">${N(n)}</span><span class="s">${pct(n, f.users)}</span></div>`).join('');
+    const rp = d.reports;
+    el.innerHTML = `<h2 class="page">📊 Аналитика</h2>
+    <div class="an-chips" id="anPer">${chips}</div>
+    <div class="sub" style="margin:-4px 2px 10px">Период: ${per}. Обновляется при каждом открытии.</div>
+
+    <div class="an-kpi">
+      ${kpi('Пользователей', N(u.total), '+' + N(u.fresh) + ' ' + per)}
+      ${kpi('Активных сейчас', N(u.dau), 'день · ' + N(u.wau) + ' нед · ' + N(u.mau) + ' мес')}
+      ${kpi('Объявлений в каталоге', N(p.active), 'создано ' + N(p.created) + ' ' + per)}
+      ${kpi('Сделок завершено', N(ds.n), N(ds.vol) + ' ⭐ · ' + ds.rate + '% от созданных')}
+      ${kpi('Отзывов', N(rv.period), 'ср. оценка ' + (rv.avg_period || '—') + ' · всего ' + N(rv.total))}
+      ${kpi('Сообщений в чатах', N(ch.period), N(ch.dialogs) + ' диалогов')}
+    </div>
+
+    ${card('📈 Динамика по дням', bars)}
+
+    ${card('👥 Пользователи', [['Всего', u.total], ['Новых ' + per, u.fresh], ['Активных ' + per, u.active_period], ['Активны сегодня / за неделю / за месяц', `${N(u.dau)} / ${N(u.wau)} / ${N(u.mau)}`], ['С юзернеймом', N(u.with_username) + ' (' + pct(u.with_username, u.total) + ')'], ['Админов и модераторов', u.staff], ['Мошенников (метка)', u.scam], ['Проверенных', u.verified], ['С ручной оценкой в базе', u.rated_manual], ['Блокировок между людьми', u.blocks]].map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join(''))}
+
+    ${card('🧭 Воронка (за всё время)', funnel)}
+
+    ${card('📄 Объявления', [['Всего создано', N(p.total)], ['Активных', N(p.active)], ['Истёкших (не снятых)', N(p.expired)], ['Снятых / удалённых', N(p.removed)], ['Создано ' + per, N(p.created)], ['С фото', N(p.with_photo) + ' (' + pct(p.with_photo, p.total) + ')'], ['Авторов объявлений', N(p.authors)], ['Просмотров всего', N(p.views_total)], ['Уникальных просмотров ' + per, N(p.views_period)], ['Среднее просмотров на объявление', p.views_avg], ['В избранное ' + per, N(p.favs_period) + ' (всего ' + N(p.favs_total) + ')'], ['Поднятий ' + per, N(p.bumped)], ['Сохранённых поисков', N(d.saved_searches)]].map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join(''))}
+
+    ${card('🗂 По темам', rowsHtml(d.by_topic, x => `<div class="an-row"><span class="nm">${esc(x.name)}</span><span class="v">${N(x.active)}</span><span class="s">+${N(x.created)} · 👁 ${N(x.views)} · ♥ ${N(x.favs)}</span></div>`))}
+
+    ${card('🔥 Топ объявлений по просмотрам', rowsHtml(d.top_posts, x => `<div class="an-row"><span class="nm">#${x.id} ${esc(x.title)}<br><small class="dim">${esc(x.author || '')}</small></span><span class="v">👁 ${N(x.views)}</span><span class="s">♥ ${N(x.favs)}</span></div>`))}
+
+    ${card('✍️ Самые активные авторы ' + per, rowsHtml(d.top_authors, x => `<div class="an-row">${who(x)}<span class="v">${N(x.posts)}</span><span class="s">👁 ${N(x.views)}</span></div>`))}
+
+    ${card('🤝 Сделки', `<div class="kv"><span>Создано ${per}</span><b>${N(ds.created)}</b></div><div class="kv"><span>Завершено ${per}</span><b>${N(ds.n)} (${ds.rate}%)</b></div><div class="kv"><span>Оборот ${per}</span><b>${N(ds.vol)} ⭐</b></div><div class="kv"><span>Средний чек</span><b>${N(ds.avg)} ⭐</b></div><div class="kv"><span>Комиссии гаранта</span><b>${N(ds.fee)} ⭐</b></div><div class="kv"><span>Среднее время до завершения</span><b>${ds.avg_hours} ч</b></div><div class="kv"><span>Открытых споров</span><b>${N(ds.disputes_open)}</b></div><div class="an-h" style="font-size:14px">По статусам (всего · ⭐ · за период)</div>${dealTbl || '<div class="sub">Сделок пока нет</div>'}`)}
+
+    ${card('🏆 Топ продавцов ' + per, rowsHtml(d.top_sellers, x => `<div class="an-row">${who(x)}<span class="v">${N(x.deals)}</span><span class="s">${N(x.vol)} ⭐</span></div>`))}
+    ${card('🛒 Топ покупателей ' + per, rowsHtml(d.top_buyers, x => `<div class="an-row">${who(x)}<span class="v">${N(x.deals)}</span><span class="s">${N(x.vol)} ⭐</span></div>`))}
+
+    ${card('⭐ Отзывы', `<div class="kv"><span>Всего / ${per}</span><b>${N(rv.total)} / ${N(rv.period)}</b></div><div class="kv"><span>Средняя оценка (всё / период)</span><b>${rv.avg || '—'} / ${rv.avg_period || '—'}</b></div><div class="kv"><span>С текстом</span><b>${N(rv.with_text)} (${pct(rv.with_text, rv.total)})</b></div><div class="kv"><span>Со скриншотом</span><b>${N(rv.with_photo)} (${pct(rv.with_photo, rv.total)})</b></div><div class="kv"><span>Изменённых</span><b>${N(rv.edited)}</b></div><div class="kv"><span>Сделок с отзывом (отзывов к завершённым сделкам)</span><b>${pct(rv.total, rv.deals_completed)}</b></div><div class="kv"><span>Публикация в группу</span><b>${rv.group_on ? 'включена · в группе ' + N(rv.in_group) : 'выключена (/setreviews)'}</b></div><div class="an-h" style="font-size:14px">Распределение оценок</div>${dist}`)}
+
+    ${card('🌟 Лучшие по оценке (от 2 отзывов)', rowsHtml(d.best_rated, x => `<div class="an-row">${who(x)}<span class="v">★ ${x.avg}</span><span class="s">${x.n} отз.</span></div>`))}
+    ${card('⚠️ Худшие по оценке (от 2 отзывов)', rowsHtml(d.worst_rated, x => `<div class="an-row">${who(x)}<span class="v">★ ${x.avg}</span><span class="s">${x.n} отз.</span></div>`))}
+    ${card('🕒 Последние отзывы', rowsHtml(d.last_reviews, x => `<div class="an-row" style="align-items:flex-start"><span class="nm" style="white-space:normal"><b>${'★'.repeat(x.rating)}${'☆'.repeat(5 - x.rating)}</b> ${esc(x.author)} → ${esc(x.target)}<br><small class="dim">${esc(x.body || 'без текста')}</small></span><span class="s">${esc(x.ts)}</span></div>`))}
+
+    ${card('💬 Чаты', [['Сообщений всего', N(ch.total)], ['Сообщений ' + per, N(ch.period)], ['Диалогов ' + per, N(ch.dialogs)], ['Писали ' + per, N(ch.senders) + ' чел.'], ['Файлов и фото ' + per, N(ch.files)], ['Непрочитанных сейчас', N(ch.unread)]].map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join(''))}
+
+    ${card('📬 Заявки на объявления', rowsHtml(d.requests, x => `<div class="an-row"><span class="nm">${esc(st(x.status))}</span><span class="v">${N(x.total)}</span><span class="s">за период ${N(x.period)}</span></div>`))}
+    ${card('📝 Анкеты в админы', rowsHtml(d.applications, x => `<div class="an-row"><span class="nm">${esc(st(x.status))}</span><span class="v">${N(x.total)}</span><span class="s">за период ${N(x.period)}</span></div>`))}
+    ${card('🛡 Работа модераторов ' + per, rowsHtml(d.moderators, x => `<div class="an-row"><span class="nm">${esc(x.name)}</span><span class="v">${N(x.n)}</span><span class="s">одобрено ${N(x.ok)}</span></div>`))}
+
+    ${card('🚩 Жалобы', `<div class="sub">На людей</div>${rowsHtml(rp.users, x => `<div class="an-row"><span class="nm">${esc(x.category)} · ${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="sub" style="margin-top:8px">На объявления</div>${rowsHtml(rp.posts, x => `<div class="an-row"><span class="nm">${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="sub" style="margin-top:8px">На отзывы и сделки</div>${rowsHtml(rp.misc, x => `<div class="an-row"><span class="nm">${x.kind === 'review' ? 'отзыв' : 'сделка'} · ${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="kv"><span>Жалоб с доказательствами</span><b>${N(rp.with_proofs)}</b></div>`)}
+    ${card('🎯 Больше всего жалоб на человека', rowsHtml(rp.top_reported, x => `<div class="an-row">${who(x)}<span class="v">${N(x.n)}</span><span class="s">открытых ${N(x.opened)}</span></div>`))}
+    ${card('📖 База', `<div class="kv"><span>В «минусе» сейчас</span><b>${N(d.base.minus)}</b></div><div class="kv"><span>Помечены «Мошенник»</span><b>${N(d.base.scam)}</b></div>${rowsHtml(d.base.stars, x => `<div class="an-row"><span class="nm">Ручная оценка ${'★'.repeat(x.s)}</span><span class="v">${N(x.n)}</span></div>`)}`)}
+
+    ${card('🔎 Поведение ' + per, rowsHtml(d.activity, x => `<div class="an-row"><span class="nm">${({view:'Просмотры объявлений',search:'Поиски',topic:'Открытия категорий'})[x.kind] || esc(x.kind)}</span><span class="v">${N(x.n)}</span><span class="s">${N(x.users)} чел.</span></div>`))}
+    ${card('🔤 Частые поисковые запросы ' + per, rowsHtml(d.queries, x => `<div class="an-row"><span class="nm">${esc(x.q)}</span><span class="v">${N(x.n)}</span></div>`))}`;
+    $$('[data-days]', el).forEach(b => b.onclick = () => { days = +b.dataset.days; S.anDays = days; load().catch(fail); });
+    $$('[data-met]', el).forEach(b => b.onclick = () => { metric = b.dataset.met; S.anMetric = metric; load().catch(fail); });
+  };
+  await load();
 };
 views.admin_reports = async el => {
   const d=await api('/api/admin/reports');
   el.innerHTML=`<h2 class="page">Жалобы</h2>`;
   if(!d.reports.length){el.innerHTML+=empty('✓','Новых жалоб нет');return}
   el.innerHTML+=d.reports.map(r=>r.kind==='user'
-    ?`<div class="card glass" data-id="${r.id}" data-kind="user" data-t="${r.target}"><b>🚩 Пользователь: ${esc(r.target_name)}</b><div class="post-meta">Жалоба #${r.id} · ID ${r.target} · от ${r.reporter} · ${esc(r.created)}</div><p>${esc(r.reason)}</p><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn ghost small prof">Профиль</button>${isMain()?'<button class="btn bad small scam">Мошенник</button>':''}<button class="btn ok small done">Закрыть</button></div></div>`
-    :`<div class="card glass" data-id="${r.id}" data-kind="post"><b>Жалоба #${r.id} · объявление #${r.post_id}</b><div class="post-meta">От ${r.reporter} · ${esc(r.created)} · ${esc(r.topic)}</div><p>${esc(r.reason)}</p><div class="rich">${safe(r.text)}</div><button class="btn ok small done">Закрыть жалобу</button></div>`).join('');
+    ?`<div class="card glass" data-id="${r.id}" data-kind="user" data-t="${r.target}"><b>🚩 Пользователь: ${esc(r.target_name)}</b><div class="post-meta">Жалоба #${r.id} · ID ${r.target} · от ${r.reporter} · ${esc(r.created)}</div><p>${esc(r.reason)}</p>${(r.photos&&r.photos.length)?`<div class="cmp-ph">${r.photos.map(u=>`<img src="${esc(u)}" loading="lazy" alt="Доказательство">`).join('')}</div>`:''}<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn ghost small prof">Профиль</button>${isMain()?'<button class="btn bad small scam">Мошенник</button>':''}<button class="btn ok small done">Закрыть</button>${isMain()?'<button class="btn bad small del">🗑 Удалить</button>':''}</div></div>`
+    :`<div class="card glass" data-id="${r.id}" data-kind="post"><b>Жалоба #${r.id} · объявление #${r.post_id}</b><div class="post-meta">От ${r.reporter} · ${esc(r.created)} · ${esc(r.topic)}</div><p>${esc(r.reason)}</p><div class="rich">${safe(r.text)}</div><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn ok small done">Закрыть жалобу</button>${isMain()?'<button class="btn bad small del">🗑 Удалить</button>':''}</div></div>`).join('');
   $$('[data-id]',el).forEach(c=>{
     const kind=c.dataset.kind;
     $('.done',c).onclick=async()=>{try{await api('/api/admin/report_done',{id:+c.dataset.id,kind});c.remove();toast('Жалоба закрыта','good')}catch(e){fail(e)}};
+    const dl=$('.del',c);if(dl)dl.onclick=async()=>{if(!await confirmBox('Удалить жалобу полностью? Это нельзя отменить.'))return;try{await api('/api/admin/report_delete',{id:+c.dataset.id,kind});c.remove();toast('Жалоба удалена','good')}catch(e){fail(e)}};
     const pf=$('.prof',c);if(pf)pf.onclick=()=>go('profile',{id:+c.dataset.t});
     const sc=$('.scam',c);if(sc)sc.onclick=async()=>{if(!await confirmBox('Пометить пользователя как мошенника?'))return;try{await api('/api/admin/user_flag',{user_id:+c.dataset.t,flag:'scam'});await api('/api/admin/report_done',{id:+c.dataset.id,kind});c.remove();toast('Помечен как мошенник','good')}catch(e){fail(e)}};
   });
@@ -2454,7 +2584,7 @@ const bStars = (n, minus) => minus ? '<span class="bs minus"><b>−</b></span>'
 function baseChip(b, id) {
   if (!b) return '';
   const rated = b.minus || b.stars > 0;
-  return `<div><button class="bchip t-${b.tier}" data-base="${id}">📖 ${rated ? (b.minus ? esc(b.status) : `★ ${b.stars} · ${esc(b.label)}`) : 'Открыть в базе'} ›</button></div>`;
+  return `<div><button class="bchip t-${b.tier}" data-base="${id}">📖 ${rated ? (b.minus ? esc(b.status) : `★ ${b.score} · ${esc(b.label)}`) : 'Открыть в базе'} ›</button></div>`;
 }
 
 const baseRow = c => `<div class="bcard glass t-${c.tier}" data-bid="${c.id}">
@@ -2483,9 +2613,9 @@ views.base = async el => {
   const idle = () => {
     box.innerHTML = `${stats ? `<div class="bstats"><div class="bp-stat"><small>В базе</small><b>${fmtN(stats.total)}</b></div><div class="bp-stat"><small>С оценкой</small><b>${fmtN(stats.rated)}</b></div><div class="bp-stat ${stats.minus ? 'warn' : ''}"><small>В минусе</small><b>${fmtN(stats.minus)}</b></div></div>` : ''}
       <div class="card glass"><b>Как читать рейтинг</b><div style="margin-top:8px">
-      ${[[5, 'Отличный админ / продавец'], [4, 'Хороший'], [3, 'Так себе'], [2, 'Плохой'], [1, 'Ужасный'], [0, 'Обычный пользователь — без отметок']].map(([n, t]) => `<div class="lg t-${BASE_TIER_OF[n]}">${bStars(n)}<span>${esc(t)}</span></div>`).join('')}
+      ${[[5, 'Отличный админ / продавец'], [4, 'Хороший'], [3, 'Так себе'], [2, 'Плохой'], [1, 'Ужасный'], [0, 'Нет оценки (авто — по отзывам)']].map(([n, t]) => `<div class="lg t-${BASE_TIER_OF[n]}">${bStars(n)}<span>${esc(t)}</span></div>`).join('')}
       <div class="lg t-minus">${bStars(0, true)}<span>Много жалоб (от ${minusAt}) — ненадёжный человек</span></div></div>
-      <small class="dim">Звёзды выставляют модераторы. «Минус» уходит автоматически, если на человека пожаловались ${minusAt}+ разных пользователей и жалобы ещё не закрыты.</small></div>`;
+      <small class="dim">Рейтинг один и тот же на бирже и в базе: если модератор поставил звёзды — берутся они, иначе среднее по отзывам. «Минус» уходит автоматически, если на человека пожаловались ${minusAt}+ разных пользователей и жалобы ещё не закрыты.</small></div>`;
   };
   const run = async () => {
     const my = ++tok; mark();
@@ -2520,7 +2650,7 @@ views.base = async el => {
 };
 
 function rateSheet(c, done) {
-  let stars = c.stars, role = c.role_key || '';
+  let stars = c.manual != null ? c.manual : c.stars, role = c.role_key || '';
   const bg = document.createElement('div'); bg.className = 'sheet-bg';
   bg.innerHTML = `<div class="sheet"><div class="sh-t">Рейтинг в базе · ${esc(c.name)}</div>
     <div class="rate-stars" id="rsStars">${[0, 1, 2, 3, 4, 5].map(n => `<button data-n="${n}" class="t-${BASE_TIER_OF[n]}">${n}</button>`).join('')}</div>
@@ -2533,7 +2663,7 @@ function rateSheet(c, done) {
   const paint = () => {
     $$('#rsStars button', bg).forEach(b => b.classList.toggle('on', +b.dataset.n === stars));
     $$('#rsRoles .chip', bg).forEach(b => b.classList.toggle('sel', b.dataset.r === role));
-    const p = $('#rsPrev', bg); p.className = 'rate-prev t-' + BASE_TIER_OF[stars]; p.textContent = baseLabelOf(stars, role);
+    const p = $('#rsPrev', bg); p.className = 'rate-prev t-' + BASE_TIER_OF[stars]; p.textContent = stars > 0 ? baseLabelOf(stars, role) : 'Авто — рейтинг по отзывам, как на бирже';
   };
   bg.onclick = async e => {
     if (e.target === bg || e.target.closest('.cancel')) return close();
@@ -2547,17 +2677,17 @@ function rateSheet(c, done) {
   document.body.appendChild(bg); paint();
 }
 
-const reportBase = c => reportSheet('Жалоба на ' + c.name, async (reason, cat) => {
-  const r = await api('/api/report_user', { user_id: c.id, reason, category: cat });
+const reportBase = c => reportSheet('Жалоба на ' + c.name, async (reason, cat, t, blobs) => {
+  const r = await api('/api/report_user', reportBody({ user_id: c.id, reason, category: cat }, blobs));
   setTimeout(() => go('base_user', { id: c.id }, { replace: true }), 350); return r;
-}, BASE_CATS);
+}, BASE_CATS, true);
 
 views.base_user = async (el, params = {}) => {
   let c;
   try { c = await api('/api/base/profile?id=' + Number(params.id)); }
   catch (e) { if (e.status === 404) { el.innerHTML = '<h2 class="page">База</h2>' + empty('❓', 'Человека нет в базе'); return; } throw e; }
   const own = c.is_me, lk = profLink(c.id, c.username);
-  const score = c.minus ? (c.minus === 'scam' ? 'Мошенник' : 'Минус') : `${c.stars} / 5`;
+  const score = c.minus ? (c.minus === 'scam' ? 'Мошенник' : 'Минус') : `${c.score} / 5`;
   el.innerHTML = `<h2 class="page">Карточка из базы</h2><div class="t-${c.tier}">
     <div class="bp-hero glass">
       ${avHtml('bp-av', c.id, c.name, c.has_avatar, c.photo_url)}
@@ -2589,7 +2719,7 @@ views.base_user = async (el, params = {}) => {
       ${c.can_rate ? '<button class="btn small ok" id="bpRate">⭐ Изменить рейтинг</button>' : ''}
     </div>
     ${c.complaints.length ? `<div class="card glass"><b>Жалобы на человека</b>
-      ${c.complaints.map(x => `<div class="cmp ${x.status === 'new' ? 'open' : ''}"><div class="rowsb"><b>${esc(x.by||'Жалоба #'+x.id)}</b><span class="badge ${x.status === 'new' ? '' : 'good'}">${x.status === 'new' ? 'активна' : 'закрыта'}</span></div><small class="dim">${esc(x.created)}${x.category ? ' · ' + esc(x.category) : ''}</small><p>${esc(x.reason)}</p></div>`).join('')}</div>` : ''}
+      ${c.complaints.map(x => `<div class="cmp ${x.status === 'new' ? 'open' : ''}"><div class="rowsb"><b>${esc(x.by||'Жалоба #'+x.id)}</b><span class="badge ${x.status === 'new' ? '' : 'good'}">${x.status === 'new' ? 'активна' : 'закрыта'}</span></div><small class="dim">${esc(x.created)}${x.category ? ' · ' + esc(x.category) : ''}</small><p>${esc(x.reason)}</p>${(x.photos && x.photos.length) ? `<div class="cmp-ph">${x.photos.map(u => `<img src="${esc(u)}" loading="lazy" alt="Доказательство">`).join('')}</div>` : ''}${c.can_rate ? `<button class="btn small bad cmp-del" data-delcmp="${x.id}">🗑 Удалить жалобу полностью</button>` : ''}</div>`).join('')}</div>` : ''}
   </div>`;
   avFill(el);
   $('#bpLink', el).onclick = () => linkSheet('Ссылка на профиль', lk.code, lk.deep);
@@ -2597,6 +2727,10 @@ views.base_user = async (el, params = {}) => {
   const pc = $('#bpChat', el); if (pc) pc.onclick = () => go('chat', { peer: c.id });
   const pp = $('#bpProf', el); if (pp) pp.onclick = () => go('profile', { id: c.id });
   const rp = $('#bpRep', el); if (rp) rp.onclick = () => reportBase(c);
+  $$('[data-delcmp]', el).forEach(b => b.onclick = async () => {
+    if (!await confirmBox('Удалить жалобу полностью вместе со скриншотами? Это нельзя отменить.')) return;
+    try { await api('/api/admin/report_delete', { id: +b.dataset.delcmp, kind: 'user' }); toast('Жалоба удалена', 'good'); go('base_user', { id: c.id }, { replace: true }); } catch (er) { fail(er); }
+  });
   const rt = $('#bpRate', el); if (rt) rt.onclick = () => rateSheet(c, () => go('base_user', { id: c.id }, { replace: true }));
   if (params.report && !own && !c.reported_by_me) setTimeout(() => reportBase(c), 450);
 };

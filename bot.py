@@ -35,7 +35,7 @@ from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    BufferedInputFile, CallbackQuery, KeyboardButton, MenuButtonWebApp, Message,
+    BufferedInputFile, CallbackQuery, InputMediaPhoto, KeyboardButton, MenuButtonWebApp, Message,
     ReplyKeyboardMarkup, ReplyParameters, WebAppInfo, LabeledPrice, PreCheckoutQuery,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -671,11 +671,19 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS base_set_by BIGINT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS base_set_at TIMESTAMPTZ;
         ALTER TABLE user_reports ADD COLUMN IF NOT EXISTS category TEXT;
+        CREATE TABLE IF NOT EXISTS report_photos(
+            id BIGSERIAL PRIMARY KEY, report_id BIGINT NOT NULL REFERENCES user_reports(id) ON DELETE CASCADE,
+            pos INT NOT NULL DEFAULT 0, data BYTEA NOT NULL, mime TEXT NOT NULL DEFAULT 'image/jpeg');
+        CREATE INDEX IF NOT EXISTS report_photos_rep_idx ON report_photos(report_id, pos, id);
         CREATE TABLE IF NOT EXISTS username_history(
             id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, username TEXT NOT NULL,
             first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE UNIQUE INDEX IF NOT EXISTS username_history_uq ON username_history(user_id, lower(username));
         CREATE INDEX IF NOT EXISTS username_history_name_idx ON username_history(lower(username));
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS deal_kind TEXT;
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS deal_id BIGINT;
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS pub_chat_id BIGINT;
+        ALTER TABLE user_reviews ADD COLUMN IF NOT EXISTS pub_msg_ids BIGINT[] NOT NULL DEFAULT '{}';
         """
     )
     if not await pool.fetchval("SELECT value FROM settings WHERE key='uname_hist_seed'"):
@@ -1097,6 +1105,136 @@ async def ensure_topic_thread(bot, tid):
     except Exception:
         log.warning("cannot create forum topic for %s", t["name"], exc_info=True)
         return False
+
+
+
+# ---------------------------------------------------------------- отзывы → тема группы
+async def review_deal_info(a, b):
+    """Последняя завершённая сделка между двумя людьми: dict(kind,id,buyer_id,seller_id,amount,terms,title) или None."""
+    row = await pool.fetchrow("""
+        SELECT * FROM (
+          SELECT 'direct'::text kind, id, buyer_id, seller_id, amount, terms, listing_post_id, COALESCE(closed_at,updated_at) ts
+            FROM direct_deals WHERE status='completed' AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1))
+          UNION ALL
+          SELECT 'escrow'::text, id, buyer_id, seller_id, amount, terms, listing_post_id, COALESCE(closed_at,updated_at)
+            FROM escrow_deals WHERE status='completed' AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1))
+        ) x ORDER BY ts DESC NULLS LAST LIMIT 1""", int(a), int(b))
+    if not row:
+        return None
+    d = dict(row)
+    title = ""
+    if d.get("listing_post_id"):
+        txt = await pool.fetchval("SELECT text FROM posts WHERE id=$1", d["listing_post_id"])
+        lines = [x.strip() for x in strip_html(txt or "").splitlines() if x.strip()]
+        title = lines[0] if lines else ""
+    if not title:
+        title = (d.get("terms") or "").strip().replace("\n", " ")
+    d["title"] = title[:200] or "без названия"
+    return d
+
+
+async def remove_review_post(bot, rid):
+    """Удаляет из группы пост(ы) отзыва. Не критично при сбое."""
+    row = await pool.fetchrow("SELECT pub_chat_id,pub_msg_ids FROM user_reviews WHERE id=$1", int(rid))
+    bot = bot or _BOT
+    if not row or bot is None or not row["pub_chat_id"] or not row["pub_msg_ids"]:
+        return
+    for mid in row["pub_msg_ids"]:
+        try:
+            await bot.delete_message(int(row["pub_chat_id"]), int(mid))
+        except Exception:
+            log.warning("cannot delete review message %s", mid, exc_info=True)
+    await pool.execute("UPDATE user_reviews SET pub_msg_ids='{}' WHERE id=$1", int(rid))
+
+
+async def publish_review(bot, rid, edited=False):
+    """Публикует отзыв в выбранную тему группы (/setreviews). Если отзыв изменён — старый пост заменяется новым."""
+    chat = await get_setting("rev_chat")
+    if not chat:
+        return False
+    bot = bot or _BOT
+    if bot is None:
+        return False
+    thread = int(await get_setting("rev_thread") or 0) or None
+    r = await pool.fetchrow("""SELECT id,reviewer_id,target_id,rating,text,created_at,updated_at,deal_kind,deal_id,
+        (photo_data IS NOT NULL) has_photo, photo_data, pub_chat_id, pub_msg_ids FROM user_reviews WHERE id=$1""", int(rid))
+    if not r:
+        return False
+    if r["pub_msg_ids"]:
+        await remove_review_post(bot, rid)
+    deal = await review_deal_info(r["reviewer_id"], r["target_id"])
+    if deal:
+        buyer, seller = deal["buyer_id"], deal["seller_id"]
+    else:
+        buyer, seller = r["reviewer_id"], r["target_id"]
+    role_txt = "покупатель" if r["reviewer_id"] == buyer else "продавец"
+    rt = (await seller_ratings([r["target_id"]])).get(r["target_id"])
+    L = [f"{'✏️ <b>Отзыв изменён</b>' if edited else '⭐ <b>Новый отзыв</b>'} · <code>Exg:/r{r['id']}</code>", "",
+         f"<b>{stars_txt(r['rating'])}  {r['rating']}/5</b>",
+         f"🛍 <b>Услуга:</b> {esc(deal['title']) if deal else 'не определена'}"]
+    if deal:
+        kind = "через гаранта" if deal["kind"] == "escrow" else "напрямую"
+        L.append(f"🤝 <b>Сделка:</b> #{deal['id']} · {kind} · {int(deal['amount'] or 0)} ⭐")
+    L += ["", f"🛒 <b>Покупатель:</b> {await who_html(buyer)}",
+          f"🏷 <b>Продавец:</b> {await who_html(seller)}",
+          f"✍️ <b>Автор отзыва:</b> {role_txt}", "", "💬 <b>Отзыв:</b>"]
+    L.append(f"<blockquote>{esc(r['text'])}</blockquote>" if (r["text"] or "").strip() else "<i>без текста</i>")
+    tail = f"🕒 {fmt_dt(r['created_at'])}"
+    if edited:
+        tail += f" · изменён {fmt_dt(r['updated_at'])}"
+    L += ["", tail]
+    if rt:
+        L.append(f"📊 Рейтинг получателя: <b>{rt[0]}</b> · отзывов: {rt[1]}")
+    ids = []
+    try:
+        m = await bot.send_message(int(chat), "\n".join(L), message_thread_id=thread)
+        ids.append(m.message_id)
+        if r["has_photo"]:
+            ph = await bot.send_photo(int(chat), BufferedInputFile(bytes(r["photo_data"]), "review.jpg"),
+                                      caption=f"📷 Скриншот к отзыву #{r['id']}", message_thread_id=thread,
+                                      reply_to_message_id=m.message_id)
+            ids.append(ph.message_id)
+        return True
+    except Exception:
+        log.exception("publish review to group failed")
+        return bool(ids)
+    finally:
+        if ids:
+            try:
+                await pool.execute("UPDATE user_reviews SET pub_chat_id=$2, pub_msg_ids=$3 WHERE id=$1",
+                                   int(rid), int(chat), ids)
+            except Exception:
+                log.exception("cannot save review message ids")
+
+
+@router.message(Command("setreviews"), F.chat.type.in_(GROUPS))
+async def cmd_setreviews(m: Message, bot: Bot):
+    """Выбрать тему для отзывов: отправьте /setreviews внутри нужной темы группы."""
+    if not await is_main(m.from_user.id):
+        return
+    thread = m.message_thread_id if m.is_topic_message else 0
+    await set_setting("rev_chat", m.chat.id)
+    await set_setting("rev_thread", thread)
+    try:
+        me = await bot.get_me()
+        mem = await bot.get_chat_member(m.chat.id, me.id)
+        ok = mem.status in ("administrator", "creator") or mem.status == "member"
+    except Exception:
+        ok = False
+    txt = "✅ Все новые отзывы будут публиковаться в ЭТУ тему." if thread else \
+          "✅ Все новые отзывы будут публиковаться в эту группу (общий чат — тема не выбрана)."
+    txt += "\nУдаление отзыва админом уберёт и пост отсюда; правка отзыва заменит пост новым."
+    if not ok:
+        txt += "\n⚠️ Бот не видит свои права в группе — сделайте его администратором."
+    await m.reply(txt)
+
+
+@router.message(Command("unsetreviews"), F.chat.type.in_(GROUPS))
+async def cmd_unsetreviews(m: Message):
+    if not await is_main(m.from_user.id):
+        return
+    await pool.execute("DELETE FROM settings WHERE key IN ('rev_chat','rev_thread')")
+    await m.reply("✅ Публикация отзывов в группу отключена.")
 
 
 @router.message(Command("setgroup"), F.chat.type.in_(GROUPS))
@@ -1660,6 +1798,31 @@ BASE_MINUS_REPORTS = max(1, int(os.getenv("BASE_MINUS_REPORTS", "3") or 3))
 BASE_REPORT_CATS = ["Скам / обман", "Не выполнил условия", "Выдаёт себя за другого",
                     "Спам / реклама", "Оскорбления", "Другое"]
 
+def eff_score(manual, avg, cnt):
+    """Единый рейтинг человека — одно и то же число на бирже и в базе.
+    Админ поставил звёзды вручную (1–5) — берём их; иначе среднее по отзывам (до десятых); иначе 0."""
+    manual = int(manual or 0)
+    if 1 <= manual <= 5:
+        return manual
+    if cnt and avg:
+        v = round(float(avg), 1)
+        return int(v) if v == int(v) else v
+    return 0
+
+
+def score_stars(score, avg=None, manual=0):
+    """Целые звёзды 0–5 для плашек/уровней: ручные как есть, иначе среднее по отзывам, округлённое как в SQL (.5 вверх)."""
+    manual = int(manual or 0)
+    if 1 <= manual <= 5:
+        return manual
+    base = float(avg) if avg else float(score or 0)
+    return max(0, min(5, int(base + 0.5)))
+
+
+# то же самое на стороне SQL: ручные звёзды, иначе округлённое среднее по отзывам (.5 вверх)
+EFF_STARS_SQL = ("COALESCE(NULLIF(u.base_stars,0), "
+                 "round((SELECT avg(rating) FROM user_reviews v WHERE v.target_id=u.user_id)::numeric), 0)")
+
 BASE_SQL = """
 SELECT u.user_id, u.username, u.first_name, u.last_name, u.created_at, u.bio, u.verified, u.scam,
   u.badge_dev, u.badge_adm, u.base_stars, u.base_role, u.base_note, u.base_set_at,
@@ -1768,7 +1931,9 @@ async def base_search_ids(q, limit=8):
 
 
 def base_card(r, via=None):
-    stars = max(0, min(5, int(r["base_stars"] or 0)))
+    manual = max(0, min(5, int(r["base_stars"] or 0)))
+    score = eff_score(manual, r["rating"], r["reviews"])
+    stars = score_stars(score, r["rating"], manual)
     rk = r["base_role"] if r["base_role"] in BASE_ROLES else ""
     reports = int(r["reports"] or 0)
     minus = "scam" if r["scam"] else ("reports" if reports >= BASE_MINUS_REPORTS else None)
@@ -1780,7 +1945,7 @@ def base_card(r, via=None):
         "has_avatar": bool(r["has_avatar"]), "photo_url": r["photo_url"],
         "code": "Exg:/" + (f"@{un}" if un else f"u{uid}"),
         "created": r["created_at"].astimezone(TZ).strftime("%d.%m.%Y"),
-        "stars": stars, "role": rk, "role_title": BASE_ROLES[rk][0] if rk else "",
+        "stars": stars, "score": score, "manual": manual, "role": rk, "role_title": BASE_ROLES[rk][0] if rk else "",
         "label": base_label(stars, rk), "tier": tier, "minus": minus,
         "status": "Мошенник" if minus == "scam" else ("Ненадёжный" if minus else base_label(stars, rk)),
         "hint": BASE_HINT[tier],
@@ -1856,7 +2021,7 @@ def base_card_html(c):
         L.append("⛔ <b>В МИНУСЕ · Ненадёжный</b>")
         L.append(f"<i>{c['reports']} {plural(c['reports'], 'жалоба', 'жалобы', 'жалоб')} на проверке</i>")
     else:
-        L.append(f"<b>{stars_txt(c['stars'])}</b>  <b>{c['stars']}/5</b>")
+        L.append(f"<b>{stars_txt(c['stars'])}</b>  <b>{c['score']}/5</b>")
         L.append(f"{BASE_ICON[tier]} <b>{esc(c['label'])}</b>")
     L.append(f"<i>{esc(c['hint'])}</i>")
     rep = (f"<b>{c['reports']}</b> активн. · {c['reports_all']} всего" if c["reports_all"] else "нет")
@@ -1880,7 +2045,8 @@ def base_card_html(c):
         L += ["", "🚩 <b>Последние жалобы:</b>"]
         for x in c["complaints"]:
             txt = x["reason"][:140] + ("…" if len(x["reason"]) > 140 else "")
-            L.append(f"{'🔴' if x['status'] == 'new' else '⚪️'} <i>{esc(x['created'][:10])}</i> · {esc(txt)}")
+            L.append(f"{'🔴' if x['status'] == 'new' else '⚪️'} <i>{esc(x['created'][:10])}</i> · {esc(txt)}"
+                     + (f" 📎{len(x['photos'])}" if x.get("photos") else ""))
     if c["note"]:
         L += ["", f"📝 <b>Заметка модераторов:</b> {esc(c['note'])}"]
     return "\n".join(L)
@@ -1918,14 +2084,27 @@ def base_kb(c, staff=False):
     return kb.as_markup()
 
 
+async def report_photo_urls(report_ids):
+    """{report_id: [ссылки на скриншоты-доказательства]}"""
+    ids = list({int(i) for i in report_ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("SELECT id,report_id FROM report_photos WHERE report_id=ANY($1::bigint[]) ORDER BY pos,id", ids)
+    out = {}
+    for r in rows:
+        out.setdefault(r["report_id"], []).append(img_url("rp", r["id"]))
+    return out
+
+
 async def base_complaints(uid, limit=15, staff=False):
-    """Жалобы на человека. Видны всем; кто именно пожаловался — только модераторам."""
+    """Жалобы на человека (с доказательствами-скриншотами). Видны всем; кто именно пожаловался — только модераторам."""
     rows = await pool.fetch(
         "SELECT x.id,x.reason,x.category,x.status,x.created_at,x.reporter_id,u.username,u.first_name "
         "FROM user_reports x LEFT JOIN users u ON u.user_id=x.reporter_id "
         "WHERE x.target_id=$1 ORDER BY x.id DESC LIMIT $2", uid, limit)
+    ph = await report_photo_urls([x["id"] for x in rows])
     return [{"id": x["id"], "reason": x["reason"], "category": x["category"], "status": x["status"],
-             "created": fmt_dt(x["created_at"]),
+             "created": fmt_dt(x["created_at"]), "photos": ph.get(x["id"], []),
              "by": (("@" + x["username"]) if x["username"] else (x["first_name"] or str(x["reporter_id"]))) if staff else None}
             for x in rows]
 
@@ -1982,6 +2161,7 @@ async def cmd_rate(m: Message, command: CommandObject, bot: Bot):
     if not m.from_user or not await is_main(m.from_user.id):
         return
     usage = ("<b>Выставить рейтинг в базе</b>\n<code>/rate @ник 0-5 [админ|продавец|пиарщик|монтажёр] [заметка]</code>\n"
+             "0 — убрать ручную оценку: рейтинг станет автоматическим (по отзывам, как на бирже).\n"
              "Роль <code>-</code> — убрать роль, заметка <code>-</code> — убрать заметку. "
              "Можно ответить на сообщение: <code>/rate 5 админ</code>.")
     args = (command.args or "").split()
@@ -2031,7 +2211,7 @@ async def cb_base_stars(cb: CallbackQuery):
         await cb.message.edit_text(base_card_html(c), reply_markup=base_kb(c, True))
     except TelegramBadRequest:
         pass
-    await cb.answer(f"Рейтинг: {n}/5" if n else "Рейтинг сброшен")
+    await cb.answer(f"Рейтинг: {n}/5" if n else "Ручная оценка снята — рейтинг по отзывам")
 
 
 @router.callback_query(F.data == "sub:check")
@@ -3405,7 +3585,7 @@ async def api_img(request):
         ident = int(request.match_info["id"])
     except ValueError:
         raise web.HTTPNotFound()
-    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r", "rv", "dm", "ap") else ""
+    want = img_url(kind, ident).split("t=")[1] if kind in ("p", "r", "rv", "dm", "ap", "rp") else ""
     if not want or not hmac.compare_digest(request.query.get("t", ""), want):
         raise web.HTTPNotFound()
     if kind == "rv":
@@ -3414,6 +3594,12 @@ async def api_img(request):
             raise web.HTTPNotFound()
         return web.Response(body=bytes(row["photo_data"]), content_type=row["photo_mime"] or "image/jpeg",
                             headers={"Cache-Control": "private, max-age=600"})
+    if kind == "rp":
+        row = await pool.fetchrow("SELECT data,mime FROM report_photos WHERE id=$1", ident)
+        if not row:
+            raise web.HTTPNotFound()
+        return web.Response(body=bytes(row["data"]), content_type=safe_mime(row["mime"], IMG_MIMES),
+                            headers={"Cache-Control": "private, max-age=600", "X-Content-Type-Options": "nosniff"})
     if kind == "ap":
         row = await pool.fetchrow("SELECT data,mime FROM ad_photos WHERE id=$1", ident)
         if not row:
@@ -3601,12 +3787,14 @@ def post_json(p, uid=None):
 
 
 async def seller_ratings(user_ids):
+    """{user_id: (единый рейтинг, число отзывов)} — то же число, что и в «Базе»."""
     ids = list({int(i) for i in user_ids if i})
     if not ids:
         return {}
-    rows = await pool.fetch("""SELECT target_id, avg(rating)::float a, count(*)::int c FROM user_reviews
-        WHERE target_id = ANY($1::bigint[]) GROUP BY target_id""", ids)
-    return {r["target_id"]: (round(r["a"], 1), r["c"]) for r in rows}
+    rows = await pool.fetch("""SELECT u.user_id, u.base_stars, avg(r.rating)::float a, count(r.id)::int c
+        FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
+        WHERE u.user_id = ANY($1::bigint[]) GROUP BY u.user_id""", ids)
+    return {r["user_id"]: (eff_score(r["base_stars"], r["a"], r["c"]), r["c"]) for r in rows}
 
 
 async def avatar_info(ids):
@@ -3788,7 +3976,8 @@ async def notify_staff(text, markup=None):
     if _BOT is None:
         return
     try:
-        await deliver_card(_BOT, text, markup)
+        first, _ = await deliver_card(_BOT, text, markup)
+        return first
     except Exception:
         log.exception("notify_staff failed")
 
@@ -3900,7 +4089,12 @@ async def cb_user_report(cb: CallbackQuery):
     r = await pool.fetchrow("SELECT * FROM user_reports WHERE id=$1", int(rid))
     if not r:
         return await cb.answer("Жалоба не найдена", show_alert=True)
-    if act == "scam":
+    if act == "del":
+        if not await is_main(cb.from_user.id):
+            return await cb.answer("Удалять жалобы может только главный админ", show_alert=True)
+        await pool.execute("DELETE FROM user_reports WHERE id=$1", r["id"])
+        foot = "🗑 Жалоба удалена полностью"
+    elif act == "scam":
         await pool.execute("UPDATE users SET scam=TRUE WHERE user_id=$1", r["target_id"])
         await pool.execute("UPDATE user_reports SET status='reviewed' WHERE target_id=$1", r["target_id"])
         foot = "🚫 Помечен как мошенник"
@@ -3944,6 +4138,7 @@ async def cb_misc_report(cb: CallbackQuery):
     if not r:
         return await cb.answer("Жалоба не найдена", show_alert=True)
     if act == "delrev":
+        await remove_review_post(cb.bot, r["ref_id"])
         await pool.execute("DELETE FROM user_reviews WHERE id=$1", r["ref_id"])
         foot = "🗑 Отзыв удалён"
     elif act == "scam" and r["target_id"]:
@@ -4162,7 +4357,7 @@ async def api_profile(request):
     me_id = request["u"]["id"]
     badges = (await user_badges([uid])).get(uid, [])
     bc = (await base_cards([uid])).get(uid)
-    base_sum = {"stars": bc["stars"], "label": bc["label"], "status": bc["status"], "tier": bc["tier"], "minus": bc["minus"]} if bc else None
+    base_sum = {"stars": bc["stars"], "score": bc["score"], "label": bc["label"], "status": bc["status"], "tier": bc["tier"], "minus": bc["minus"]} if bc else None
     by_me = by_peer = False
     if uid != me_id:
         by_me, by_peer = await block_state(me_id, uid)
@@ -4178,7 +4373,7 @@ async def api_profile(request):
         "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
-        "rating": round(row["rating"],2), "reviews": row["reviews"], "completed_deals": deals, "history": history,
+        "rating": (bc["score"] if bc else round(row["rating"],1)), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "sb": sb, "can_badge": me_id == OWNER_ID,
         "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"])} if me_id == OWNER_ID else None,
@@ -4288,10 +4483,15 @@ async def api_profile_review_save(request):
         SELECT 1 FROM direct_deals WHERE status='completed'
         AND ((buyer_id=$1 AND seller_id=$2) OR (buyer_id=$2 AND seller_id=$1)) LIMIT 1""",uid,target)
     if not eligible: raise ApiError(403,"review_after_deal_only")
-    await pool.execute("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text,photo_data,photo_mime) VALUES($1,$2,$3,$4,$5,$6)
+    existed=await pool.fetchval("SELECT id FROM user_reviews WHERE reviewer_id=$1 AND target_id=$2",uid,target)
+    deal=await review_deal_info(uid,target)
+    rid=await pool.fetchval("""INSERT INTO user_reviews(reviewer_id,target_id,rating,text,photo_data,photo_mime,deal_kind,deal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
         ON CONFLICT(reviewer_id,target_id) DO UPDATE SET rating=EXCLUDED.rating,text=EXCLUDED.text,
         photo_data=COALESCE(EXCLUDED.photo_data,user_reviews.photo_data),
-        photo_mime=COALESCE(EXCLUDED.photo_mime,user_reviews.photo_mime),updated_at=now()""",uid,target,rating,txt,photo,pmime)
+        photo_mime=COALESCE(EXCLUDED.photo_mime,user_reviews.photo_mime),
+        deal_kind=EXCLUDED.deal_kind,deal_id=EXCLUDED.deal_id,updated_at=now() RETURNING id""",
+        uid,target,rating,txt,photo,pmime,deal["kind"] if deal else None,deal["id"] if deal else None)
+    asyncio.create_task(publish_review(request.app["bot"],rid,edited=bool(existed)))
     return jr({"ok":True})
 
 
@@ -4423,9 +4623,28 @@ async def api_blocks(request):
     return jr({"users":[{"id":r["user_id"],"name":" ".join(x for x in [r["first_name"],r["last_name"]] if x) or r["username"] or "Пользователь"} for r in rows]})
 
 
+MAX_REPORT_PHOTOS = 5
+
+
 async def api_report_user(request):
-    uid=request["u"]["id"]; d=await body(request)
-    target=int(d.get("user_id") or 0); post_id=int(d.get("post_id") or 0) or None
+    uid=request["u"]["id"]
+    files=[]
+    if (request.content_type or "").startswith("multipart/"):
+        form=await request.post()
+        d={k:form.get(k) for k in ("user_id","post_id","category","reason")}
+        for f in form.getall("photo",[]):
+            if not hasattr(f,"file"): continue
+            data=f.file.read(); mime=getattr(f,"content_type",None) or "image/jpeg"
+            if not data: continue
+            if len(data)>5*1024*1024 or mime not in IMG_MIMES: raise ApiError(400,"bad_image")
+            files.append((bytes(data),mime))
+        if len(files)>MAX_REPORT_PHOTOS: raise ApiError(400,"too_many_photos")
+    else:
+        d=await body(request)
+    try:
+        target=int(d.get("user_id") or 0); post_id=int(d.get("post_id") or 0) or None
+    except (TypeError, ValueError):
+        raise ApiError(400,"bad_input")
     cat=str(d.get("category") or "").strip(); cat=cat if cat in BASE_REPORT_CATS else None
     reason=(d.get("reason") or "Жалоба на пользователя").strip()[:500]
     if not target or target==uid: raise ApiError(400,"bad_input")
@@ -4434,25 +4653,38 @@ async def api_report_user(request):
     row=await pool.fetchrow("INSERT INTO user_reports(target_id,reporter_id,post_id,reason,category) VALUES($1,$2,$3,$4,$5) "
         "ON CONFLICT(target_id,reporter_id) DO NOTHING RETURNING id",target,uid,post_id,reason,cat)
     if row:
+        for i,(data,mime) in enumerate(files):
+            await pool.execute("INSERT INTO report_photos(report_id,pos,data,mime) VALUES($1,$2,$3,$4)",row["id"],i,data,mime)
         kb=InlineKeyboardBuilder()
         kb.button(text="🚫 Мошенник",callback_data=f"ur:scam:{row['id']}")
         kb.button(text="✅ Закрыть",callback_data=f"ur:ok:{row['id']}")
+        kb.button(text="🗑 Удалить полностью",callback_data=f"ur:del:{row['id']}")
         tun=await pool.fetchval("SELECT username FROM users WHERE user_id=$1",target)
         add_link_buttons(kb,[("👤 Профиль",app_link(f"n_{tun}" if tun else f"u_{target}")),
                              ("📖 В базе",app_link(f"b_{target}")),
                              ("📄 Объявление",app_link(f"ad_{post_id}") if post_id else "")])
-        kb.adjust(2,2)
-        asyncio.create_task(notify_staff(
-            f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
+        kb.adjust(2,1,2,1)
+        text=(f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
             f"На: {await who_html(target)}\n"
             f"От: {await who_html(uid)}\n"
             + (f"Категория: <b>{esc(cat)}</b>\n" if cat else "") + f"Причина: {esc(reason)}"
-            + (f"\nОбъявление: #{post_id} · <code>Exg:/a{post_id}</code>" + (f' · <a href="{app_link(f"ad_{post_id}")}">открыть</a>' if app_link(f"ad_{post_id}") else "") if post_id else ""), kb.as_markup()))
+            + (f"\n📎 Доказательства: {len(files)} скрин." if files else "")
+            + (f"\nОбъявление: #{post_id} · <code>Exg:/a{post_id}</code>" + (f' · <a href="{app_link(f"ad_{post_id}")}">открыть</a>' if app_link(f"ad_{post_id}") else "") if post_id else ""))
+
+        async def notify():
+            first=await notify_staff(text, kb.as_markup())
+            if first is not None and files and _BOT is not None:
+                try:
+                    media=[InputMediaPhoto(media=BufferedInputFile(data,filename=f"proof{i+1}.jpg")) for i,(data,_) in enumerate(files)]
+                    await _BOT.send_media_group(first.chat.id,media,reply_parameters=ReplyParameters(message_id=first.message_id,allow_sending_without_reply=True))
+                except Exception:
+                    log.exception("report proofs to staff failed")
+        asyncio.create_task(notify())
         n=await pool.fetchval("SELECT count(DISTINCT reporter_id) FROM user_reports WHERE target_id=$1 AND status='new'",target)
         if n==BASE_MINUS_REPORTS:
             asyncio.create_task(notify_staff(
                 f"⛔ <b>В базе новый минус:</b> {await who_html(target)}\n"
-                f"Набралось {n} активных жалоб — человек помечен как «Ненадёжный». Если жалобы необоснованны — закройте их («✅ Закрыть»), и метка снимется."))
+                f"Набралось {n} активных жалоб — человек помечен как «Ненадёжный». Если жалобы необоснованны — закройте их («✅ Закрыть») или удалите, и метка снимется."))
     return jr({"ok":True,"duplicate":row is None})
 
 
@@ -4524,7 +4756,7 @@ async def api_base_profile(request):
 async def api_base_list(request):
     kind = request.query.get("kind") or "top"
     stats = await pool.fetchrow(
-        """SELECT count(*)::int total, count(*) FILTER (WHERE base_stars>0)::int rated,
+        """SELECT count(*)::int total, count(*) FILTER (WHERE base_stars>0 OR EXISTS(SELECT 1 FROM user_reviews v WHERE v.target_id=users.user_id))::int rated,
            count(*) FILTER (WHERE scam OR (SELECT count(DISTINCT reporter_id) FROM user_reports x
                 WHERE x.target_id=users.user_id AND x.status='new')>=$1)::int minus FROM users""", BASE_MINUS_REPORTS)
     if kind == "minus":
@@ -4538,8 +4770,8 @@ async def api_base_list(request):
             """SELECT u.user_id FROM users u,
                  LATERAL (SELECT count(DISTINCT reporter_id) n FROM user_reports x
                           WHERE x.target_id=u.user_id AND x.status='new') r
-               WHERE u.base_stars>=4 AND NOT u.scam AND r.n<$1
-               ORDER BY u.base_stars DESC, u.base_set_at DESC NULLS LAST LIMIT 40""", BASE_MINUS_REPORTS)
+               WHERE """ + EFF_STARS_SQL + """>=4 AND NOT u.scam AND r.n<$1
+               ORDER BY """ + EFF_STARS_SQL + """ DESC, u.base_set_at DESC NULLS LAST LIMIT 40""", BASE_MINUS_REPORTS)
     ids = [r["user_id"] for r in rows]
     cards = await base_cards(ids)
     return jr({"results": [cards[i] for i in ids if i in cards], "kind": kind,
@@ -4860,6 +5092,7 @@ async def api_admin_overview(request):
     return jr({
         "mod_chat": mod, "mod_ok": mod_ok, "pub_chat": pub,
         "pub_problems": (await group_check(request.app["bot"], pub))[1] if pub else [],
+        "rev_chat": await get_setting("rev_chat"), "rev_thread": await get_setting("rev_thread"),
         "unbound": await pool.fetchval("SELECT count(*) FROM topics WHERE thread_id IS NULL"),
         "posts": await pool.fetchval("SELECT count(*) FROM posts WHERE active"),
         "pending_requests": await pool.fetchval("SELECT count(*) FROM requests WHERE status='pending'"),
@@ -4885,6 +5118,171 @@ async def api_admin_stats(request):
     return jr(dict(r))
 
 
+NAME_SQL = "COALESCE('@'||{a}.username, NULLIF(trim(concat_ws(' ',{a}.first_name,{a}.last_name)),''), 'ID '||{a}.user_id::text)"
+
+
+async def api_admin_analytics(request):
+    """Полная аналитика для админов. ?days=7|30|90|0 (0 = за всё время)."""
+    await need_staff(request)
+    try:
+        days = int(request.query.get("days") or 30)
+    except ValueError:
+        days = 30
+    days = days if days in (1, 7, 30, 90) else 0
+    span = days or 36500
+    since = f"now() - interval '{span} days'"
+    series_days = min(days or 90, 90)
+    FA = pool.fetch; R = pool.fetchrow; V = pool.fetchval
+    nm = NAME_SQL.format(a="u")
+
+    def rows(rs):
+        return [dict(x) for x in rs]
+
+    out = {"days": days}
+
+    # --- пользователи
+    out["users"] = dict(await R(f"""SELECT count(*)::int total,
+        count(*) FILTER (WHERE created_at>{since})::int fresh,
+        count(*) FILTER (WHERE last_seen>now()-interval '1 day')::int dau,
+        count(*) FILTER (WHERE last_seen>now()-interval '7 days')::int wau,
+        count(*) FILTER (WHERE last_seen>now()-interval '30 days')::int mau,
+        count(*) FILTER (WHERE last_seen>{since})::int active_period,
+        count(*) FILTER (WHERE username IS NOT NULL AND username<>'')::int with_username,
+        count(*) FILTER (WHERE scam)::int scam, count(*) FILTER (WHERE verified)::int verified,
+        count(*) FILTER (WHERE base_stars>0)::int rated_manual FROM users"""))
+    out["users"]["staff"] = await V("SELECT count(*)::int FROM admins")
+    out["users"]["blocks"] = await V("SELECT count(*)::int FROM user_blocks")
+
+    # --- динамика по дням
+    out["daily"] = rows(await FA(f"""SELECT to_char(g.d,'DD.MM') d,
+        (SELECT count(*)::int FROM users WHERE created_at::date=g.d::date) users,
+        (SELECT count(*)::int FROM posts WHERE created_at::date=g.d::date) posts,
+        (SELECT count(*)::int FROM (SELECT created_at FROM direct_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)::date=g.d
+             UNION ALL SELECT created_at FROM escrow_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)::date=g.d::date) q) deals,
+        (SELECT count(*)::int FROM user_reviews WHERE created_at::date=g.d::date) reviews,
+        (SELECT count(*)::int FROM direct_messages WHERE created_at::date=g.d::date) msgs,
+        (SELECT count(DISTINCT user_id)::int FROM activity WHERE created_at::date=g.d::date) active
+        FROM generate_series((now()::date - {series_days - 1})::timestamp, now()::date::timestamp, interval '1 day') AS g(d)"""))
+
+    # --- объявления
+    out["posts"] = dict(await R(f"""SELECT count(*)::int total,
+        count(*) FILTER (WHERE active AND expires_at>now())::int active,
+        count(*) FILTER (WHERE active AND expires_at<=now())::int expired,
+        count(*) FILTER (WHERE NOT active)::int removed,
+        count(*) FILTER (WHERE created_at>{since})::int created,
+        count(*) FILTER (WHERE photo_id IS NOT NULL)::int with_photo,
+        COALESCE(sum(views),0)::int views_total, COALESCE(round(avg(views) FILTER (WHERE active),1),0)::float views_avg,
+        count(DISTINCT user_id)::int authors FROM posts"""))
+    out["posts"]["views_period"] = await V(f"SELECT count(*)::int FROM post_views WHERE created_at>{since}")
+    out["posts"]["favs_period"] = await V(f"SELECT count(*)::int FROM favorites WHERE created_at>{since}")
+    out["posts"]["favs_total"] = await V("SELECT count(*)::int FROM favorites")
+    out["posts"]["bumped"] = await V(f"SELECT count(*)::int FROM posts WHERE bumped_at>created_at + interval '1 minute' AND bumped_at>{since}")
+    out["by_topic"] = rows(await FA(f"""SELECT t.name, count(p.id) FILTER (WHERE p.active AND p.expires_at>now())::int active,
+        count(p.id) FILTER (WHERE p.created_at>{since})::int created, COALESCE(sum(p.views),0)::int views,
+        (SELECT count(*)::int FROM favorites f JOIN posts pp ON pp.id=f.post_id WHERE pp.topic_id=t.id) favs
+        FROM topics t LEFT JOIN posts p ON p.topic_id=t.id GROUP BY t.id,t.name ORDER BY active DESC, created DESC"""))
+    out["top_posts"] = rows(await FA(f"""SELECT p.id, split_part(regexp_replace(p.text,'<[^>]+>','','g'),E'\n',1) title, p.views,
+        (SELECT count(*)::int FROM favorites f WHERE f.post_id=p.id) favs, {nm.replace('u.','a.')} author
+        FROM posts p LEFT JOIN users a ON a.user_id=p.user_id WHERE p.active ORDER BY p.views DESC, p.id DESC LIMIT 8"""))
+    out["top_authors"] = rows(await FA(f"""SELECT {nm} name, u.user_id id, count(*)::int posts, COALESCE(sum(p.views),0)::int views
+        FROM posts p JOIN users u ON u.user_id=p.user_id WHERE p.created_at>{since} GROUP BY u.user_id ORDER BY posts DESC, views DESC LIMIT 8"""))
+
+    # --- заявки и анкеты
+    out["requests"] = rows(await FA(f"SELECT status, count(*)::int total, count(*) FILTER (WHERE created_at>{since})::int period FROM requests GROUP BY status ORDER BY total DESC"))
+    out["applications"] = rows(await FA(f"SELECT status, count(*)::int total, count(*) FILTER (WHERE created_at>{since})::int period FROM applications GROUP BY status ORDER BY total DESC"))
+    out["moderators"] = rows(await FA(f"""SELECT COALESCE(NULLIF(handler_label,''),'ID '||handled_by::text) name, count(*)::int n,
+        count(*) FILTER (WHERE status='approved')::int ok FROM requests WHERE handled_by IS NOT NULL AND created_at>{since}
+        GROUP BY 1 ORDER BY n DESC LIMIT 8"""))
+
+    # --- сделки
+    dd = rows(await FA(f"""SELECT kind, status, count(*)::int n, COALESCE(sum(amount),0)::bigint vol, COALESCE(sum(fee),0)::bigint fee,
+        count(*) FILTER (WHERE created_at>{since})::int n_period,
+        COALESCE(sum(amount) FILTER (WHERE created_at>{since}),0)::bigint vol_period FROM (
+          SELECT 'direct' kind, status, amount, 0::bigint fee, created_at FROM direct_deals
+          UNION ALL SELECT 'escrow', status, amount, fee, created_at FROM escrow_deals) x
+        GROUP BY kind, status ORDER BY kind, n DESC"""))
+    out["deals"] = dd
+    comp = await R(f"""SELECT count(*)::int n, COALESCE(sum(amount),0)::bigint vol, COALESCE(round(avg(amount)),0)::int avg,
+        COALESCE(sum(fee),0)::bigint fee FROM (
+        SELECT amount, 0::bigint fee, COALESCE(closed_at,updated_at) ts FROM direct_deals WHERE status='completed'
+        UNION ALL SELECT amount, fee, COALESCE(closed_at,updated_at) FROM escrow_deals WHERE status='completed') x WHERE ts>{since}""")
+    created = await V(f"SELECT ((SELECT count(*) FROM direct_deals WHERE created_at>{since})+(SELECT count(*) FROM escrow_deals WHERE created_at>{since}))::int")
+    out["deals_sum"] = {**dict(comp), "created": created,
+                        "rate": round(100.0 * comp["n"] / created, 1) if created else 0,
+                        "disputes_open": await V("SELECT count(*)::int FROM escrow_disputes WHERE status='open'"),
+                        "avg_hours": await V(f"""SELECT COALESCE(round((avg(extract(epoch FROM (COALESCE(closed_at,updated_at)-created_at)))/3600)::numeric,1),0)::float
+                            FROM (SELECT created_at,closed_at,updated_at FROM direct_deals WHERE status='completed'
+                            UNION ALL SELECT created_at,closed_at,updated_at FROM escrow_deals WHERE status='completed') x
+                            WHERE COALESCE(closed_at,updated_at)>{since}""")}
+    out["top_sellers"] = rows(await FA(f"""SELECT {nm} name, u.user_id id, count(*)::int deals, COALESCE(sum(d.amount),0)::bigint vol FROM (
+        SELECT seller_id, amount FROM direct_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)>{since}
+        UNION ALL SELECT seller_id, amount FROM escrow_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)>{since}) d
+        JOIN users u ON u.user_id=d.seller_id GROUP BY u.user_id ORDER BY deals DESC, vol DESC LIMIT 8"""))
+    out["top_buyers"] = rows(await FA(f"""SELECT {nm} name, u.user_id id, count(*)::int deals, COALESCE(sum(d.amount),0)::bigint vol FROM (
+        SELECT buyer_id, amount FROM direct_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)>{since}
+        UNION ALL SELECT buyer_id, amount FROM escrow_deals WHERE status='completed' AND COALESCE(closed_at,updated_at)>{since}) d
+        JOIN users u ON u.user_id=d.buyer_id GROUP BY u.user_id ORDER BY deals DESC, vol DESC LIMIT 8"""))
+
+    # --- отзывы
+    out["reviews"] = dict(await R(f"""SELECT count(*)::int total, count(*) FILTER (WHERE created_at>{since})::int period,
+        COALESCE(round(avg(rating),2),0)::float avg, COALESCE(round(avg(rating) FILTER (WHERE created_at>{since}),2),0)::float avg_period,
+        count(*) FILTER (WHERE rating=5)::int r5, count(*) FILTER (WHERE rating=4)::int r4, count(*) FILTER (WHERE rating=3)::int r3,
+        count(*) FILTER (WHERE rating=2)::int r2, count(*) FILTER (WHERE rating=1)::int r1,
+        count(*) FILTER (WHERE length(trim(text))>0)::int with_text, count(*) FILTER (WHERE photo_data IS NOT NULL)::int with_photo,
+        count(*) FILTER (WHERE updated_at>created_at + interval '1 minute')::int edited,
+        count(*) FILTER (WHERE cardinality(pub_msg_ids)>0)::int in_group FROM user_reviews"""))
+    out["reviews"]["deals_completed"] = await V("SELECT ((SELECT count(*) FROM direct_deals WHERE status='completed')+(SELECT count(*) FROM escrow_deals WHERE status='completed'))::int")
+    out["reviews"]["group_on"] = bool(await get_setting("rev_chat"))
+    out["best_rated"] = rows(await FA(f"""SELECT {nm} name, u.user_id id, count(*)::int n, round(avg(r.rating),2)::float avg
+        FROM user_reviews r JOIN users u ON u.user_id=r.target_id GROUP BY u.user_id HAVING count(*)>=2 ORDER BY avg DESC, n DESC LIMIT 6"""))
+    out["worst_rated"] = rows(await FA(f"""SELECT {nm} name, u.user_id id, count(*)::int n, round(avg(r.rating),2)::float avg
+        FROM user_reviews r JOIN users u ON u.user_id=r.target_id GROUP BY u.user_id HAVING count(*)>=2 ORDER BY avg ASC, n DESC LIMIT 6"""))
+    out["last_reviews"] = rows(await FA(f"""SELECT r.id, r.rating, left(r.text,160) body, to_char(r.created_at AT TIME ZONE 'Europe/Moscow','DD.MM HH24:MI') ts,
+        {nm.replace('u.','a.')} author, {nm.replace('u.','t.')} target FROM user_reviews r
+        JOIN users a ON a.user_id=r.reviewer_id JOIN users t ON t.user_id=r.target_id ORDER BY r.created_at DESC LIMIT 8"""))
+
+    # --- чаты
+    out["chat"] = dict(await R(f"""SELECT count(*)::int total, count(*) FILTER (WHERE created_at>{since})::int period,
+        count(*) FILTER (WHERE file_mime IS NOT NULL AND created_at>{since})::int files,
+        count(*) FILTER (WHERE read_at IS NULL)::int unread,
+        count(DISTINCT sender_id) FILTER (WHERE created_at>{since})::int senders,
+        count(DISTINCT LEAST(sender_id,recipient_id)::text||'-'||GREATEST(sender_id,recipient_id)::text) FILTER (WHERE created_at>{since})::int dialogs
+        FROM direct_messages"""))
+
+    # --- жалобы и база
+    out["reports"] = {
+        "users": rows(await FA(f"SELECT COALESCE(category,'—') category, status, count(*)::int n, count(*) FILTER (WHERE created_at>{since})::int period FROM user_reports GROUP BY 1,2 ORDER BY n DESC")),
+        "posts": rows(await FA(f"SELECT status, count(*)::int n, count(*) FILTER (WHERE created_at>{since})::int period FROM reports GROUP BY 1 ORDER BY n DESC")),
+        "misc": rows(await FA(f"SELECT kind, status, count(*)::int n, count(*) FILTER (WHERE created_at>{since})::int period FROM misc_reports GROUP BY 1,2 ORDER BY n DESC")),
+        "top_reported": rows(await FA(f"""SELECT {nm} name, u.user_id id, count(DISTINCT r.reporter_id)::int n,
+            count(*) FILTER (WHERE r.status<>'reviewed')::int opened FROM user_reports r JOIN users u ON u.user_id=r.target_id
+            GROUP BY u.user_id ORDER BY n DESC LIMIT 6""")),
+        "with_proofs": await V("SELECT count(DISTINCT report_id)::int FROM report_photos"),
+    }
+    out["base"] = {
+        "stars": rows(await FA("SELECT base_stars s, count(*)::int n FROM users WHERE base_stars>0 GROUP BY 1 ORDER BY 1 DESC")),
+        "minus": await V("""SELECT count(*)::int FROM (SELECT target_id FROM user_reports WHERE status<>'reviewed'
+            GROUP BY target_id HAVING count(DISTINCT reporter_id)>=$1) q""", BASE_MINUS_REPORTS),
+        "scam": out["users"]["scam"],
+    }
+
+    # --- поведение
+    out["activity"] = rows(await FA(f"SELECT kind, count(*)::int n, count(DISTINCT user_id)::int users FROM activity WHERE created_at>{since} GROUP BY kind ORDER BY n DESC"))
+    out["queries"] = rows(await FA(f"""SELECT lower(trim(query)) q, count(*)::int n FROM activity WHERE kind='search' AND query IS NOT NULL
+        AND trim(query)<>'' AND created_at>{since} GROUP BY 1 ORDER BY n DESC LIMIT 10"""))
+    out["saved_searches"] = await V("SELECT count(*)::int FROM saved_searches")
+
+    # --- воронка
+    out["funnel"] = dict(await R("""SELECT (SELECT count(*) FROM users)::int users,
+        (SELECT count(DISTINCT user_id) FROM posts)::int posted,
+        (SELECT count(DISTINCT sender_id) FROM direct_messages)::int chatted,
+        (SELECT count(DISTINCT u) FROM (SELECT buyer_id u FROM direct_deals WHERE status='completed' UNION SELECT seller_id FROM direct_deals WHERE status='completed'
+            UNION SELECT buyer_id FROM escrow_deals WHERE status='completed' UNION SELECT seller_id FROM escrow_deals WHERE status='completed') q)::int dealt,
+        (SELECT count(DISTINCT reviewer_id) FROM user_reviews)::int reviewed"""))
+    return jr(out)
+
+
+
 async def api_admin_reports(request):
     await need_staff(request)
     rows = await pool.fetch("""
@@ -4900,8 +5298,9 @@ async def api_admin_reports(request):
         "reason": r["reason"], "created": fmt_dt(r["created_at"]),
         "topic": r["topic_name"] or "Объявление удалено", "text": r["text"] or ""
     } for r in rows]
+    uph = await report_photo_urls([r["id"] for r in urows])
     for r in urows:
-        out.append({"kind": "user", "id": r["id"], "target": r["target_id"], "target_name": await user_name(r["target_id"]),
+        out.append({"kind": "user", "id": r["id"], "photos": uph.get(r["id"], []), "target": r["target_id"], "target_name": await user_name(r["target_id"]),
                     "post_id": r["post_id"], "reporter": r["reporter_id"], "reason": r["reason"], "created": fmt_dt(r["created_at"])})
     return jr({"reports": out})
 
@@ -4914,6 +5313,20 @@ async def api_admin_report_done(request):
         await pool.execute("UPDATE user_reports SET status='reviewed' WHERE id=$1", rid)
     else:
         await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", rid)
+    return jr({"ok": True})
+
+
+async def api_admin_report_delete(request):
+    """Полностью удалить жалобу (вместе со скриншотами). Только главные админы и владелец."""
+    await need_main(request)
+    d = await body(request)
+    try:
+        rid = int(d.get("id", 0) or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, "bad_input")
+    table = "user_reports" if d.get("kind") == "user" else "reports"
+    if not rid or not await pool.fetchval(f"DELETE FROM {table} WHERE id=$1 RETURNING id", rid):
+        raise ApiError(404, "not_found")
     return jr({"ok": True})
 
 
@@ -5450,8 +5863,10 @@ def build_web(bot: Bot):
     r.add_post("/api/apply", api_apply)
     r.add_get("/api/admin/overview", api_admin_overview)
     r.add_get("/api/admin/stats", api_admin_stats)
+    r.add_get("/api/admin/analytics", api_admin_analytics)
     r.add_get("/api/admin/reports", api_admin_reports)
     r.add_post("/api/admin/report_done", api_admin_report_done)
+    r.add_post("/api/admin/report_delete", api_admin_report_delete)
     r.add_post("/api/admin/broadcast", api_admin_broadcast)
     r.add_get("/api/admin/queue", api_admin_queue)
     r.add_post("/api/admin/review", api_admin_review)
