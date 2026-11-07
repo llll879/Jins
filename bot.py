@@ -31,7 +31,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -665,8 +665,31 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS saved_searches(
             id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, query TEXT NOT NULL,
             notify BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE(user_id, query));
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS base_stars SMALLINT NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS base_role TEXT NOT NULL DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS base_note TEXT NOT NULL DEFAULT '';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS base_set_by BIGINT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS base_set_at TIMESTAMPTZ;
+        ALTER TABLE user_reports ADD COLUMN IF NOT EXISTS category TEXT;
+        CREATE TABLE IF NOT EXISTS username_history(
+            id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, username TEXT NOT NULL,
+            first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE UNIQUE INDEX IF NOT EXISTS username_history_uq ON username_history(user_id, lower(username));
+        CREATE INDEX IF NOT EXISTS username_history_name_idx ON username_history(lower(username));
         """
     )
+    if not await pool.fetchval("SELECT value FROM settings WHERE key='uname_hist_seed'"):
+        # один раз заполняем историю юзернеймов тем, что уже есть в базе (профили, заявки, объявления, анкеты)
+        await pool.execute("""
+            INSERT INTO username_history(user_id, username, first_seen, seen_at)
+            SELECT user_id, min(username), min(ts), max(ts) FROM (
+                SELECT user_id, username, created_at ts FROM requests
+                UNION ALL SELECT user_id, username, created_at FROM posts
+                UNION ALL SELECT user_id, username, created_at FROM applications
+                UNION ALL SELECT user_id, username, last_seen FROM users
+            ) s WHERE username IS NOT NULL AND username<>'' GROUP BY user_id, lower(username)
+            ON CONFLICT DO NOTHING""")
+        await pool.execute("INSERT INTO settings(key,value) VALUES('uname_hist_seed','1') ON CONFLICT DO NOTHING")
     if not had_read:
         # старые сообщения считаем прочитанными, чтобы не показать «сотни непрочитанных»
         await pool.execute("UPDATE direct_messages SET read_at=created_at WHERE read_at IS NULL")
@@ -1592,6 +1615,7 @@ async def register_user(user):
         "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
         "last_name=EXCLUDED.last_name, last_seen=now()",
         user.id, user.username, user.first_name, user.last_name)
+    await track_username(user.id, user.username)
 
 
 # ---------------------------------------------------------------- commands
@@ -1606,6 +1630,390 @@ async def cmd_start(m: Message, state: FSMContext, bot: Bot):
 async def cmd_app(m: Message):
     kb = webapp_kb()
     await m.answer("🌌 Мини-апп:" if kb else "Мини-апп пока не настроен.", reply_markup=kb)
+
+
+# ================================================================ БАЗА: рейтинг, жалобы, поиск, команда «чек»
+# Рейтинг в базе выставляют главные админы (0–5 звёзд + роль + заметка). Жалобы собирает user_reports:
+# если у человека BASE_MINUS_REPORTS и больше активных (не закрытых модераторами) жалоб от разных людей —
+# он уходит «в минус» («Ненадёжный»), а метка «Мошенник» ставится вручную. Поиск идёт по текущему и по любому
+# прежнему юзернейму (username_history), по ID и по ссылкам Exg:/…
+BASE_ROLES = {"admin": ("Админ", "админ"), "seller": ("Продавец", "продавец"),
+              "pr": ("Пиарщик", "пиарщик"), "editor": ("Монтажёр", "монтажёр")}
+BASE_ROLE_WORDS = {"админ": "admin", "admin": "admin", "adm": "admin",
+                   "продавец": "seller", "seller": "seller",
+                   "пиар": "pr", "пиарщик": "pr", "pr": "pr",
+                   "монтажёр": "editor", "монтажер": "editor", "editor": "editor"}
+BASE_WORD = {5: "Отличный", 4: "Хороший", 3: "Так себе", 2: "Плохой", 1: "Ужасный"}
+BASE_TIERS = {5: "top", 4: "good", 3: "mid", 2: "low", 1: "awful", 0: "none"}
+BASE_ICON = {"top": "🏆", "good": "✅", "mid": "🟡", "low": "🟠", "awful": "🔴", "none": "👤", "minus": "⛔", "scam": "🚫"}
+BASE_HINT = {
+    "top": "Отличная репутация — с таким человеком можно работать спокойно.",
+    "good": "Хорошая репутация, нареканий нет.",
+    "mid": "Репутация средняя — будьте внимательны и уточняйте детали.",
+    "low": "Плохая репутация — лучше работать только через гаранта.",
+    "awful": "Ужасная репутация — мы не рекомендуем иметь с ним дело.",
+    "none": "Особых отметок нет — обычный участник.",
+    "minus": "На человека много жалоб — он под подозрением. Только через гаранта!",
+    "scam": "Помечен модераторами как мошенник. Не проводите сделки!",
+}
+BASE_MINUS_REPORTS = max(1, int(os.getenv("BASE_MINUS_REPORTS", "3") or 3))
+BASE_REPORT_CATS = ["Скам / обман", "Не выполнил условия", "Выдаёт себя за другого",
+                    "Спам / реклама", "Оскорбления", "Другое"]
+
+BASE_SQL = """
+SELECT u.user_id, u.username, u.first_name, u.last_name, u.created_at, u.bio, u.verified, u.scam,
+  u.badge_dev, u.badge_adm, u.base_stars, u.base_role, u.base_note, u.base_set_at,
+  (u.avatar_data IS NOT NULL) has_avatar, u.photo_url,
+  (SELECT count(*) FROM escrow_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id))
+  + (SELECT count(*) FROM direct_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id)) deals,
+  (SELECT avg(rating) FROM user_reviews r WHERE r.target_id=u.user_id)::float rating,
+  (SELECT count(*) FROM user_reviews r WHERE r.target_id=u.user_id) reviews,
+  (SELECT count(*) FROM escrow_deals d WHERE d.seller_id=u.user_id AND d.status IN ('refunded','refund_pending')) refunds,
+  (SELECT count(DISTINCT reporter_id) FROM user_reports x WHERE x.target_id=u.user_id AND x.status='new') reports,
+  (SELECT count(DISTINCT reporter_id) FROM user_reports x WHERE x.target_id=u.user_id) reports_all,
+  (SELECT array_agg(h.username ORDER BY h.seen_at DESC) FROM username_history h
+     WHERE h.user_id=u.user_id AND lower(h.username) <> lower(COALESCE(u.username,''))) aliases
+FROM users u WHERE u.user_id = ANY($1::bigint[])"""
+
+_uname_seen = {}
+
+
+async def track_username(uid, username):
+    """Запоминает юзернейм в истории (только когда он изменился с прошлого раза)."""
+    username = (username or "").strip().lstrip("@")
+    if not username or _uname_seen.get(uid) == username.lower():
+        return
+    if len(_uname_seen) > 20000:
+        _uname_seen.clear()
+    _uname_seen[uid] = username.lower()
+    try:
+        await pool.execute(
+            "INSERT INTO username_history(user_id,username) VALUES($1,$2) "
+            "ON CONFLICT(user_id, lower(username)) DO UPDATE SET seen_at=now(), username=EXCLUDED.username",
+            uid, username)
+    except Exception:
+        log.exception("track_username failed")
+
+
+async def sync_known_user(user):
+    """Если человек уже есть в базе — обновляем его имя/юзернейм из Telegram (когда мы его видим в чате)."""
+    if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1", user.id):
+        return
+    await pool.execute("UPDATE users SET username=$2, first_name=$3, last_name=$4 WHERE user_id=$1",
+                       user.id, user.username, user.first_name, user.last_name)
+    await track_username(user.id, user.username)
+
+
+def base_label(stars, role_key):
+    if stars <= 0:
+        return "Обычный пользователь"
+    noun = BASE_ROLES[role_key][1] if role_key in BASE_ROLES else "участник"
+    return f"{BASE_WORD[stars]} {noun}"
+
+
+def parse_base_query(q):
+    """@ник · ник · t.me/ник · Exg:/@ник · Exg:/u123 · 123456 → ('id', n) | ('un', 'ник') | None."""
+    q = (q or "").strip()
+    if not q:
+        return None
+    exg = False
+    m = re.match(r"(?i)^exg:/", q)
+    if m:
+        q, exg = q[m.end():], True
+    q = re.sub(r"(?i)^(https?://)?(www\.)?(t|telegram)\.me/", "", q)
+    q = q.split("?")[0].strip().strip("/").lstrip("@")
+    m2 = re.fullmatch(r"[uU](\d{1,15})", q) if exg else None
+    if m2:
+        return ("id", int(m2.group(1)))
+    if re.fullmatch(r"\d{1,15}", q):
+        return ("id", int(q))
+    if re.fullmatch(r"[A-Za-z0-9_]{3,32}", q):
+        return ("un", q)
+    return None
+
+
+async def base_find(q):
+    """(user_id | None, прежний_ник | None). Находит по текущему юзернейму, по старому, по ID."""
+    p = parse_base_query(q)
+    if not p:
+        return None, None
+    kind, v = p
+    if kind == "id":
+        return (v if await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1", v) else None), None
+    uid = await pool.fetchval("""
+        SELECT uid FROM (
+          SELECT user_id uid, 0 pr, last_seen ts FROM users WHERE lower(username)=lower($1)
+          UNION ALL
+          SELECT user_id, 1, seen_at FROM username_history WHERE lower(username)=lower($1)
+        ) s ORDER BY pr, ts DESC LIMIT 1""", v)
+    if not uid:
+        return None, None
+    cur = await pool.fetchval("SELECT username FROM users WHERE user_id=$1", uid)
+    return uid, (None if cur and cur.lower() == v.lower() else v)
+
+
+async def base_search_ids(q, limit=8):
+    """Подсказки при наборе: начало юзернейма (текущего или прежнего) или часть имени."""
+    q = q.strip().lstrip("@")
+    if len(q) < 2:
+        return []
+    e = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = await pool.fetch("""
+        SELECT uid FROM (
+          SELECT user_id uid, last_seen ts FROM users
+            WHERE username ILIKE $1 OR concat_ws(' ', first_name, last_name) ILIKE $2
+          UNION ALL SELECT user_id, seen_at FROM username_history WHERE username ILIKE $1
+        ) s GROUP BY uid ORDER BY max(ts) DESC LIMIT $3""", e + "%", "%" + e + "%", limit)
+    return [r["uid"] for r in rows]
+
+
+def base_card(r, via=None):
+    stars = max(0, min(5, int(r["base_stars"] or 0)))
+    rk = r["base_role"] if r["base_role"] in BASE_ROLES else ""
+    reports = int(r["reports"] or 0)
+    minus = "scam" if r["scam"] else ("reports" if reports >= BASE_MINUS_REPORTS else None)
+    tier = "scam" if minus == "scam" else ("minus" if minus else BASE_TIERS[stars])
+    un, uid = r["username"], r["user_id"]
+    name = " ".join(x for x in [r["first_name"], r["last_name"]] if x) or un or "Пользователь"
+    return {
+        "id": uid, "username": un, "name": name, "bio": r["bio"] or "",
+        "has_avatar": bool(r["has_avatar"]), "photo_url": r["photo_url"],
+        "code": "Exg:/" + (f"@{un}" if un else f"u{uid}"),
+        "created": r["created_at"].astimezone(TZ).strftime("%d.%m.%Y"),
+        "stars": stars, "role": rk, "role_title": BASE_ROLES[rk][0] if rk else "",
+        "label": base_label(stars, rk), "tier": tier, "minus": minus,
+        "status": "Мошенник" if minus == "scam" else ("Ненадёжный" if minus else base_label(stars, rk)),
+        "hint": BASE_HINT[tier],
+        "rating": round(r["rating"], 1) if r["rating"] else 0, "reviews": int(r["reviews"] or 0),
+        "deals": int(r["deals"] or 0), "reports": reports, "reports_all": int(r["reports_all"] or 0),
+        "aliases": list(r["aliases"] or []), "note": r["base_note"] or "",
+        "rated_at": r["base_set_at"].astimezone(TZ).strftime("%d.%m.%Y") if r["base_set_at"] else "",
+        "badges": _badges(r),
+        "sb": ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else ""),
+        "via": via,
+    }
+
+
+async def base_cards(ids):
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch(BASE_SQL, ids)
+    return {r["user_id"]: base_card(r) for r in rows}
+
+
+async def base_set(uid, actor, stars=None, role=None, note=None):
+    sets, args = [], [uid]
+
+    def add(col, v):
+        args.append(v)
+        sets.append(f"{col}=${len(args)}")
+    if stars is not None:
+        add("base_stars", int(stars))
+    if role is not None:
+        add("base_role", role)
+    if note is not None:
+        add("base_note", note)
+    if not sets:
+        return False
+    args.append(actor)
+    sets.append(f"base_set_by=${len(args)}")
+    sets.append("base_set_at=now()")
+    res = await pool.execute(f"UPDATE users SET {', '.join(sets)} WHERE user_id=$1", *args)
+    return res.endswith(" 1")
+
+
+def plural(n, one, few, many):
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def stars_txt(n):
+    return "★" * n + "☆" * (5 - n)
+
+
+def base_card_html(c):
+    """Карточка человека для бота (rich text: жирный, цитата, ссылки)."""
+    uid, tier, nm = c["id"], c["tier"], esc(c["name"])
+    link = app_link(f"b_{uid}")
+    head = f'<a href="{link}">{nm}</a>' if link else f'<a href="tg://user?id={uid}">{nm}</a>'
+    marks = ("👨‍💻" if "d" in c["sb"] else "") + ("🛡" if "a" in c["sb"] else "")
+    ids = [f"🆔 <code>{uid}</code>"]
+    if c["username"]:
+        ids.append(f'<a href="https://t.me/{c["username"]}">@{esc(c["username"])}</a>')
+    ids.append(f"<code>{esc(c['code'])}</code>")
+    L = ["🔎 <b>Проверка по базе</b>", "", f"{BASE_ICON[tier]} <b>{head}</b> {marks}".rstrip(), " · ".join(ids)]
+    if c.get("via"):
+        L.append(f"↪️ <i>Найден по старому юзернейму</i> <b>@{esc(c['via'])}</b>")
+    L.append("")
+    if c["minus"] == "scam":
+        L.append("🚫 <b>МОШЕННИК</b>")
+    elif c["minus"]:
+        L.append("⛔ <b>В МИНУСЕ · Ненадёжный</b>")
+        L.append(f"<i>{c['reports']} {plural(c['reports'], 'жалоба', 'жалобы', 'жалоб')} на проверке</i>")
+    else:
+        L.append(f"<b>{stars_txt(c['stars'])}</b>  <b>{c['stars']}/5</b>")
+        L.append(f"{BASE_ICON[tier]} <b>{esc(c['label'])}</b>")
+    L.append(f"<i>{esc(c['hint'])}</i>")
+    rep = (f"<b>{c['reports']}</b> активн. · {c['reports_all']} всего" if c["reports_all"] else "нет")
+    rows = []
+    if c["role_title"]:
+        rows.append(f"🏷 Роль: <b>{esc(c['role_title'])}</b>")
+    rows.append("💬 Отзывы: " + (f"<b>★ {c['rating']}</b> · {c['reviews']}" if c["reviews"] else "пока нет"))
+    rows.append(f"🤝 Сделок: <b>{c['deals']}</b>")
+    rows.append(f"🚩 Жалобы: {rep}")
+    rows.append(f"📅 В KMBP с <b>{c['created']}</b>")
+    if c["aliases"]:
+        al = ", ".join("@" + esc(a) for a in c["aliases"][:5])
+        more = len(c["aliases"]) - 5
+        rows.append(f"🕘 Раньше: {al}" + (f" и ещё {more}" if more > 0 else ""))
+    L += ["", "<blockquote>" + "\n".join(rows) + "</blockquote>"]
+    bad = [b for b in c["badges"] if b["tone"] == "bad"]
+    good = [b for b in c["badges"] if b["tone"] == "good"]
+    if bad or good:
+        L.append(" · ".join(f"{b['i']} {esc(b['t'])}" for b in bad + good))
+    if c["note"]:
+        L += ["", f"📝 <b>Заметка модераторов:</b> {esc(c['note'])}"]
+    return "\n".join(L)
+
+
+def base_missing_html(label):
+    return (f"🔎 <b>Проверка по базе</b>\n\n❓ <b>{esc(label)}</b> — <b>нет в базе</b>\n\n"
+            "<blockquote>Этот человек ещё не пользовался KMBP (ботом или мини-аппом), поэтому данных о нём нет. "
+            "Это не значит, что он плохой — просто проверить нечем. Сделки лучше проводить через гаранта.\n"
+            "Если человек недавно менял юзернейм — проверьте по его ID.</blockquote>")
+
+
+BASE_HELP = ("🔎 <b>Проверка человека по базе</b>\n\n"
+             "<code>/check @юзернейм</code>\n<code>/check 123456789</code>\n<code>чек @юзернейм</code>\n\n"
+             "Работает и по старому юзернейму, и по ссылке <code>Exg:/@ник</code>. "
+             "В группе можно ответить командой <code>/check</code> на сообщение человека.")
+
+
+def base_kb(c, staff=False):
+    uid = c["id"]
+    kb = InlineKeyboardBuilder()
+    links = [("📖 Открыть в базе", app_link(f"b_{uid}")), ("🚩 Пожаловаться", app_link(f"bc_{uid}")),
+             ("✈️ Telegram", f"https://t.me/{c['username']}" if c["username"] else "")]
+    links = [x for x in links if x[1]]
+    for t, u in links:
+        kb.button(text=t, url=u)
+    sizes = [2] * (len(links) // 2) + ([1] if len(links) % 2 else [])
+    if staff:
+        for n in range(6):
+            kb.button(text=("0 · сброс" if n == 0 else f"{n}⭐"), callback_data=f"bs:{uid}:{n}")
+        sizes += [3, 3]
+    if not sizes:
+        return None
+    kb.adjust(*sizes)
+    return kb.as_markup()
+
+
+async def do_check(m: Message, bot: Bot, arg: str):
+    u = m.from_user
+    if not u or u.is_bot:
+        return
+    if m.chat.type == "private":
+        await register_user(u)
+        await track_username(u.id, u.username)
+        if not await gate(bot, m.chat.id, u.id):
+            return
+    if not rate_ok(("check", u.id), 2):
+        return
+    arg = (arg or "").strip()
+    rep = m.reply_to_message.from_user if m.reply_to_message and m.reply_to_message.from_user else None
+    mention = next((e.user for e in (m.entities or []) if e.type == "text_mention" and e.user), None)
+    uid = via = None
+    label = arg
+    if mention:
+        uid, label = mention.id, label_of(mention)
+        await sync_known_user(mention)
+    elif not arg and rep and not rep.is_bot:
+        uid, label = rep.id, label_of(rep)
+        await sync_known_user(rep)
+    else:
+        if not arg or not parse_base_query(arg):
+            return await m.reply(BASE_HELP)
+        uid, via = await base_find(arg)
+    c = (await base_cards([uid])).get(uid) if uid else None
+    if not c:
+        return await m.reply(base_missing_html(label))
+    c["via"] = via
+    staff = m.chat.type == "private" and await is_main(u.id)
+    await m.reply(base_card_html(c), reply_markup=base_kb(c, staff))
+
+
+@router.message(Command("check", "base", "чек", "база"))
+async def cmd_check(m: Message, command: CommandObject, bot: Bot):
+    await do_check(m, bot, command.args or "")
+
+
+@router.message(StateFilter(None), F.text.regexp(r"(?is)^\s*(?:чек|check)\s+\S"))
+async def text_check(m: Message, bot: Bot):
+    arg = re.sub(r"(?is)^\s*(?:чек|check)\s+", "", m.text or "", count=1)
+    await do_check(m, bot, arg)
+
+
+@router.message(Command("rate"))
+async def cmd_rate(m: Message, command: CommandObject, bot: Bot):
+    """/rate @ник 5 админ заметка… — только главные админы. Роль и заметка необязательны, «-» очищает."""
+    if not m.from_user or not await is_main(m.from_user.id):
+        return
+    usage = ("<b>Выставить рейтинг в базе</b>\n<code>/rate @ник 0-5 [админ|продавец|пиарщик|монтажёр] [заметка]</code>\n"
+             "Роль <code>-</code> — убрать роль, заметка <code>-</code> — убрать заметку. "
+             "Можно ответить на сообщение: <code>/rate 5 админ</code>.")
+    args = (command.args or "").split()
+    rep = m.reply_to_message.from_user if m.reply_to_message and m.reply_to_message.from_user else None
+    if rep and args and re.fullmatch(r"[0-5]", args[0]):
+        uid, rest = rep.id, args
+        await sync_known_user(rep)
+    elif len(args) >= 2 and re.fullmatch(r"[0-5]", args[1]):
+        p = parse_base_query(args[0])
+        if not p:
+            return await m.reply(usage)
+        uid = (await base_find(args[0]))[0]
+        if uid is None and p[0] == "id":  # ID, которого ещё нет: заводим пустой профиль, чтобы можно было оценить
+            await pool.execute("INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING", p[1])
+            uid = p[1]
+        rest = args[1:]
+    else:
+        return await m.reply(usage)
+    if uid is None:
+        return await m.reply(base_missing_html(args[0] if args else ""))
+    stars, extra = int(rest[0]), rest[1:]
+    role_key = note = None
+    if extra and (extra[0].lower() in BASE_ROLE_WORDS or extra[0] == "-"):
+        role_key = "" if extra[0] == "-" else BASE_ROLE_WORDS[extra[0].lower()]
+        extra = extra[1:]
+    if extra:
+        note = "" if extra == ["-"] else " ".join(extra)[:300]
+    await base_set(uid, m.from_user.id, stars=stars, role=role_key, note=note)
+    c = (await base_cards([uid]))[uid]
+    await m.reply("✅ <b>Рейтинг обновлён</b>\n\n" + base_card_html(c),
+                  reply_markup=base_kb(c, m.chat.type == "private"))
+
+
+@router.callback_query(F.data.startswith("bs:"))
+async def cb_base_stars(cb: CallbackQuery):
+    if not await is_main(cb.from_user.id):
+        return await cb.answer("Только главный админ может менять рейтинг", show_alert=True)
+    try:
+        _, uid, n = cb.data.split(":")
+        uid, n = int(uid), int(n)
+    except ValueError:
+        return await cb.answer()
+    if not 0 <= n <= 5 or not await base_set(uid, cb.from_user.id, stars=n):
+        return await cb.answer("Человек не найден", show_alert=True)
+    c = (await base_cards([uid]))[uid]
+    try:
+        await cb.message.edit_text(base_card_html(c), reply_markup=base_kb(c, True))
+    except TelegramBadRequest:
+        pass
+    await cb.answer(f"Рейтинг: {n}/5" if n else "Рейтинг сброшен")
 
 
 @router.callback_query(F.data == "sub:check")
@@ -2926,6 +3334,7 @@ async def api_mw(request, handler):
         "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
         "last_name=EXCLUDED.last_name, photo_url=COALESCE(EXCLUDED.photo_url,users.photo_url), last_seen=now()",
         u["id"], u.get("username"), u.get("first_name"), u.get("last_name"), u.get("photo_url"))
+    await track_username(u["id"], u.get("username"))
     try:
         return await handler(request)
     except web.HTTPException:
@@ -3734,6 +4143,8 @@ async def api_profile(request):
     deals = sum(1 for x in deal_rows if x["status"]=="completed")
     me_id = request["u"]["id"]
     badges = (await user_badges([uid])).get(uid, [])
+    bc = (await base_cards([uid])).get(uid)
+    base_sum = {"stars": bc["stars"], "label": bc["label"], "status": bc["status"], "tier": bc["tier"], "minus": bc["minus"]} if bc else None
     by_me = by_peer = False
     if uid != me_id:
         by_me, by_peer = await block_state(me_id, uid)
@@ -3750,7 +4161,7 @@ async def api_profile(request):
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
         "rating": round(row["rating"],2), "reviews": row["reviews"], "completed_deals": deals, "history": history,
-        "badges": badges, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
+        "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "sb": sb, "can_badge": me_id == OWNER_ID,
         "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"])} if me_id == OWNER_ID else None,
         "is_me": uid == request["u"]["id"]})
@@ -3997,24 +4408,33 @@ async def api_blocks(request):
 async def api_report_user(request):
     uid=request["u"]["id"]; d=await body(request)
     target=int(d.get("user_id") or 0); post_id=int(d.get("post_id") or 0) or None
+    cat=str(d.get("category") or "").strip(); cat=cat if cat in BASE_REPORT_CATS else None
     reason=(d.get("reason") or "Жалоба на пользователя").strip()[:500]
     if not target or target==uid: raise ApiError(400,"bad_input")
+    if not rate_ok(("urep",uid),4): raise ApiError(429,"slow")
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
-    row=await pool.fetchrow("INSERT INTO user_reports(target_id,reporter_id,post_id,reason) VALUES($1,$2,$3,$4) "
-        "ON CONFLICT(target_id,reporter_id) DO NOTHING RETURNING id",target,uid,post_id,reason)
+    row=await pool.fetchrow("INSERT INTO user_reports(target_id,reporter_id,post_id,reason,category) VALUES($1,$2,$3,$4,$5) "
+        "ON CONFLICT(target_id,reporter_id) DO NOTHING RETURNING id",target,uid,post_id,reason,cat)
     if row:
         kb=InlineKeyboardBuilder()
         kb.button(text="🚫 Мошенник",callback_data=f"ur:scam:{row['id']}")
         kb.button(text="✅ Закрыть",callback_data=f"ur:ok:{row['id']}")
         tun=await pool.fetchval("SELECT username FROM users WHERE user_id=$1",target)
         add_link_buttons(kb,[("👤 Профиль",app_link(f"n_{tun}" if tun else f"u_{target}")),
+                             ("📖 В базе",app_link(f"b_{target}")),
                              ("📄 Объявление",app_link(f"ad_{post_id}") if post_id else "")])
         kb.adjust(2,2)
         asyncio.create_task(notify_staff(
             f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
             f"На: {await who_html(target)}\n"
-            f"От: {await who_html(uid)}\nПричина: {esc(reason)}"
+            f"От: {await who_html(uid)}\n"
+            + (f"Категория: <b>{esc(cat)}</b>\n" if cat else "") + f"Причина: {esc(reason)}"
             + (f"\nОбъявление: #{post_id} · <code>Exg:/a{post_id}</code>" + (f' · <a href="{app_link(f"ad_{post_id}")}">открыть</a>' if app_link(f"ad_{post_id}") else "") if post_id else ""), kb.as_markup()))
+        n=await pool.fetchval("SELECT count(DISTINCT reporter_id) FROM user_reports WHERE target_id=$1 AND status='new'",target)
+        if n==BASE_MINUS_REPORTS:
+            asyncio.create_task(notify_staff(
+                f"⛔ <b>В базе новый минус:</b> {await who_html(target)}\n"
+                f"Набралось {n} активных жалоб — человек помечен как «Ненадёжный». Если жалобы необоснованны — закройте их («✅ Закрыть»), и метка снимется."))
     return jr({"ok":True,"duplicate":row is None})
 
 
@@ -4040,6 +4460,98 @@ async def api_admin_user_badge(request):
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
     await pool.execute(f"UPDATE users SET {col}=$2 WHERE user_id=$1",target,on)
     return jr({"ok":True})
+
+
+# ---------------------------------------------------------------- API: база
+async def api_base_search(request):
+    q = str(request.query.get("q") or "").strip()[:100]
+    parsed = parse_base_query(q) is not None
+    if len(q) < 2:
+        return jr({"results": [], "exact": None, "parsed": parsed})
+    uid, via = await base_find(q)
+    ids = [uid] if uid else []
+    for x in await base_search_ids(q, 8):
+        if x not in ids:
+            ids.append(x)
+    ids = ids[:8]
+    cards = await base_cards(ids)
+    res = []
+    for i in ids:
+        c = cards.get(i)
+        if c:
+            if i == uid:
+                c["via"] = via
+            res.append(c)
+    return jr({"results": res, "exact": uid, "parsed": parsed})
+
+
+async def api_base_profile(request):
+    me = request["u"]["id"]
+    try:
+        uid = int(request.query.get("id") or 0)
+    except ValueError:
+        raise ApiError(400, "bad_input")
+    c = (await base_cards([uid])).get(uid)
+    if not c:
+        raise ApiError(404, "user_not_found")
+    c["is_me"] = uid == me
+    c["reported_by_me"] = bool(await pool.fetchval(
+        "SELECT 1 FROM user_reports WHERE target_id=$1 AND reporter_id=$2", uid, me))
+    c["can_rate"] = await is_main(me)
+    c["role_key"] = c["role"]
+    c["complaints"] = []
+    if await role(me) is not None:
+        rows = await pool.fetch(
+            "SELECT x.id,x.reason,x.category,x.status,x.created_at,x.post_id,x.reporter_id,u.username,u.first_name "
+            "FROM user_reports x LEFT JOIN users u ON u.user_id=x.reporter_id "
+            "WHERE x.target_id=$1 ORDER BY x.id DESC LIMIT 15", uid)
+        c["complaints"] = [{"id": x["id"], "reason": x["reason"], "category": x["category"], "status": x["status"],
+                            "created": fmt_dt(x["created_at"]), "by_id": x["reporter_id"],
+                            "by": ("@" + x["username"]) if x["username"] else (x["first_name"] or str(x["reporter_id"]))}
+                           for x in rows]
+    return jr(c)
+
+
+async def api_base_list(request):
+    kind = request.query.get("kind") or "top"
+    stats = await pool.fetchrow(
+        """SELECT count(*)::int total, count(*) FILTER (WHERE base_stars>0)::int rated,
+           count(*) FILTER (WHERE scam OR (SELECT count(DISTINCT reporter_id) FROM user_reports x
+                WHERE x.target_id=users.user_id AND x.status='new')>=$1)::int minus FROM users""", BASE_MINUS_REPORTS)
+    if kind == "minus":
+        rows = await pool.fetch(
+            """SELECT u.user_id FROM users u,
+                 LATERAL (SELECT count(DISTINCT reporter_id) n FROM user_reports x
+                          WHERE x.target_id=u.user_id AND x.status='new') r
+               WHERE u.scam OR r.n>=$1 ORDER BY u.scam DESC, r.n DESC, u.user_id LIMIT 40""", BASE_MINUS_REPORTS)
+    else:
+        rows = await pool.fetch(
+            """SELECT u.user_id FROM users u,
+                 LATERAL (SELECT count(DISTINCT reporter_id) n FROM user_reports x
+                          WHERE x.target_id=u.user_id AND x.status='new') r
+               WHERE u.base_stars>=4 AND NOT u.scam AND r.n<$1
+               ORDER BY u.base_stars DESC, u.base_set_at DESC NULLS LAST LIMIT 40""", BASE_MINUS_REPORTS)
+    ids = [r["user_id"] for r in rows]
+    cards = await base_cards(ids)
+    return jr({"results": [cards[i] for i in ids if i in cards], "kind": kind,
+               "stats": {"total": stats["total"], "rated": stats["rated"], "minus": stats["minus"]},
+               "minus_at": BASE_MINUS_REPORTS})
+
+
+async def api_admin_base_set(request):
+    await need_main(request)
+    d = await body(request)
+    try:
+        target, stars = int(d.get("user_id") or 0), int(d.get("stars"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "bad_input")
+    rk = str(d.get("role") or "")
+    if not 0 <= stars <= 5 or (rk and rk not in BASE_ROLES):
+        raise ApiError(400, "bad_input")
+    note = str(d.get("note") or "").strip()[:300]
+    if not await base_set(target, request["u"]["id"], stars=stars, role=rk, note=note):
+        raise ApiError(404, "user_not_found")
+    return jr({"ok": True})
 
 
 async def api_post_one(request):
@@ -4112,7 +4624,7 @@ async def api_resolve(request):
     """Exg:/@username -> user_id."""
     q=str(request.query.get("q") or "").strip().lstrip("@")
     if not re.fullmatch(r"[A-Za-z0-9_]{3,32}",q): raise ApiError(400,"bad_input")
-    uid=await pool.fetchval("SELECT user_id FROM users WHERE lower(username)=lower($1)",q)
+    uid=(await base_find(q))[0]  # находит и по прежнему юзернейму: старые ссылки Exg:/@ник не ломаются
     if not uid: raise ApiError(404,"user_not_found")
     return jr({"user_id":uid})
 
@@ -4915,6 +5427,10 @@ def build_web(bot: Bot):
     r.add_post("/api/searches/notify", api_search_notify)
     r.add_post("/api/admin/user_flag", api_admin_user_flag)
     r.add_post("/api/admin/user_badge", api_admin_user_badge)
+    r.add_get("/api/base/search", api_base_search)
+    r.add_get("/api/base/profile", api_base_profile)
+    r.add_get("/api/base/list", api_base_list)
+    r.add_post("/api/admin/base_set", api_admin_base_set)
     r.add_post("/api/bump", api_bump)
     r.add_post("/api/view", api_view)
     r.add_post("/api/search", api_search)
@@ -5015,6 +5531,15 @@ async def main():
             log.exception("set_chat_menu_button failed")
     else:
         log.warning("WEBAPP_URL / RENDER_EXTERNAL_URL (https) не задан — мини-апп не подключён к боту")
+
+    try:
+        from aiogram.types import BotCommand
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="app", description="Открыть мини-апп"),
+            BotCommand(command="check", description="Проверить человека по базе: /check @юзернейм")])
+    except Exception:
+        log.exception("set_my_commands failed")
 
     dp = Dispatcher()
     dp.include_router(router)
