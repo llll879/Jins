@@ -2952,15 +2952,26 @@ async def seller_ratings(user_ids):
     return {r["target_id"]: (round(r["a"], 1), r["c"]) for r in rows}
 
 
+async def avatar_info(ids):
+    """{user_id: (has_custom_avatar, telegram_photo_url)} для списка пользователей."""
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch("SELECT user_id,(avatar_data IS NOT NULL) has_avatar,photo_url FROM users WHERE user_id=ANY($1::bigint[])", ids)
+    return {r["user_id"]: (bool(r["has_avatar"]), r["photo_url"]) for r in rows}
+
+
 async def posts_json(rows, uid=None):
-    """post_json + рейтинг и число отзывов продавца (author_id, rating, reviews)."""
+    """post_json + рейтинг и число отзывов продавца (author_id, rating, reviews) + аватар автора."""
     rows = list(rows)
     rt = await seller_ratings([p["user_id"] for p in rows])
+    avs = await avatar_info([p["user_id"] for p in rows])
     out = []
     for p in rows:
         j = post_json(p, uid)
         a, c = rt.get(p["user_id"], (0, 0))
         j["author_id"] = p["user_id"]
+        j["author_has_avatar"], j["author_photo"] = avs.get(p["user_id"], (False, None))
         j["rating"] = a
         j["reviews"] = c
         out.append(j)
@@ -3250,9 +3261,10 @@ async def api_chats(request):
         ORDER BY peer,post_id,created_at DESC LIMIT 150""",uid)
     out=[]
     for r in rows:
-        u=await pool.fetchrow("SELECT user_id,username,first_name,last_name FROM users WHERE user_id=$1",r["peer"])
+        u=await pool.fetchrow("SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1",r["peer"])
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
-            "username":u["username"],"last":r["body"],"post_id":r["post_id"],"created":fmt_dt(r["created_at"])})
+            "username":u["username"],"last":r["body"],"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
+            "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"]})
     out.sort(key=lambda x:x["created"] or "",reverse=True)
     return jr({"chats":out})
 
@@ -3263,7 +3275,7 @@ async def api_messages(request):
     if not peer or peer==uid: raise ApiError(400,"bad_peer")
     if post_id:
         post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
-        if not post or post["user_id"] not in (uid, peer):
+        if post and post["user_id"] not in (uid, peer):
             raise ApiError(404,"post_chat_not_found")
     rows=await pool.fetch("""SELECT * FROM (SELECT * FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
@@ -3278,8 +3290,11 @@ async def api_message_send(request):
     exists=await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",peer)
     if not exists: raise ApiError(404,"user_not_found")
     if post_id:
-        post=await pool.fetchrow("SELECT user_id,active FROM posts WHERE id=$1",post_id)
-        if not post or not post["active"] or post["user_id"] not in (uid, peer) or uid==peer:
+        post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
+        if post is None:
+            # объявление удалено: диалог остаётся обычным личным
+            post_id=None
+        elif post["user_id"] not in (uid, peer):
             raise ApiError(403,"post_chat_forbidden")
     row=await pool.fetchrow("INSERT INTO direct_messages(sender_id,recipient_id,body,post_id) VALUES($1,$2,$3,$4) RETURNING id,created_at",uid,peer,msg,post_id)
     try: await request.app["bot"].send_message(peer, "Новое сообщение по объявлению" + (f" #{post_id}" if post_id else "") + ". Откройте мини-приложение → Сообщения.")

@@ -212,7 +212,7 @@ nav.bar button.on{color:var(--txt);font-weight:600}
 .orb i:nth-child(3){display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 #toast{position:fixed;left:50%;top:calc(16px + env(safe-area-inset-top));transform:translate(-50%,-140%);z-index:50;max-width:88vw;padding:12px 18px;border-radius:16px;background:var(--glass2);border:1px solid var(--line);backdrop-filter:blur(16px);font-size:14px;transition:transform .45s var(--ease);box-shadow:var(--sh)}
-#toast.show{transform:translate(-50%,0)}#toast.err{border-color:rgba(180,65,79,.6)}#toast.good{border-color:rgba(47,125,91,.6)}
+#toast{opacity:0;visibility:hidden;pointer-events:none;transition:transform .45s var(--ease),opacity .25s,visibility 0s .45s}#toast.show{transform:translate(-50%,0);opacity:1;visibility:visible;transition:transform .45s var(--ease),opacity .25s,visibility 0s}#toast.err{border-color:rgba(180,65,79,.6)}#toast.good{border-color:rgba(47,125,91,.6)}
 .shake{animation:shake .45s}
 @keyframes shake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
 .sw{position:relative;width:52px;height:30px;border-radius:99px;background:var(--line);cursor:pointer;transition:background .3s;flex:none;box-shadow:inset 0 2px 4px rgba(0,0,0,.12)}
@@ -579,6 +579,7 @@ nav.bar button.on .e .mi{transform:translateY(-1px) scale(1.06);filter:drop-shad
 .chat-card{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:22px;border:1px solid var(--line);background:var(--card);box-shadow:var(--sh),var(--shin);cursor:pointer;transition:transform .2s var(--ease),border-color .2s}
 .chat-card:active{transform:scale(.975)}
 .chat-card:hover{border-color:var(--acc-line)}
+.cav{overflow:hidden}.cav img,.sav img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}.sav{flex:none;width:26px;height:26px;border-radius:50%;display:inline-grid;place-items:center;overflow:hidden;font-size:12px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 50%,#000))}
 .chat-card .cav{position:relative;flex:none;width:54px;height:54px;border-radius:50%;display:grid;place-items:center;font-size:22px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 50%,#000));box-shadow:0 6px 14px color-mix(in srgb,var(--acc) 35%,transparent)}
 .chat-card .cmain{min-width:0;flex:1}
 .chat-card .crow{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
@@ -924,9 +925,36 @@ async function api(path, body, method) {
 const DEAL_ST = {awaiting_fee:'Ожидание комиссии',awaiting_asset:'Ожидание подарка',in_progress:'В процессе',awaiting_seller:'Ожидание продавца',payout_pending:'Ожидание выдачи',refund_pending:'Ожидание возврата',disputed:'Спор',completed:'Завершена',cancelled:'Отменена',refunded:'Возвращена',pending_acceptance:'Ожидает принятия'};
 const loader = () => '<div class="loader"><div class="orb"><i></i><i></i><i></i></div></div>';
 const empty = (ic, t) => `<div class="empty view"><div class="big">${ic}</div>${esc(t)}</div>`;
+const AVC = new Map();
+function avHtml(cls, id, name, has, photo) {
+  const ini = esc(String(name || '?').slice(0, 1).toUpperCase());
+  return `<div class="${cls}" data-av="${id || ''}" data-av-has="${has ? 1 : 0}" data-av-photo="${esc(photo || '')}">${ini}</div>`;
+}
+function avSet(node, src) {
+  if (!node || !src) return;
+  const im = new Image(); im.alt = '';
+  im.onload = () => { if (node.isConnected) { node.textContent = ''; node.appendChild(im); } };
+  im.src = src;
+}
+async function avBlob(id) {
+  if (!AVC.has(id)) {
+    AVC.set(id, fetch('/api/profile/avatar?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '' } })
+      .then(r => { if (!r.ok) throw Error('avatar'); return r.blob(); })
+      .then(b => URL.createObjectURL(b)).catch(() => { AVC.delete(id); return null; }));
+  }
+  return AVC.get(id);
+}
+function avFill(root) {
+  (root || document).querySelectorAll('[data-av]').forEach(n => {
+    if (n.dataset.avDone) return; n.dataset.avDone = '1';
+    const id = n.dataset.av, photo = n.dataset.avPhoto;
+    if (n.dataset.avHas === '1' && id) avBlob(id).then(u => { if (u) avSet(n, u); else if (photo) avSet(n, photo); });
+    else if (photo) avSet(n, photo);
+  });
+}
 async function fail(e) {
   if (e.code === 'subscribe') { await loadMe(); return go('gate', {}, { replace: true }); }
-  toast(ERR[e.code] || (e.code === 'network' ? 'Нет связи с сервером' : 'Ошибка: ' + e.code), 'err');
+  toast(ERR[e.code] || (e.code === 'network' ? 'Нет связи с сервером' : 'Не удалось выполнить действие'), 'err');
 }
 const confirmBox = msg => new Promise(res => { if (tg && tg.showConfirm) tg.showConfirm(msg, res); else res(confirm(msg)); });
 function openLink(u) { if (!u) return; if ((/^https:\/\/t\.me\//.test(u) || /^tg:\/\//.test(u)) && tg && tg.openTelegramLink) tg.openTelegramLink(u); else if (tg && tg.openLink) tg.openLink(u); else window.open(u, '_blank'); }
@@ -1053,7 +1081,7 @@ function adDetail(p) {
       <h3 class="ad-title">${esc(a.title)}</h3>
       <div class="chips"><span class="chip dim">📂 ${esc(p.topic)}</span><span class="chip dim">🕒 ${esc(p.created)}</span></div>
       ${a.desc ? `<div class="rich ad-desc">${esc(a.desc)}</div>` : ''}
-      <div class="ad-au seller" data-seller="${p.author_id || ''}">Продавец: <b>${esc(p.author)}</b> ${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span><span>· ${p.reviews} отзыв.</span>` : '<span>· пока без отзывов</span>'}${p.author_id ? '<span class="arr">›</span>' : ''}</div>
+      <div class="ad-au seller" data-seller="${p.author_id || ''}">${avHtml('sav',p.author_id,p.author,p.author_has_avatar,p.author_photo)}<b>${esc(p.author)}</b> ${p.reviews ? `<span class="rt">★ ${esc(p.rating)}</span><span>· ${p.reviews} отзыв.</span>` : '<span>· пока без отзывов</span>'}${p.author_id ? '<span class="arr">›</span>' : ''}</div>
     </div></div>`;
 }
 
@@ -1147,6 +1175,7 @@ views.ad = async (el, p) => {
     ${a.expires ? `<div class="post-meta">Действует до ${esc(a.expires)}</div>` : ''}`;
   const talk=$('.talk',el); if(talk) talk.onclick=()=>go('chat',{peer:a.author_id,post_id:a.id});
   const tgTalk=$('.telegram-talk',el); if(tgTalk) tgTalk.onclick=()=>openLink(a.author_url || a.contact);
+  avFill(el);
   const sel = $('.seller', el); if (sel && a.author_id) sel.onclick = () => go('profile', { id: a.author_id });
   const sb = $('.seller-btn', el); if (sb) sb.onclick = () => go('profile', { id: a.author_id });
   const directBtn=$('.direct-deal',el); if(directBtn) directBtn.onclick=()=>go('direct_deals',{seller_id:a.author_id,post_id:a.id});
@@ -1369,8 +1398,8 @@ views.profile = async (el, params={}) => {
 views.chats = async el => {
   const d=await api('/api/chats');el.innerHTML=`<h2 class="page">Чаты</h2>`;
   if(!d.chats.length){el.innerHTML+=empty('✉','Здесь появятся ваши диалоги');return;}
-  el.innerHTML+=`<div class="chats-list">${d.chats.map(c=>`<div class="chat-card" data-peer="${c.id}" data-post="${c.post_id||''}"><div class="cav">${esc(c.name.slice(0,1).toUpperCase())}</div><div class="cmain"><div class="crow"><b>${esc(c.name)}</b><small>${esc((c.created||'').slice(0,11))}</small></div><div class="clast">${c.post_id?`<span class="ctag">#${c.post_id}</span>`:''}${esc(c.last)}</div></div></div>`).join('')}</div>`;
-  $$('.chat-card',el).forEach(x=>x.onclick=()=>go('chat',{peer:+x.dataset.peer,post_id:x.dataset.post?+x.dataset.post:0}));
+  el.innerHTML+=`<div class="chats-list">${d.chats.map(c=>`<div class="chat-card" data-peer="${c.id}" data-post="${c.post_id||''}">${avHtml('cav',c.id,c.name,c.has_avatar,c.photo_url)}<div class="cmain"><div class="crow"><b>${esc(c.name)}</b><small>${esc((c.created||'').slice(0,11))}</small></div><div class="clast">${c.post_id?`<span class="ctag">#${c.post_id}</span>`:''}${esc(c.last)}</div></div></div>`).join('')}</div>`;
+  avFill(el);$$('.chat-card',el).forEach(x=>x.onclick=()=>go('chat',{peer:+x.dataset.peer,post_id:x.dataset.post?+x.dataset.post:0}));
 };
 views.chat = async (el,params={}) => {
   const peer=Number(params.peer);if(!peer){el.innerHTML=empty('✉','Не выбран собеседник');return;}
@@ -1379,7 +1408,7 @@ views.chat = async (el,params={}) => {
   const pname=(pu&&pu.name)||'Собеседник';
   const SEND='<svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M3.4 20.4 21 12 3.4 3.6 3.3 10l12.4 2-12.4 2z"/></svg>';
   el.innerHTML=`<div class="cv">
-    <div class="tg-top"><button class="tg-back" id="cvBack" aria-label="Назад"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px;stroke-width:2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="cav">${esc(pname.slice(0,1).toUpperCase())}</div><div class="ct" id="peerProfile"><b>${esc(pname)}</b><small>${post_id?'Объявление #'+post_id:(pu&&pu.username?'@'+esc(pu.username):'личный диалог')}</small></div></div>
+    <div class="tg-top"><button class="tg-back" id="cvBack" aria-label="Назад"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px;stroke-width:2.2"><path d="M15 5l-7 7 7 7"/></svg></button>${avHtml('cav',peer,pname,pu&&pu.has_avatar,pu&&pu.photo_url)}<div class="ct" id="peerProfile"><b>${esc(pname)}</b><small>${post_id?'Объявление #'+post_id:(pu&&pu.username?'@'+esc(pu.username):'личный диалог')}</small></div></div>
     ${post_id?'<div class="tg-pin"><i>🛡</i><span>Безопасная сделка по объявлению #'+post_id+'</span><button id="startEscrow">Сделка</button></div>':''}
     <div class="cv-log" id="chatLog"></div>
     <div class="cv-bar"><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
@@ -1402,6 +1431,7 @@ views.chat = async (el,params={}) => {
     if(near||force)log.scrollTop=log.scrollHeight;
   };
   draw(d.messages,true);
+  avFill(el);
   $('#peerProfile',el).onclick=()=>go('profile',{id:peer});
   $('#cvBack',el).onclick=()=>back();
   const escrowBtn=$('#startEscrow',el);if(escrowBtn)escrowBtn.onclick=()=>go('escrow',{seller_id:peer,post_id,terms:'Сделка по объявлению #'+post_id+'\nУсловия согласовать в чате.'});
