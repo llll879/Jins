@@ -603,6 +603,7 @@ async def init_db():
             system BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE INDEX IF NOT EXISTS direct_deal_messages_idx ON direct_deal_messages(deal_id,id);
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS post_id INT REFERENCES posts(id) ON DELETE SET NULL;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS deal_id BIGINT REFERENCES direct_deals(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,post_id,id DESC);
         ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS listing_post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         CREATE TABLE IF NOT EXISTS favorites(
@@ -3848,7 +3849,7 @@ async def api_messages(request):
     _viewing[(uid,peer,post_id or 0)]=time.monotonic()
     await pool.execute("""UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2
         AND read_at IS NULL AND post_id IS NOT DISTINCT FROM $3""",uid,peer,post_id)
-    rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,
+    rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,deal_id,
         (file_data IS NOT NULL) has_file FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
         AND post_id IS NOT DISTINCT FROM $3 ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer,post_id)
@@ -3856,13 +3857,19 @@ async def api_messages(request):
     seen=await pool.fetchval("SELECT last_seen FROM users WHERE user_id=$1",peer)
     online=bool(seen and (datetime.now(timezone.utc)-seen).total_seconds()<90)
     typing=time.monotonic()-_typing.get((peer,uid,post_id or 0),0)<5
+    deals={}
+    dids=[r["deal_id"] for r in rows if r["deal_id"]]
+    if dids:
+        for dr in await pool.fetch("SELECT id,buyer_id,seller_id,amount,terms,status,buyer_confirmed_at,seller_confirmed_at FROM direct_deals WHERE id=ANY($1::bigint[])",dids):
+            deals[dr["id"]]={"id":dr["id"],"buyer_id":dr["buyer_id"],"seller_id":dr["seller_id"],"amount":int(dr["amount"] or 0),
+                "terms":dr["terms"],"status":dr["status"],"bc":dr["buyer_confirmed_at"] is not None,"sc":dr["seller_confirmed_at"] is not None}
     msgs=[]
     for r in rows:
         f=None
         if r["has_file"]:
             f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
         msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
-            "read":r["read_at"] is not None,"file":f})
+            "read":r["read_at"] is not None,"file":f,"deal":deals.get(r["deal_id"]) if r["deal_id"] else None})
     return jr({"messages":msgs,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
 
 
@@ -4044,6 +4051,23 @@ async def direct_member(deal_id, uid):
     return row
 
 
+async def api_resolve(request):
+    """Exg:/@username -> user_id."""
+    q=str(request.query.get("q") or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,32}",q): raise ApiError(400,"bad_input")
+    uid=await pool.fetchval("SELECT user_id FROM users WHERE lower(username)=lower($1)",q)
+    if not uid: raise ApiError(404,"user_not_found")
+    return jr({"user_id":uid})
+
+
+async def api_review_lookup(request):
+    """Exg:/r123 -> кому оставлен отзыв (чтобы открыть профиль и подсветить отзыв)."""
+    rid=int(request.query.get("id") or 0)
+    tid=await pool.fetchval("SELECT target_id FROM user_reviews WHERE id=$1",rid)
+    if not tid: raise ApiError(404,"review_not_found")
+    return jr({"target_id":tid,"id":rid})
+
+
 async def api_direct_list(request):
     uid=request["u"]["id"]
     rows=await pool.fetch("""SELECT id,buyer_id,seller_id,amount,terms,status,created_at,updated_at
@@ -4071,6 +4095,9 @@ async def api_direct_create(request):
         VALUES($1,$2,$3,$4,'pending_acceptance',$5) RETURNING id""",uid,seller_id,amount,terms,post_id)
     await pool.execute("INSERT INTO direct_deal_messages(deal_id,sender_id,body,system) VALUES($1,$2,$3,TRUE)",
         row["id"],uid,"Предложение прямой сделки создано. Гарант не участвует, деньги и передаваемое сервис не удерживает.")
+    # карточка сделки сразу появляется в личном чате (с кнопками «Принять» / «Подтвердить выполнение»)
+    await pool.execute("INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,deal_id) VALUES($1,$2,$3,$4,$5)",
+        uid,seller_id,f"🤝 Сделка #{row['id']}",post_id,row["id"])
     try: await request.app["bot"].send_message(seller_id,f"Вам предложили прямую сделку #{row['id']}. Откройте KMBP EXCHANGE → Сделки без гаранта.")
     except Exception: pass
     return jr({"ok":True,"id":row["id"],"status":"pending_acceptance"})
@@ -4751,6 +4778,8 @@ def build_web(bot: Bot):
     r.add_get("/img/{kind}/{id}", api_img)
     r.add_get("/api/me", api_me)
     r.add_get("/api/profile", api_profile)
+    r.add_get("/api/resolve", api_resolve)
+    r.add_get("/api/review", api_review_lookup)
     r.add_post("/api/profile", api_profile_update)
     r.add_get("/api/profile/avatar", api_profile_avatar)
     r.add_post("/api/profile/avatar", api_profile_avatar_upload)
