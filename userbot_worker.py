@@ -212,7 +212,7 @@ async def offer_delete_listing(pool, http, seller_id, deal_id):
         kb.append([{"text": "Оставить", "callback_data": "pd:n:0"}])
         text = ("🎉 Сделка успешно завершена!\nОбъявление уже неактуально? Удалите его, чтобы оно не висело в ленте и в группе."
                 if listing and len(rows) == 1 else
-                "🎉 Сделка успешно завершена!\nПродали товар? Выберите объявление, которое нужно удалить (из ленты и из группы).")
+                "🎉 Сделка успешно завершена!\nОбъявление уже неактуально? Выберите то, которое нужно удалить (из ленты и из группы).")
         await notify(http, seller_id, text, {"inline_keyboard": kb})
     except Exception:
         log.exception("offer_delete_listing failed")
