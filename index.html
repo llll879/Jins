@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#e8eaef">
 <title>KMBP EXCHANGE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
@@ -660,6 +661,55 @@ nav.bar button.on .e .mi{transform:translateY(-1px) scale(1.06);filter:drop-shad
 .rsubmit:disabled{opacity:.45;box-shadow:none}
 .rlock{display:flex;gap:12px;align-items:flex-start;padding:16px;border-radius:22px;border:1px dashed var(--line);background:var(--glass);margin:14px 0;color:var(--dim);font-size:13.5px;line-height:1.45}
 .rlock i{font-style:normal;font-size:22px}
+
+/* ===================== ЧАТ НА ВЕСЬ ЭКРАН (как в Telegram) ===================== */
+body.in-chat header.top,body.in-chat nav.bar{display:none}
+body.in-chat #main{padding:0;overflow:hidden;display:flex;flex-direction:column}
+body.in-chat #main>.view{flex:1;min-height:0;display:flex;animation:none}
+body.in-chat #app{max-width:none}
+.cv{flex:1;height:auto;min-height:0;width:100%;display:flex;flex-direction:column;position:relative;
+  background:
+   radial-gradient(circle at 20% 15%,color-mix(in srgb,var(--acc) 16%,transparent),transparent 45%),
+   radial-gradient(circle at 85% 80%,color-mix(in srgb,var(--acc) 14%,transparent),transparent 50%),
+   var(--bg)}
+.cv::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background-image:radial-gradient(var(--line) 1.4px,transparent 1.6px),radial-gradient(var(--line) 1.4px,transparent 1.6px);
+  background-size:30px 30px;background-position:0 0,15px 15px}
+.tg-top{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:10px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px 6px;background:var(--navbg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.tg-back{flex:none;width:42px;height:42px;border:0;border-radius:50%;background:transparent;color:var(--txt);display:grid;place-items:center;cursor:pointer}
+.tg-back:active{background:var(--acc-soft)}
+.tg-top .cav{flex:none;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:18px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 50%,#000))}
+.tg-top .ct{min-width:0;flex:1;cursor:pointer;line-height:1.25}
+.tg-top .ct b{display:block;font-size:16.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tg-top .ct small{display:block;color:var(--dim);font-size:12.5px}
+.tg-pin{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 14px;background:var(--navbg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);font-size:13.5px}
+.tg-pin i{font-style:normal;font-size:18px}
+.tg-pin span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.tg-pin button{flex:none;border:0;cursor:pointer;padding:7px 14px;border-radius:999px;font-weight:700;font-size:13px;color:#fff;background:var(--acc)}
+.cv-log{position:relative;z-index:1;flex:1;min-height:0;padding:10px 10px 8px;gap:0;-webkit-overflow-scrolling:touch}
+.cv-day{margin:10px 0 8px;padding:4px 12px;font-size:12.5px;font-weight:600;color:var(--txt);background:color-mix(in srgb,var(--bg) 70%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border:0}
+.cv-msg{position:relative;max-width:78%;margin:1.5px 0;padding:7px 11px 6px;border-radius:18px;font-size:16px;line-height:1.35;box-shadow:0 1px 2px rgba(0,0,0,.14)}
+.cv-msg .tm{display:inline-block;float:right;margin:7px 0 -2px 12px;font-size:11px;opacity:.65}
+.cv-msg.theirs{background:var(--glass2);border:0;border-bottom-left-radius:5px}
+:root[data-theme="dark"] .cv-msg.theirs{background:#222a36}
+.cv-msg.mine{border-bottom-right-radius:5px;background:linear-gradient(160deg,color-mix(in srgb,var(--acc) 85%,#fff),var(--acc));box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.cv-msg.first{margin-top:8px}
+.cv-msg.first.theirs::after,.cv-msg.first.mine::after{content:"";position:absolute;bottom:0;width:10px;height:14px}
+.cv-msg.first.theirs{border-top-left-radius:18px}
+.cv-bar{position:relative;z-index:2;flex:none;align-items:flex-end;gap:8px;margin:0;padding:8px 10px calc(8px + env(safe-area-inset-bottom));border:0;border-radius:0;border-top:1px solid var(--line);background:var(--navbg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:none}
+.cv-bar:focus-within{box-shadow:none;border-color:var(--line)}
+.cv-bar textarea{flex:1;min-height:42px;padding:10px 16px;border-radius:22px;background:var(--glass2);border:1px solid var(--line);font-size:16px}
+:root[data-theme="dark"] .cv-bar textarea{background:#222a36}
+.cv-bar textarea:focus{border-color:var(--acc)}
+.cv-send{width:46px;height:46px}
+.cv-send:disabled{opacity:.55;background:var(--dim);box-shadow:none}
+
+/* аватарка в «Профиль»: квадрат со скруглёнными углами */
+#meAvatar,.prof .pav{width:84px;height:84px;min-width:84px;max-width:84px;flex:none;aspect-ratio:1/1;border-radius:24px;overflow:hidden;font-size:34px}
+#meAvatar img,.prof .pav img{width:100%;height:100%;object-fit:cover;border-radius:0;display:block}
+
+.brand-t{margin:30px 4px 22px;text-align:center;font-family:"Unbounded","Montserrat","Segoe UI",system-ui,sans-serif;font-weight:800;font-size:25px;letter-spacing:2.5px;line-height:1;color:var(--txt);text-shadow:0 6px 22px color-mix(in srgb,var(--acc) 30%,transparent)}
+.brand-t span{background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 70%,#fff),var(--acc) 55%,color-mix(in srgb,var(--acc) 70%,#000));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
 </style>
 </head>
 <body>
@@ -909,7 +959,7 @@ async function go(name, params = {}, opt = {}) {
   const main = $('#main');
   if (!opt.replace && S.cur && !opt.noPush && name !== S.cur) S.hist.push({ name: S.cur, params: S.curParams || {} });
   if (opt.root) S.hist = [];
-  S.cur = name; S.curParams = params; setInd(name); document.body.classList.toggle('is-home', name === 'home');
+  S.cur = name; S.curParams = params; setInd(name); document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat');
   const old = $('.view', main); if (old) { old.classList.add('leave'); await sleep(150); }
   const v = document.createElement('div'); v.className = 'view'; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
   $('#backBtn').style.display = S.hist.length ? 'inline-block' : 'none';
@@ -1057,7 +1107,7 @@ views.home = async el => {
   if (S.me.missing.length) return views.gate(el);
   const topics = S.me.topics.filter(t => t.count > 0), total = topics.reduce((a, t) => a + t.count, 0);
   if (S.homeTopic && !topics.some(t => t.id === S.homeTopic)) S.homeTopic = 0;
-  el.innerHTML = `<div class="shead"><div class="sbar">${ic('search', false)}<input class="sin" id="q" type="search" enterkeyhint="search" autocomplete="off" maxlength="300" placeholder="Найти объявление"><button class="sfl" id="fl" aria-label="Категории">${ic('sliders', false)}</button></div></div>
+  el.innerHTML = `<div class="brand-t"><span>KMBP</span> EXCHANGE</div><div class="shead"><div class="sbar">${ic('search', false)}<input class="sin" id="q" type="search" enterkeyhint="search" autocomplete="off" maxlength="300" placeholder="Найти объявление"><button class="sfl" id="fl" aria-label="Категории">${ic('sliders', false)}</button></div></div>
     <div class="cats" id="cats"><button class="cat" data-t="0">Все <span class="n">${total}</span></button>${topics.map(t => `<button class="cat" data-t="${t.id}">${esc(t.name)} <span class="n">${t.count}</span></button>`).join('')}</div>
     <div id="gridbox"></div>`;
   const box = $('#gridbox', el); let token = 0;
@@ -1329,8 +1379,8 @@ views.chat = async (el,params={}) => {
   const pname=(pu&&pu.name)||'Собеседник';
   const SEND='<svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M3.4 20.4 21 12 3.4 3.6 3.3 10l12.4 2-12.4 2z"/></svg>';
   el.innerHTML=`<div class="cv">
-    <div class="cv-head"><div class="cav">${esc(pname.slice(0,1).toUpperCase())}</div><div class="ct" id="peerProfile"><b>${esc(pname)}</b><small>${post_id?'Объявление #'+post_id:(pu&&pu.username?'@'+esc(pu.username):'Личный диалог')} · открыть профиль</small></div></div>
-    ${post_id?'<div class="cv-deal"><span>🛡 Договоритесь об условиях и создайте безопасную сделку</span><button id="startEscrow">Сделка</button></div>':''}
+    <div class="tg-top"><button class="tg-back" id="cvBack" aria-label="Назад"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px;stroke-width:2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="cav">${esc(pname.slice(0,1).toUpperCase())}</div><div class="ct" id="peerProfile"><b>${esc(pname)}</b><small>${post_id?'Объявление #'+post_id:(pu&&pu.username?'@'+esc(pu.username):'личный диалог')}</small></div></div>
+    ${post_id?'<div class="tg-pin"><i>🛡</i><span>Безопасная сделка по объявлению #'+post_id+'</span><button id="startEscrow">Сделка</button></div>':''}
     <div class="cv-log" id="chatLog"></div>
     <div class="cv-bar"><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
   </div>`;
@@ -1353,6 +1403,7 @@ views.chat = async (el,params={}) => {
   };
   draw(d.messages,true);
   $('#peerProfile',el).onclick=()=>go('profile',{id:peer});
+  $('#cvBack',el).onclick=()=>back();
   const escrowBtn=$('#startEscrow',el);if(escrowBtn)escrowBtn.onclick=()=>go('escrow',{seller_id:peer,post_id,terms:'Сделка по объявлению #'+post_id+'\nУсловия согласовать в чате.'});
   const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';sendBtn.disabled=!ta.value.trim();};
   ta.addEventListener('input',fit);
