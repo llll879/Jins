@@ -646,6 +646,7 @@ async def init_db():
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS fwd_from BIGINT;
+        CREATE INDEX IF NOT EXISTS direct_messages_pins_idx ON direct_messages(sender_id,recipient_id) WHERE pinned_at IS NOT NULL;
         CREATE TABLE IF NOT EXISTS dm_hidden(user_id BIGINT NOT NULL, msg_id BIGINT NOT NULL, PRIMARY KEY(user_id,msg_id));
         CREATE TABLE IF NOT EXISTS user_blocks(
             blocker_id BIGINT NOT NULL, blocked_id BIGINT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(),
@@ -3502,6 +3503,15 @@ class ApiError(Exception):
 
 
 def jr(data, status=200):
+    resp = _jr(data, status)
+    try:
+        resp.enable_compression()
+    except Exception:
+        pass
+    return resp
+
+
+def _jr(data, status=200):
     return web.json_response(
         data, status=status,
         dumps=lambda o: json.dumps(
@@ -3524,6 +3534,9 @@ def check_init_data(init_data: str):
         return None
 
 
+_touch_cache = {}
+
+
 @web.middleware
 async def api_mw(request, handler):
     if not request.path.startswith("/api/"):
@@ -3532,12 +3545,20 @@ async def api_mw(request, handler):
     if not u:
         return jr({"error": "unauthorized"}, 401)
     request["u"] = u
-    await pool.execute(
-        "INSERT INTO users(user_id,username,first_name,last_name,photo_url,last_seen) VALUES($1,$2,$3,$4,$5,now()) "
-        "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
-        "last_name=EXCLUDED.last_name, photo_url=COALESCE(EXCLUDED.photo_url,users.photo_url), last_seen=now()",
-        u["id"], u.get("username"), u.get("first_name"), u.get("last_name"), u.get("photo_url"))
-    await track_username(u["id"], u.get("username"))
+    # профиль и last_seen пишем не чаще раза в 20 с (раньше — на каждый запрос, включая опрос чата каждые 2.5 с)
+    sig = (u.get("username"), u.get("first_name"), u.get("last_name"), u.get("photo_url"))
+    prev = _touch_cache.get(u["id"])
+    now_m = time.monotonic()
+    if not prev or prev[1] != sig or now_m - prev[0] > 20:
+        await pool.execute(
+            "INSERT INTO users(user_id,username,first_name,last_name,photo_url,last_seen) VALUES($1,$2,$3,$4,$5,now()) "
+            "ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, "
+            "last_name=EXCLUDED.last_name, photo_url=COALESCE(EXCLUDED.photo_url,users.photo_url), last_seen=now()",
+            u["id"], u.get("username"), u.get("first_name"), u.get("last_name"), u.get("photo_url"))
+        if len(_touch_cache) > 20000:
+            _touch_cache.clear()
+        _touch_cache[u["id"]] = (now_m, sig)
+        await track_username(u["id"], u.get("username"))
     try:
         return await handler(request)
     except web.HTTPException:
@@ -4511,9 +4532,12 @@ async def api_chats(request):
         "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1",uid)}
     blocked={r["blocked_id"] for r in await pool.fetch("SELECT blocked_id FROM user_blocks WHERE blocker_id=$1",uid)}
     out=[]
-    sbs=await staff_badges([r["peer"] for r in rows])
+    peers=[r["peer"] for r in rows]
+    sbs=await staff_badges(peers)
+    users={q["user_id"]:q for q in await pool.fetch(
+        "SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=ANY($1::bigint[])",peers)}
     for r in rows:
-        u=await pool.fetchrow("SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1",r["peer"])
+        u=users.get(r["peer"])
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
             "username":u["username"],"last":dm_preview(r["body"],r["file_name"],r["file_mime"]),"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
             "ts":r["created_at"].timestamp(),"mine":r["sender_id"]==uid,"read":r["read_at"] is not None,
@@ -5686,8 +5710,24 @@ async def health(_):
     return web.Response(text="ok")
 
 
-async def app_page(_):
-    return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+_page_cache = {"mtime": 0, "body": b"", "etag": ""}
+
+
+async def app_page(request):
+    """index.html целиком из памяти и со сжатием (≈700 КБ с иконками → ~200 КБ), с ETag, чтобы повторные открытия были мгновенными."""
+    try:
+        mt = INDEX_FILE.stat().st_mtime
+        if mt != _page_cache["mtime"]:
+            data = INDEX_FILE.read_bytes()
+            _page_cache.update(mtime=mt, body=data, etag='"%s"' % hashlib.md5(data).hexdigest())
+    except OSError:
+        return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+    hdr = {"Cache-Control": "no-cache", "ETag": _page_cache["etag"]}
+    if request.headers.get("If-None-Match") == _page_cache["etag"]:
+        return web.Response(status=304, headers=hdr)
+    resp = web.Response(body=_page_cache["body"], content_type="text/html", charset="utf-8", headers=hdr)
+    resp.enable_compression()
+    return resp
 
 
 # ---------------------------------------------- escrow API and receipts
