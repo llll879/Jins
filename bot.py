@@ -604,6 +604,10 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS direct_deal_messages_idx ON direct_deal_messages(deal_id,id);
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS deal_id BIGINT REFERENCES direct_deals(id) ON DELETE SET NULL;
+        CREATE TABLE IF NOT EXISTS misc_reports(
+            id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, ref_id BIGINT NOT NULL, reporter_id BIGINT NOT NULL,
+            target_id BIGINT, reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(kind,ref_id,reporter_id));
         CREATE INDEX IF NOT EXISTS direct_messages_pair_idx ON direct_messages(sender_id,recipient_id,post_id,id DESC);
         ALTER TABLE escrow_deals ADD COLUMN IF NOT EXISTS listing_post_id INT REFERENCES posts(id) ON DELETE SET NULL;
         CREATE TABLE IF NOT EXISTS favorites(
@@ -3326,6 +3330,33 @@ def dm_preview(body, fname, fmime):
     return ""
 
 
+def app_link(param):
+    """Ссылка, открывающая мини-приложение сразу на нужном месте (профиль/объявление/отзыв)."""
+    base = share_base()
+    return f"{base}?startapp={param}" if base else ""
+
+
+async def who_html(uid):
+    """Кликабельная строка о пользователе для админ-чата: имя → профиль в приложении, @ник, ID, код Exg:/…"""
+    r = await pool.fetchrow("SELECT username,first_name,last_name FROM users WHERE user_id=$1", uid)
+    un = r["username"] if r else None
+    name = (" ".join(x for x in [r["first_name"], r["last_name"]] if x) if r else "") or un or "Пользователь"
+    app = app_link(f"n_{un}" if un else f"u_{uid}")
+    head = f'<a href="{app}">{esc(name)}</a>' if app else f'<a href="tg://user?id={uid}">{esc(name)}</a>'
+    bits = []
+    if un:
+        bits.append(f'<a href="https://t.me/{un}">@{esc(un)}</a>')
+    bits.append(f"ID <code>{uid}</code>")
+    bits.append(f"<code>Exg:/{'@' + un if un else 'u' + str(uid)}</code>")
+    return head + " · " + " · ".join(bits)
+
+
+def add_link_buttons(kb, pairs):
+    for text, url in pairs:
+        if url:
+            kb.button(text=text, url=url)
+
+
 async def notify_staff(text, markup=None):
     if _BOT is None:
         return
@@ -3339,7 +3370,7 @@ async def push_dm(sender_id, peer, post_id, body_txt, fname, fmime):
     """Пуш получателю в Telegram. Не шлём, если он прямо сейчас читает этот чат, и не чаще раза в 40 с на диалог."""
     if _BOT is None:
         return
-    if time.monotonic() - _viewing.get((peer, sender_id, post_id or 0), 0) < 8:
+    if time.monotonic() - _viewing.get((peer, sender_id), 0) < 8:
         return
     if not rate_ok(("dmpush", peer, sender_id), 40):
         return
@@ -3472,6 +3503,30 @@ async def cb_post_report(cb: CallbackQuery, bot: Bot):
     await pool.execute("UPDATE reports SET status='reviewed' WHERE id=$1", r["id"])
     try:
         await cb.message.edit_text((cb.message.html_text or "") + f"\n\n{foot}", reply_markup=None)
+    except Exception:
+        pass
+    await cb.answer(foot)
+
+
+@router.callback_query(F.data.startswith("mr:"))
+async def cb_misc_report(cb: CallbackQuery):
+    if await role(cb.from_user.id) is None:
+        return await cb.answer("Нет доступа", show_alert=True)
+    _, act, rid = cb.data.split(":")
+    r = await pool.fetchrow("SELECT * FROM misc_reports WHERE id=$1", int(rid))
+    if not r:
+        return await cb.answer("Жалоба не найдена", show_alert=True)
+    if act == "delrev":
+        await pool.execute("DELETE FROM user_reviews WHERE id=$1", r["ref_id"])
+        foot = "🗑 Отзыв удалён"
+    elif act == "scam" and r["target_id"]:
+        await pool.execute("UPDATE users SET scam=TRUE WHERE user_id=$1", r["target_id"])
+        foot = "🚫 Помечен как мошенник"
+    else:
+        foot = "✅ Жалоба закрыта"
+    await pool.execute("UPDATE misc_reports SET status='reviewed' WHERE id=$1", r["id"])
+    try:
+        await cb.message.edit_text((cb.message.html_text or "") + f"\n\n{foot} ({esc(label_d(cb.from_user.model_dump()))})", reply_markup=None)
     except Exception:
         pass
     await cb.answer(foot)
@@ -3813,12 +3868,12 @@ async def api_profile_review_save(request):
 
 async def api_chats(request):
     uid=request["u"]["id"]
-    rows=await pool.fetch("""SELECT DISTINCT ON (peer,post_id) peer,post_id,body,created_at,sender_id,read_at,file_name,file_mime FROM (
+    rows=await pool.fetch("""SELECT DISTINCT ON (peer) peer,post_id,body,created_at,sender_id,read_at,file_name,file_mime FROM (
         SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id,sender_id,read_at,file_name,file_mime
         FROM direct_messages WHERE sender_id=$1 OR recipient_id=$1) x
-        ORDER BY peer,post_id,created_at DESC LIMIT 150""",uid)
-    unread={ (r["sender_id"],r["post_id"]):r["c"] for r in await pool.fetch(
-        "SELECT sender_id,post_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1,2",uid)}
+        ORDER BY peer,created_at DESC,id DESC LIMIT 150""",uid)
+    unread={ r["sender_id"]:r["c"] for r in await pool.fetch(
+        "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1",uid)}
     blocked={r["blocked_id"] for r in await pool.fetch("SELECT blocked_id FROM user_blocks WHERE blocker_id=$1",uid)}
     out=[]
     sbs=await staff_badges([r["peer"] for r in rows])
@@ -3827,7 +3882,7 @@ async def api_chats(request):
         if u: out.append({"id":u["user_id"],"name":" ".join(x for x in [u["first_name"],u["last_name"]] if x) or u["username"] or "Пользователь",
             "username":u["username"],"last":dm_preview(r["body"],r["file_name"],r["file_mime"]),"post_id":r["post_id"],"created":fmt_dt(r["created_at"]),
             "ts":r["created_at"].timestamp(),"mine":r["sender_id"]==uid,"read":r["read_at"] is not None,
-            "unread":unread.get((r["peer"],r["post_id"]),0),"blocked":r["peer"] in blocked,
+            "unread":unread.get(r["peer"],0),"blocked":r["peer"] in blocked,
             "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"],"sb":sbs.get(r["peer"],"")})
     out.sort(key=lambda x:x["ts"],reverse=True)
     return jr({"chats":out,"unread":sum(x["unread"] for x in out)})
@@ -3846,17 +3901,17 @@ async def api_messages(request):
         post=await pool.fetchrow("SELECT user_id FROM posts WHERE id=$1",post_id)
         if post and post["user_id"] not in (uid, peer):
             raise ApiError(404,"post_chat_not_found")
-    _viewing[(uid,peer,post_id or 0)]=time.monotonic()
+    _viewing[(uid,peer)]=time.monotonic()
     await pool.execute("""UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2
-        AND read_at IS NULL AND post_id IS NOT DISTINCT FROM $3""",uid,peer,post_id)
-    rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,deal_id,
+        AND read_at IS NULL""",uid,peer)
+    rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,deal_id,post_id,
         (file_data IS NOT NULL) has_file FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
-        AND post_id IS NOT DISTINCT FROM $3 ORDER BY id DESC LIMIT 100) q ORDER BY id""",uid,peer,post_id)
+        ORDER BY id DESC LIMIT 150) q ORDER BY id""",uid,peer)
     by_me,by_peer=await block_state(uid,peer)
     seen=await pool.fetchval("SELECT last_seen FROM users WHERE user_id=$1",peer)
     online=bool(seen and (datetime.now(timezone.utc)-seen).total_seconds()<90)
-    typing=time.monotonic()-_typing.get((peer,uid,post_id or 0),0)<5
+    typing=time.monotonic()-_typing.get((peer,uid,0),0)<5
     deals={}
     dids=[r["deal_id"] for r in rows if r["deal_id"]]
     if dids:
@@ -3869,7 +3924,7 @@ async def api_messages(request):
         if r["has_file"]:
             f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
         msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
-            "read":r["read_at"] is not None,"file":f,"deal":deals.get(r["deal_id"]) if r["deal_id"] else None})
+            "read":r["read_at"] is not None,"file":f,"post_id":r["post_id"],"deal":deals.get(r["deal_id"]) if r["deal_id"] else None})
     return jr({"messages":msgs,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
 
 
@@ -3877,7 +3932,7 @@ async def api_typing(request):
     uid=request["u"]["id"]; d=await body(request)
     peer=int(d.get("peer") or 0); post_id=int(d.get("post_id") or 0)
     if peer and peer!=uid:
-        _typing[(uid,peer,post_id)]=time.monotonic()
+        _typing[(uid,peer,0)]=time.monotonic()
         if len(_typing)>5000: _typing.clear()
     return jr({"ok":True})
 
@@ -3916,7 +3971,7 @@ async def api_message_send(request):
             raise ApiError(403,"post_chat_forbidden")
     row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None)
-    _typing.pop((uid,peer,post_id or 0),None)
+    _typing.pop((uid,peer,0),None)
     asyncio.create_task(push_dm(uid,peer,post_id,msg,fname,fmime))
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
 
@@ -3951,13 +4006,15 @@ async def api_report_user(request):
         kb=InlineKeyboardBuilder()
         kb.button(text="🚫 Мошенник",callback_data=f"ur:scam:{row['id']}")
         kb.button(text="✅ Закрыть",callback_data=f"ur:ok:{row['id']}")
-        kb.adjust(2)
-        tn, un = await user_name(target), await user_name(uid)
+        tun=await pool.fetchval("SELECT username FROM users WHERE user_id=$1",target)
+        add_link_buttons(kb,[("👤 Профиль",app_link(f"n_{tun}" if tun else f"u_{target}")),
+                             ("📄 Объявление",app_link(f"ad_{post_id}") if post_id else "")])
+        kb.adjust(2,2)
         asyncio.create_task(notify_staff(
             f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
-            f"На: <a href=\"tg://user?id={target}\">{esc(tn)}</a> (ID {target})\n"
-            f"От: <a href=\"tg://user?id={uid}\">{esc(un)}</a>\nПричина: {esc(reason)}"
-            + (f"\nОбъявление: #{post_id}" if post_id else ""), kb.as_markup()))
+            f"На: {await who_html(target)}\n"
+            f"От: {await who_html(uid)}\nПричина: {esc(reason)}"
+            + (f"\nОбъявление: #{post_id} · <code>Exg:/a{post_id}</code>" + (f' · <a href="{app_link(f"ad_{post_id}")}">открыть</a>' if app_link(f"ad_{post_id}") else "") if post_id else ""), kb.as_markup()))
     return jr({"ok":True,"duplicate":row is None})
 
 
@@ -4196,16 +4253,63 @@ async def api_report(request):
         "INSERT INTO reports(post_id,reporter_id,reason) VALUES($1,$2,$3) "
         "ON CONFLICT(post_id,reporter_id) DO NOTHING RETURNING id", pid, uid, reason)
     if row:
-        pt = await pool.fetchval("SELECT text FROM posts WHERE id=$1", pid)
+        prow = await pool.fetchrow("SELECT text,user_id FROM posts WHERE id=$1", pid)
+        pt = prow["text"] if prow else ""
+        owner = prow["user_id"] if prow else None
         kb = InlineKeyboardBuilder()
         kb.button(text="🗑 Удалить объявление", callback_data=f"pr:del:{row['id']}")
         kb.button(text="✅ Закрыть", callback_data=f"pr:ok:{row['id']}")
-        kb.adjust(2)
-        who = await user_name(uid)
+        oun = await pool.fetchval("SELECT username FROM users WHERE user_id=$1", owner) if owner else None
+        add_link_buttons(kb, [("📄 Объявление", app_link(f"ad_{pid}")),
+                              ("👤 Автор", app_link(f"n_{oun}" if oun else f"u_{owner}") if owner else "")])
+        kb.adjust(2, 2)
+        ad_url = app_link(f"ad_{pid}")
         asyncio.create_task(notify_staff(
-            f"🚩 <b>Жалоба #{row['id']} на объявление #{pid}</b>\n"
-            f"От: <a href=\"tg://user?id={uid}\">{esc(who)}</a>\n"
-            f"Причина: {esc(reason)}\n\n<b>{esc(ad_title(pt))}</b>", kb.as_markup()))
+            f"🚩 <b>Жалоба #{row['id']} на объявление #{pid}</b>"
+            + (f' · <a href="{ad_url}">открыть</a>' if ad_url else "") + f" · <code>Exg:/a{pid}</code>\n"
+            f"От: {await who_html(uid)}\n"
+            + (f"Автор: {await who_html(owner)}\n" if owner else "")
+            + f"Причина: {esc(reason)}\n\n<b>{esc(ad_title(pt))}</b>", kb.as_markup()))
+    return jr({"ok": True, "duplicate": row is None})
+
+
+async def api_report_any(request):
+    """Жалоба на отзыв или сделку — уходит в админ-чат со ссылками на профили и на отзыв."""
+    uid = request["u"]["id"]; d = await body(request)
+    kind = str(d.get("kind") or ""); ref = int(d.get("id") or 0)
+    reason = (d.get("reason") or "Жалоба из мини-приложения").strip()[:500]
+    if kind not in ("review", "deal") or ref <= 0: raise ApiError(400, "bad_input")
+    target = None; lines = ""; buttons = []; acts = []
+    if kind == "review":
+        rv = await pool.fetchrow("SELECT reviewer_id,target_id,rating,text FROM user_reviews WHERE id=$1", ref)
+        if not rv: raise ApiError(404, "review_not_found")
+        target = rv["reviewer_id"]
+        lines = (f"Отзыв: {'★' * rv['rating']}{'☆' * (5 - rv['rating'])} · <code>Exg:/r{ref}</code>"
+                 + (f' · <a href="{app_link(f"r_{ref}")}">открыть</a>' if app_link(f"r_{ref}") else "") + "\n"
+                 f"Автор отзыва: {await who_html(rv['reviewer_id'])}\nО пользователе: {await who_html(rv['target_id'])}\n"
+                 f"Текст: {esc((rv['text'] or '—')[:400])}\n")
+        buttons = [("⭐ Отзыв", app_link(f"r_{ref}"))]
+        acts = [("🗑 Удалить отзыв", "delrev")]
+    else:
+        dl = await direct_member(ref, uid)
+        target = dl["seller_id"] if uid == dl["buyer_id"] else dl["buyer_id"]
+        lines = (f"Сделка #{ref} · <code>Exg:/d{ref}</code> · статус: {esc(dl['status'])} · сумма: {int(dl['amount'] or 0)} ⭐\n"
+                 f"Покупатель: {await who_html(dl['buyer_id'])}\nПродавец: {await who_html(dl['seller_id'])}\n"
+                 f"Условия: {esc((dl['terms'] or '')[:500])}\n")
+        acts = [("🚫 Мошенник", "scam")]
+    row = await pool.fetchrow("INSERT INTO misc_reports(kind,ref_id,reporter_id,target_id,reason) VALUES($1,$2,$3,$4,$5) "
+        "ON CONFLICT(kind,ref_id,reporter_id) DO NOTHING RETURNING id", kind, ref, uid, target, reason)
+    if row:
+        kb = InlineKeyboardBuilder()
+        for t, a in acts: kb.button(text=t, callback_data=f"mr:{a}:{row['id']}")
+        kb.button(text="✅ Закрыть", callback_data=f"mr:ok:{row['id']}")
+        if target:
+            tun = await pool.fetchval("SELECT username FROM users WHERE user_id=$1", target)
+            buttons.append(("👤 Профиль", app_link(f"n_{tun}" if tun else f"u_{target}")))
+        add_link_buttons(kb, buttons); kb.adjust(2, 2)
+        title = "на отзыв" if kind == "review" else "на сделку"
+        asyncio.create_task(notify_staff(
+            f"🚩 <b>Жалоба #{row['id']} {title}</b>\nОт: {await who_html(uid)}\nПричина: {esc(reason)}\n\n{lines}", kb.as_markup()))
     return jr({"ok": True, "duplicate": row is None})
 
 
@@ -4797,6 +4901,7 @@ def build_web(bot: Bot):
     r.add_post("/api/favorite", api_favorite_toggle)
     r.add_post("/api/report", api_report)
     r.add_post("/api/report_user", api_report_user)
+    r.add_post("/api/report_any", api_report_any)
     r.add_post("/api/block", api_block)
     r.add_get("/api/blocks", api_blocks)
     r.add_post("/api/typing", api_typing)
