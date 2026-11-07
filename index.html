@@ -41,10 +41,60 @@ body.is-home header.top{display:none}
 .iconbtn:active{transform:scale(.92)}
 #main{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 16px 110px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 #main::-webkit-scrollbar{display:none}
-.view{animation:viewIn .45s var(--ease) both}
-.view.leave{animation:viewOut .15s ease-in both}
+:root{--spring:cubic-bezier(.34,1.45,.64,1);--out:cubic-bezier(.16,1,.3,1)}
+.view{animation:viewIn .42s var(--out) both;will-change:transform,opacity}
+.view.d-push{animation-name:vPush}.view.d-back{animation-name:vBack}.view.d-zoom{animation-name:vZoom}
+.view.d-tab{animation-name:vTab}.view.d-fade{animation-name:vFade;animation-duration:.22s}
+.view.leave{animation:vLeave .14s ease-in both;pointer-events:none}
+.view.leave.d-back{animation-name:vLeaveBack}
+.view.leave.d-tab,.view.leave.d-fade{animation-name:vLeaveFade}
 @keyframes viewIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-@keyframes viewOut{to{opacity:0;transform:translateY(-6px)}}
+@keyframes vPush{from{opacity:0;transform:translateX(36px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes vBack{from{opacity:0;transform:translateX(-30px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes vZoom{0%{opacity:0;transform:translateY(26px) scale(.94)}60%{opacity:1}100%{opacity:1;transform:none}}
+@keyframes vTab{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:none}}
+@keyframes vFade{from{opacity:0}to{opacity:1}}
+@keyframes vLeave{to{opacity:0;transform:translateX(-18px) scale(.99)}}
+@keyframes vLeaveBack{to{opacity:0;transform:translateX(24px) scale(.99)}}
+@keyframes vLeaveFade{to{opacity:0}}
+.loader{animation:fadeIn .3s .28s both}
+.chats-list>*,#reviews>*,.profile-stats>*{opacity:0;animation:rise .5s var(--out) both;animation-delay:calc(min(var(--i,0),9)*50ms + 60ms)}
+.profile-avatar,.profile-hero .cav{animation:avPop .6s var(--spring) .08s both}
+@keyframes avPop{from{opacity:0;transform:scale(.55) rotate(-8deg)}to{opacity:1;transform:none}}
+.profile-hero{animation:rise .5s var(--out) both}
+.rcard-av{transition:transform .25s var(--spring)}.rcard:hover .rcard-av{transform:scale(1.08)}
+.rcard,.chat-card,.pcard,.li,.ac,.tile{transition:transform .22s var(--spring),border-color .2s,box-shadow .25s}
+.iconbtn,.chip,.cat,.tile,.sh-b{transition:transform .18s var(--spring),background .2s,color .2s,border-color .2s}
+.iconbtn:active,.chip:active,.cat:active,.tile:active,.sh-b:active{transform:scale(.93)}
+nav.bar button:active{transform:scale(.88)}
+nav.bar button{transition:color .25s,transform .2s var(--spring)}
+nav.bar button.on .e{animation:navPop .5s var(--spring)}
+@keyframes navPop{0%{transform:scale(.7) translateY(3px)}60%{transform:scale(1.18) translateY(-3px)}100%{transform:none}}
+.nb{animation:nbPop .5s var(--spring) both}@keyframes nbPop{from{transform:scale(0)}to{transform:scale(1)}}
+.sheet-bg{backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);transition:opacity .22s}
+.sheet{animation:sheetUp .42s var(--out)}
+.sheet-bg.out .sheet{transform:translateY(100%);transition:transform .22s ease-in}
+.sheet-bg.out{opacity:0;transition:opacity .22s}
+.sh-b{animation:rise .35s var(--out) both;animation-delay:calc(var(--i,0)*35ms + 60ms)}
+.ac{animation-duration:.5s;animation-timing-function:var(--out)}
+.post{animation-duration:.5s;animation-timing-function:var(--out)}
+body.in-chat #main>.view{animation:chatIn .38s var(--out) both}
+body.in-chat #main>.view.d-back{animation-name:chatInBack}
+body.in-chat #main>.view.leave{animation:vLeave .14s ease-in both}
+@keyframes chatIn{from{opacity:0;transform:translateX(44px)}to{opacity:1;transform:none}}
+@keyframes chatInBack{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}
+.tg-top{animation:slideDown .45s var(--out) .05s both}.cv-bar{animation:slideUp .45s var(--out) .1s both}
+@keyframes slideDown{from{opacity:0;transform:translateY(-100%)}to{opacity:1;transform:none}}
+@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:none}}
+.cv-msg{animation:none}
+.cv-msg.in{animation:msgIn .45s var(--out) both;animation-delay:calc(var(--i,0)*28ms + 120ms)}
+.cv-msg.new.mine{animation:msgMine .38s var(--spring) both;transform-origin:100% 100%}
+.cv-msg.new.theirs{animation:msgTheirs .38s var(--spring) both;transform-origin:0 100%}
+@keyframes msgIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes msgMine{from{opacity:0;transform:translateY(12px) scale(.82)}to{opacity:1;transform:none}}
+@keyframes msgTheirs{from{opacity:0;transform:translateY(12px) scale(.82)}to{opacity:1;transform:none}}
+.cv-send{transition:transform .2s var(--spring),opacity .2s}.cv-send:active{transform:scale(.86)}
+.cv-send:not(:disabled){animation:sendPop .35s var(--spring)}@keyframes sendPop{from{transform:scale(.7)}to{transform:none}}
 .stagger>*{opacity:0;animation:rise .5s var(--ease) both;animation-delay:calc(var(--i,0)*55ms + 40ms)}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 
@@ -666,7 +716,7 @@ nav.bar button.on .e .mi{transform:translateY(-1px) scale(1.06);filter:drop-shad
 /* ===================== ЧАТ НА ВЕСЬ ЭКРАН (как в Telegram) ===================== */
 body.in-chat header.top,body.in-chat nav.bar{display:none}
 body.in-chat #main{padding:0;overflow:hidden;display:flex;flex-direction:column}
-body.in-chat #main>.view{flex:1;min-height:0;display:flex;animation:none}
+body.in-chat #main>.view{flex:1;min-height:0;display:flex}
 body.in-chat #app{max-width:none}
 .cv{flex:1;height:auto;min-height:0;width:100%;display:flex;flex-direction:column;position:relative;
   background:
@@ -1100,18 +1150,23 @@ function setInd(name) {
   $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.go === (TAB_OF[name] || 'more')));
 }
 async function go(name, params = {}, opt = {}) {
-  const main = $('#main');
+  const main = $('#main'), tok = S.navTok = (S.navTok || 0) + 1;
+  const same = name === S.cur;
+  // направление: back — назад, tab — вкладка, fade — обновление того же экрана, zoom — профиль, push — вперёд
+  const dir = opt.dir || (opt.root ? 'tab' : (opt.replace && same ? 'fade' : (name === 'profile' ? 'zoom' : 'push')));
   if (!opt.replace && S.cur && !opt.noPush && name !== S.cur) S.hist.push({ name: S.cur, params: S.curParams || {} });
   if (opt.root) S.hist = [];
-  S.cur = name; S.curParams = params; setInd(name); document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat');
-  const old = $('.view', main); if (old) { old.classList.add('leave'); await sleep(150); }
-  const v = document.createElement('div'); v.className = 'view'; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
+  S.cur = name; S.curParams = params; setInd(name);
+  const old = $('.view', main);
+  if (old) { old.classList.add('leave', 'd-' + dir); await sleep(dir === 'fade' ? 90 : 130); if (tok !== S.navTok) return; }
+  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat');
+  const v = document.createElement('div'); v.className = 'view d-' + dir; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
   $('#backBtn').style.display = S.hist.length ? 'inline-block' : 'none';
   try { tg && (S.hist.length ? tg.BackButton.show() : tg.BackButton.hide()); } catch (e) {}
-  try { v.innerHTML = ''; await views[name](v, params); stagger(v); } catch (e) { v.innerHTML = ''; await fail(e); }
+  try { v.innerHTML = ''; await views[name](v, params); if (tok !== S.navTok) return; stagger(v); } catch (e) { if (tok !== S.navTok) return; v.innerHTML = ''; await fail(e); }
 }
-function stagger(el) { $$('.stagger', el).forEach(s => [...s.children].forEach((c, i) => c.style.setProperty('--i', i))); }
-function back() { const h = S.hist.pop(); if (h) go(h.name, h.params, { replace: true }); }
+function stagger(el) { $$('.stagger,.chats-list,#reviews', el).forEach(s => [...s.children].forEach((c, i) => c.style.setProperty('--i', i))); }
+function back() { const h = S.hist.pop(); if (h) go(h.name, h.params, { replace: true, dir: 'back' }); }
 $('#backBtn').onclick = back; try { tg && tg.BackButton.onClick(back); } catch (e) {}
 $$('#nav button').forEach(b => b.onclick = () => go(b.dataset.go, {}, { root: true }));
 document.addEventListener('click', e => { const g = e.target.closest('[data-go]'); if (g && !g.closest('#nav')) go(g.dataset.go, g.dataset.p ? JSON.parse(g.dataset.p) : {}); });
@@ -1159,11 +1214,12 @@ async function toggleFav(id) {
 function sheet(title, rows) {
   const bg = document.createElement('div'); bg.className = 'sheet-bg';
   bg.innerHTML = `<div class="sheet"><div class="sh-t">${esc(title)}</div><div class="sh-list">${rows.map((r, i) => `<button class="sh-b ${r.cls || ''}" data-i="${i}">${esc(r.t)}</button>`).join('')}</div><button class="sh-b cancel">Отмена</button></div>`;
-  const close = () => { bg.classList.add('out'); setTimeout(() => bg.remove(), 180); };
+  const close = () => { bg.classList.add('out'); setTimeout(() => bg.remove(), 230); };
   bg.onclick = e => {
     if (e.target === bg || e.target.closest('.cancel')) return close();
     const b = e.target.closest('[data-i]'); if (b) { close(); rows[+b.dataset.i].fn(); }
   };
+  $$('.sh-b', bg).forEach((b, i) => b.style.setProperty('--i', i));
   document.body.appendChild(bg);
 }
 
@@ -1580,7 +1636,7 @@ views.chat = async (el,params={}) => {
     <div class="cv-bar" id="cvBar"><input type="file" id="cvFile" hidden><button class="cv-att" id="cvAtt" aria-label="Прикрепить файл">${CLIP}</button><textarea id="chatText" rows="1" maxlength="3000" placeholder="Написать сообщение…"></textarea><button class="cv-send" id="chatSend" disabled aria-label="Отправить">${SEND}</button></div>
   </div>`;
   const log=$('#chatLog',el),ta=$('#chatText',el),sendBtn=$('#chatSend',el);
-  let last='',st=d,lastTyp=0,tick=0;
+  let last='',st=d,lastTyp=0,tick=0;const seen=new Set();let firstDraw=true;
   const fileHtml=f=>!f?'':(f.image?`<img class="cv-img" src="${esc(f.url)}" data-u="${esc(f.url)}" alt="" loading="lazy">`:`<div class="cv-file" data-u="${esc(f.url)}"><i>📎</i><span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span></div>`);
   const draw=(rows,force)=>{
     const sig=rows.length+':'+(rows.length?rows[rows.length-1].id:0)+':'+rows.filter(m=>m.read).length;
@@ -1588,14 +1644,17 @@ views.chat = async (el,params={}) => {
     const near=log.scrollHeight-log.scrollTop-log.clientHeight<120;
     if(!rows.length){log.innerHTML='<div class="cv-empty"><i>👋</i>Начните диалог —<br>напишите первое сообщение</div>';return;}
     let html='',prevDay='',prevSender=null;
-    rows.forEach(m=>{
+    const total=rows.length;
+    rows.forEach((m,idx)=>{
+      const cls=firstDraw?(idx>=total-8?' in':''):(m.id!==undefined&&!seen.has(m.id)?' new':'');
+      const ci=firstDraw?Math.max(0,idx-(total-8)):0;if(m.id!==undefined)seen.add(m.id);
       const cr=String(m.created||'');const parts=cr.split(' ');const day=parts.length>1?parts[0]:'';const tm=parts.length>1?parts[parts.length-1]:cr;
       const mine=m.sender===S.me.user.id;
       if(day&&day!==prevDay){html+=`<div class="cv-day">${esc(day)}</div>`;prevDay=day;prevSender=null;}
-      html+=`<div class="cv-msg ${mine?'mine':'theirs'}${prevSender!==m.sender?' first':''}">${fileHtml(m.file)}${m.body?esc(m.body):''}<span class="tm">${esc(tm)}${mine?` <span class="tk ${m.read?'r':''}">${m.read?'✓✓':'✓'}</span>`:''}</span></div>`;
+      html+=`<div class="cv-msg ${mine?'mine':'theirs'}${prevSender!==m.sender?' first':''}${cls}"${cls===' in'?` style="--i:${ci}"`:''}>${fileHtml(m.file)}${m.body?esc(m.body):''}<span class="tm">${esc(tm)}${mine?` <span class="tk ${m.read?'r':''}">${m.read?'✓✓':'✓'}</span>`:''}</span></div>`;
       prevSender=m.sender;
     });
-    log.innerHTML=html;
+    log.innerHTML=html;firstDraw=false;
     if(near||force)log.scrollTop=log.scrollHeight;
   };
   const sub=n=>{const s=$('#cvSub',el);if(!s)return;if(n.peer_typing){s.textContent='печатает…';s.className='typing';}else{s.className='';s.textContent=n.peer_online?'в сети':(post_id?'Объявление #'+post_id:(pu&&pu.username?'@'+pu.username:'был(а) недавно'));}};
