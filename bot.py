@@ -704,6 +704,50 @@ async def init_db():
             ) s WHERE username IS NOT NULL AND username<>'' GROUP BY user_id, lower(username)
             ON CONFLICT DO NOTHING""")
         await pool.execute("INSERT INTO settings(key,value) VALUES('uname_hist_seed','1') ON CONFLICT DO NOTHING")
+    # ---- чеки сделок: создаются триггером БД при ЛЮБОМ финальном статусе (completed / cancelled / refunded), из любого процесса ----
+    had_receipts = await pool.fetchval("SELECT to_regclass('public.deal_receipts') IS NOT NULL")
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS deal_receipts(
+            id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, deal_id BIGINT NOT NULL, outcome TEXT NOT NULL,
+            buyer_id BIGINT NOT NULL, seller_id BIGINT NOT NULL, amount BIGINT NOT NULL DEFAULT 0, fee BIGINT NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(kind,deal_id));
+        CREATE INDEX IF NOT EXISTS deal_receipts_buyer_idx ON deal_receipts(buyer_id,id DESC);
+        CREATE INDEX IF NOT EXISTS deal_receipts_seller_idx ON deal_receipts(seller_id,id DESC);
+        CREATE TABLE IF NOT EXISTS deal_receipt_seen(
+            user_id BIGINT NOT NULL, receipt_id BIGINT NOT NULL REFERENCES deal_receipts(id) ON DELETE CASCADE,
+            seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(user_id,receipt_id));
+        CREATE OR REPLACE FUNCTION kmbp_receipt_escrow() RETURNS trigger AS $f$
+        BEGIN
+            INSERT INTO deal_receipts(kind,deal_id,outcome,buyer_id,seller_id,amount,fee)
+            VALUES('escrow',NEW.id,NEW.status,NEW.buyer_id,NEW.seller_id,COALESCE(NEW.amount,0),COALESCE(NEW.fee,0))
+            ON CONFLICT(kind,deal_id) DO NOTHING;
+            RETURN NEW;
+        END $f$ LANGUAGE plpgsql;
+        CREATE OR REPLACE FUNCTION kmbp_receipt_direct() RETURNS trigger AS $f$
+        BEGIN
+            INSERT INTO deal_receipts(kind,deal_id,outcome,buyer_id,seller_id,amount,fee)
+            VALUES('direct',NEW.id,NEW.status,NEW.buyer_id,NEW.seller_id,COALESCE(NEW.amount,0),0)
+            ON CONFLICT(kind,deal_id) DO NOTHING;
+            RETURN NEW;
+        END $f$ LANGUAGE plpgsql;
+        DROP TRIGGER IF EXISTS kmbp_receipt_escrow_t ON escrow_deals;
+        CREATE TRIGGER kmbp_receipt_escrow_t AFTER INSERT OR UPDATE OF status ON escrow_deals FOR EACH ROW
+            WHEN (NEW.status IN ('completed','cancelled','refunded')) EXECUTE FUNCTION kmbp_receipt_escrow();
+        DROP TRIGGER IF EXISTS kmbp_receipt_direct_t ON direct_deals;
+        CREATE TRIGGER kmbp_receipt_direct_t AFTER INSERT OR UPDATE OF status ON direct_deals FOR EACH ROW
+            WHEN (NEW.status IN ('completed','cancelled')) EXECUTE FUNCTION kmbp_receipt_direct();
+    """)
+    # чеки для уже закрытых сделок (старые) — создаём и сразу считаем просмотренными, чтобы не показывать пачку анимаций
+    await pool.execute("""
+        INSERT INTO deal_receipts(kind,deal_id,outcome,buyer_id,seller_id,amount,fee,created_at)
+        SELECT 'escrow',id,status,buyer_id,seller_id,COALESCE(amount,0),COALESCE(fee,0),COALESCE(closed_at,updated_at,created_at)
+        FROM escrow_deals WHERE status IN ('completed','cancelled','refunded') ON CONFLICT(kind,deal_id) DO NOTHING;
+        INSERT INTO deal_receipts(kind,deal_id,outcome,buyer_id,seller_id,amount,fee,created_at)
+        SELECT 'direct',id,status,buyer_id,seller_id,COALESCE(amount,0),0,COALESCE(closed_at,updated_at,created_at)
+        FROM direct_deals WHERE status IN ('completed','cancelled') ON CONFLICT(kind,deal_id) DO NOTHING;""")
+    if not had_receipts:
+        await pool.execute("""INSERT INTO deal_receipt_seen(user_id,receipt_id) SELECT buyer_id,id FROM deal_receipts
+            UNION SELECT seller_id,id FROM deal_receipts ON CONFLICT DO NOTHING""")
     if not had_read:
         # старые сообщения считаем прочитанными, чтобы не показать «сотни непрочитанных»
         await pool.execute("UPDATE direct_messages SET read_at=created_at WHERE read_at IS NULL")
@@ -5952,6 +5996,67 @@ async def api_escrow_receipt(request):
     return web.Response(body=buf.getvalue(),content_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="kmbp-escrow-{deal_id}.pdf"'})
 
 
+# ---------------------------------------------- чеки сделок (единые для гаранта и прямых сделок)
+async def receipt_payload(r, uid):
+    """Данные чека для интерфейса: название объявления/условий, сумма, ID, дата, роль смотрящего."""
+    table = "escrow_deals" if r["kind"] == "escrow" else "direct_deals"
+    deal = await pool.fetchrow(f"SELECT terms,listing_post_id FROM {table} WHERE id=$1", r["deal_id"])
+    title = ""
+    if deal:
+        if deal["listing_post_id"]:
+            txt = await pool.fetchval("SELECT text FROM posts WHERE id=$1", deal["listing_post_id"])
+            if txt:
+                title = ad_title(txt)
+        if not title and deal["terms"]:
+            title = re.sub(r"\s+", " ", str(deal["terms"]).split("\n")[0]).strip()[:60]
+    return {"id": r["id"], "kind": r["kind"], "deal_id": r["deal_id"], "outcome": r["outcome"],
+            "title": title or "Сделка", "amount": int(r["amount"] or 0), "fee": int(r["fee"] or 0),
+            "created": fmt_dt(r["created_at"]),
+            "role": "buyer" if r["buyer_id"] == uid else ("seller" if r["seller_id"] == uid else "staff")}
+
+
+async def api_receipts(request):
+    uid = request["u"]["id"]
+    rows = await pool.fetch("SELECT * FROM deal_receipts WHERE buyer_id=$1 OR seller_id=$1 ORDER BY id DESC LIMIT 100", uid)
+    return jr({"receipts": [await receipt_payload(r, uid) for r in rows]})
+
+
+async def api_receipt_one(request):
+    uid = request["u"]["id"]
+    kind = request.query.get("kind") or "escrow"
+    try:
+        did = int(request.query.get("id") or 0)
+    except ValueError:
+        raise ApiError(400, "bad_id")
+    r = await pool.fetchrow("SELECT * FROM deal_receipts WHERE kind=$1 AND deal_id=$2", kind, did)
+    if not r:
+        raise ApiError(404, "receipt_not_found")
+    if uid not in (r["buyer_id"], r["seller_id"]) and not await role(uid):
+        raise ApiError(403, "forbidden")
+    return jr({"receipt": await receipt_payload(r, uid)})
+
+
+async def api_receipts_pending(request):
+    """Чеки закрытых сделок, которые пользователь ещё не видел (для анимации «сделка завершена»)."""
+    uid = request["u"]["id"]
+    rows = await pool.fetch(
+        """SELECT r.* FROM deal_receipts r WHERE (r.buyer_id=$1 OR r.seller_id=$1)
+           AND r.created_at > now() - interval '7 days'
+           AND NOT EXISTS(SELECT 1 FROM deal_receipt_seen s WHERE s.user_id=$1 AND s.receipt_id=r.id)
+           ORDER BY r.id LIMIT 5""", uid)
+    return jr({"receipts": [await receipt_payload(r, uid) for r in rows]})
+
+
+async def api_receipts_seen(request):
+    uid = request["u"]["id"]; d = await body(request)
+    ids = [int(x) for x in (d.get("ids") or []) if str(x).isdigit()][:20]
+    if ids:
+        await pool.execute(
+            """INSERT INTO deal_receipt_seen(user_id,receipt_id) SELECT $1,id FROM deal_receipts
+               WHERE id=ANY($2::bigint[]) AND (buyer_id=$1 OR seller_id=$1) ON CONFLICT DO NOTHING""", uid, ids)
+    return jr({"ok": True})
+
+
 def build_web(bot: Bot):
     app = web.Application(middlewares=[api_mw], client_max_size=12 * 1024 * 1024)
     app["bot"] = bot
@@ -6054,6 +6159,10 @@ def build_web(bot: Bot):
     r.add_post("/api/direct/action", api_direct_action)
     r.add_post("/api/direct/message", api_direct_message)
     r.add_get("/api/escrow/receipt/{id}", api_escrow_receipt)
+    r.add_get("/api/receipts", api_receipts)
+    r.add_get("/api/receipt", api_receipt_one)
+    r.add_get("/api/receipts/pending", api_receipts_pending)
+    r.add_post("/api/receipts/seen", api_receipts_seen)
     r.add_get("/api/admin/escrow", api_admin_escrow)
     r.add_post("/api/admin/escrow_action", api_admin_escrow_action)
     r.add_post("/api/admin/escrow_config", api_admin_escrow_config)
