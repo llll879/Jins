@@ -39,6 +39,9 @@ from aiogram.types import (
     ReplyKeyboardMarkup, ReplyParameters, WebAppInfo, LabeledPrice, PreCheckoutQuery,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+import public_api  # публичный API v1 (ключи, вебхуки, документация) — см. API.md
+import group_watch  # v35: бот в группах — сбор объявлений на модерацию и предупреждения о скамерах
 try:
     from telegram_premium_emojis import CommonIcons, build_inline_button
 except ImportError:
@@ -486,6 +489,11 @@ async def init_db():
         """
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS texts(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS banners(
+            id SERIAL PRIMARY KEY, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '',
+            link TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '', img BYTEA, img_mime TEXT,
+            active BOOLEAN NOT NULL DEFAULT TRUE, sort INT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS admins(user_id BIGINT PRIMARY KEY, role TEXT NOT NULL, label TEXT);
         CREATE TABLE IF NOT EXISTS topics(
             id SERIAL PRIMARY KEY, name TEXT NOT NULL, thread_id BIGINT, sort INT DEFAULT 0);
@@ -521,6 +529,8 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_dev BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_adm BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_badrep BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_scam BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_avatar_at TIMESTAMPTZ;
         CREATE TABLE IF NOT EXISTS user_reviews(
@@ -736,6 +746,27 @@ async def init_db():
         DROP TRIGGER IF EXISTS kmbp_receipt_direct_t ON direct_deals;
         CREATE TRIGGER kmbp_receipt_direct_t AFTER INSERT OR UPDATE OF status ON direct_deals FOR EACH ROW
             WHEN (NEW.status IN ('completed','cancelled')) EXECUTE FUNCTION kmbp_receipt_direct();
+    """)
+    # проекты (боты, каналы, группы, сайты…): отдельные профили, от имени которых можно публиковать объявления
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS projects(
+            id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'other',
+            name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '', verified BOOLEAN NOT NULL DEFAULT FALSE,
+            avatar_data BYTEA, avatar_mime TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE INDEX IF NOT EXISTS projects_owner_idx ON projects(owner_id);
+        ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_id INT REFERENCES projects(id) ON DELETE SET NULL;
+        ALTER TABLE requests ADD COLUMN IF NOT EXISTS project_id INT REFERENCES projects(id) ON DELETE SET NULL;
+        ALTER TABLE requests ADD COLUMN IF NOT EXISTS project_name TEXT;
+        CREATE INDEX IF NOT EXISTS posts_project_idx ON posts(project_id) WHERE project_id IS NOT NULL;
+        DO $m$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='projects' AND column_name='mark') THEN
+                ALTER TABLE projects ADD COLUMN mark TEXT NOT NULL DEFAULT '';
+                UPDATE projects SET mark='green' WHERE verified;
+            END IF;
+        END $m$;
+        ALTER TABLE projects ADD COLUMN IF NOT EXISTS mark_req TEXT NOT NULL DEFAULT '';
+        ALTER TABLE projects ADD COLUMN IF NOT EXISTS mark_req_at TIMESTAMPTZ;
     """)
     # чеки для уже закрытых сделок (старые) — создаём и сразу считаем просмотренными, чтобы не показывать пачку анимаций
     await pool.execute("""
@@ -1013,9 +1044,11 @@ async def build_recs(uid, total=30):
 # ---------------------------------------------------------------- posts / feed
 def render_review(r, footer=""):
     t = (
-        f"📩 <b>Заявка #{r['id']}</b>\n"
+        group_watch.card_plate(r)
+        + f"📩 <b>Заявка #{r['id']}</b>\n"
         f"👤 От: {sender_link(r)} (<code>{r['user_id']}</code>)\n"
-        f"🕒 Отправлена: {fmt_dt(r['created_at'])}\n"
+        + (f"🧩 От имени проекта: <b>{esc(r['project_name'])}</b>\n" if "project_name" in r.keys() and r["project_name"] else "")
+        + f"🕒 Отправлена: {fmt_dt(r['created_at'])}\n"
         f"📂 Тема: {esc(r['topic_name'])}\n\n"
         f"{r['text']}"
     )
@@ -1024,12 +1057,15 @@ def render_review(r, footer=""):
     return t
 
 
-def review_kb(rid):
+def review_kb(rid, r=None):
     b = InlineKeyboardBuilder()
     b.button(text="✅ Одобрить", callback_data=f"r:ok:{rid}")
     b.button(text="❌ Отклонить", callback_data=f"r:no:{rid}")
     b.button(text="✏️ Подправить и одобрить", callback_data=f"r:ed:{rid}")
-    b.adjust(2, 1)
+    links = group_watch.card_links(r, app_link) if r is not None else []
+    for text, url in links:
+        b.button(text=text, url=url)
+    b.adjust(2, 1, *([len(links)] if links else []))
     return b.as_markup()
 
 
@@ -1039,7 +1075,7 @@ async def refresh_review(bot: Bot, r, footer="", kb=False):
     try:
         await bot.edit_message_text(
             render_review(r, footer), chat_id=r["mod_chat_id"], message_id=r["mod_msg_id"],
-            reply_markup=review_kb(r["id"]) if kb else None)
+            reply_markup=review_kb(r["id"], r) if kb else None)
     except Exception:
         log.exception("refresh_review failed")
 
@@ -1053,10 +1089,10 @@ async def notify_user(bot: Bot, uid, text, markup=None):
 
 async def add_post(r, text):
     pid = await pool.fetchval(
-        "INSERT INTO posts(user_id,username,full_name,topic_id,topic_name,text,request_id,photo_id) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+        "INSERT INTO posts(user_id,username,full_name,topic_id,topic_name,text,request_id,photo_id,project_id) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
         r["user_id"], r["username"], r["full_name"], r["topic_id"], r["topic_name"], text, r["id"],
-        r["photo_id"])
+        r["photo_id"], r["project_id"] if "project_id" in r.keys() else None)
     if _BOT is not None and pid:
         asyncio.create_task(notify_saved(_BOT, pid))
     return pid
@@ -1510,15 +1546,20 @@ async def deliver_card(bot: Bot, text, markup, photo=None):
     return first, st["fid"]
 
 
-async def create_request(bot: Bot, uid, username, full_name, topic_id, text_html, photo=None):
+async def create_request(bot: Bot, uid, username, full_name, topic_id, text_html, photo=None, project=None, src=None):
     t = await pool.fetchrow("SELECT * FROM topics WHERE id=$1", topic_id)
     if not t:
         return None
     r = await pool.fetchrow(
-        "INSERT INTO requests(user_id, username, full_name, topic_id, topic_name, text, photo_id) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-        uid, username, full_name, t["id"], t["name"], text_html, photo if isinstance(photo, str) else None)
-    msg, fid = await deliver_card(bot, render_review(r), review_kb(r["id"]), photo)
+        "INSERT INTO requests(user_id, username, full_name, topic_id, topic_name, text, photo_id, project_id, project_name) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
+        uid, username, full_name, t["id"], t["name"], text_html, photo if isinstance(photo, str) else None,
+        project["id"] if project else None, project["name"] if project else None)
+    if src:   # заявка собрана из группы (group_watch): помечаем источник — плашка «АВТО-СБОР» на карточке
+        r = await pool.fetchrow(
+            "UPDATE requests SET src_chat_id=$2, src_chat_title=$3, src_link=$4, src_text=$5, ai_conf=$6 "
+            "WHERE id=$1 RETURNING *", r["id"], src["chat_id"], src["title"], src["link"], src["text"], src.get("conf"))
+    msg, fid = await deliver_card(bot, render_review(r), review_kb(r["id"], r), photo)
     if photo is not None and not fid:
         await pool.execute("DELETE FROM requests WHERE id=$1", r["id"])
         raise PhotoError()
@@ -1539,10 +1580,14 @@ async def op_approve(bot: Bot, rid, uid, label):
         "WHERE id=$1 AND status='pending' RETURNING *", rid, uid, label)
     if not r:
         return False, "Заявка уже обрабатывается"
-    pid = await add_post(r, r["text"])
-    sent = await publish_group(bot, r["topic_id"], r["text"], r["photo_id"], pid)
+    text = group_watch.with_plate(r, r["text"])   # авто-сбор: в каталоге и в группе — с плашкой «Из чата …»
+    pid = await add_post(r, text)
+    sent = await publish_group(bot, r["topic_id"], text, r["photo_id"], pid)
     await refresh_review(bot, r, f"✅ Одобрено: {esc(label)}")
-    await notify_user(bot, r["user_id"], await get_text("approved"))
+    if group_watch.is_auto(r):
+        await notify_user(bot, r["user_id"], f"✅ Ваше объявление из чата «{esc(r['src_chat_title'])}» добавлено в каталог KMBP EXCHANGE.")
+    else:
+        await notify_user(bot, r["user_id"], await get_text("approved"))
     return True, "Опубликовано" if sent else "Добавлено в каталог бота"
 
 
@@ -1553,7 +1598,8 @@ async def op_reject(bot: Bot, rid, uid, label, reason_html):
     if not r:
         return False
     await refresh_review(bot, r, f"❌ Отклонено: {esc(label)}\nПричина: {reason_html}")
-    await notify_user(bot, r["user_id"], fill(await get_text("rejected"), reason=reason_html))
+    if not group_watch.is_auto(r):
+        await notify_user(bot, r["user_id"], fill(await get_text("rejected"), reason=reason_html))
     return True
 
 
@@ -1563,6 +1609,13 @@ async def op_edit(bot: Bot, rid, uid, label, text_html):
         "WHERE id=$1 AND status IN ('pending','awaiting_edit') RETURNING *", rid, text_html, uid, label)
     if not r:
         return False
+    if group_watch.is_auto(r):
+        r = await pool.fetchrow("UPDATE requests SET status='approved_edited' WHERE id=$1 RETURNING *", r["id"])
+        text = group_watch.with_plate(r, text_html)
+        pid = await add_post(r, text)
+        await publish_group(bot, r["topic_id"], text, r["photo_id"], pid)
+        await refresh_review(bot, r, f"✅ {esc(label)} исправил и опубликовал (авто-сбор)")
+        return "auto"
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Принять", callback_data=f"u:acc:{r['id']}")
     kb.button(text="🚫 Отказаться", callback_data=f"u:dec:{r['id']}")
@@ -1589,9 +1642,14 @@ async def op_user_choice(bot: Bot, rid, uid, accept):
     return r
 
 
+APP_ANSWER_MAX = 8000  # максимум символов в ответе на вопрос анкеты
+
+
 def render_app(a, footer=""):
     t = ""
-    for lim in (500, 250, 100):  # если не влезает в 4096 знаков — укорачиваем ответы
+    cut = False
+    for lim in (500, 250, 100, 40, 10):  # если не влезает в 4096 знаков — укорачиваем ответы
+        cut = False
         lines = [
             f"🙋 <b>Анкета в админы #{a['id']}</b>",
             f"👤 {sender_link(a)} (<code>{a['user_id']}</code>)",
@@ -1601,7 +1659,10 @@ def render_app(a, footer=""):
             ans = str(qa["a"])
             if len(ans) > lim:
                 ans = ans[:lim] + "…"
+                cut = True
             lines.append(f"<b>{i}. {esc(qa['q'])}</b>\n{esc(ans)}\n")
+        if cut:
+            lines.append("ℹ️ Длинные ответы сокращены — полный текст в мини-аппе (Админ-панель → Очередь).\n")
         t = "\n".join(lines) + (f"\n{footer}" if footer else "")
         if len(t) <= 4000:
             break
@@ -1875,7 +1936,7 @@ EFF_STARS_SQL = ("COALESCE(NULLIF(u.base_stars,0), "
 
 BASE_SQL = """
 SELECT u.user_id, u.username, u.first_name, u.last_name, u.created_at, u.bio, u.verified, u.scam,
-  u.badge_dev, u.badge_adm, u.base_stars, u.base_role, u.base_note, u.base_set_at,
+  u.badge_dev, u.badge_adm, u.badge_badrep, u.badge_scam, u.base_stars, u.base_role, u.base_note, u.base_set_at,
   (u.avatar_data IS NOT NULL) has_avatar, u.photo_url,
   (SELECT count(*) FROM escrow_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id))
   + (SELECT count(*) FROM direct_deals d WHERE d.status='completed' AND (d.buyer_id=u.user_id OR d.seller_id=u.user_id)) deals,
@@ -2004,7 +2065,7 @@ def base_card(r, via=None):
         "aliases": list(r["aliases"] or []), "note": r["base_note"] or "",
         "rated_at": r["base_set_at"].astimezone(TZ).strftime("%d.%m.%Y") if r["base_set_at"] else "",
         "badges": _badges(r),
-        "sb": ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else ""),
+        "sb": ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else "") + ("b" if r["badge_badrep"] else "") + ("s" if r["badge_scam"] else ""),
         "via": via,
     }
 
@@ -2451,7 +2512,7 @@ async def apply_answer(m: Message, state: FSMContext, bot: Bot):
         return
     d = await state.get_data()
     qs = d["qs"]
-    answers = d["answers"] + [m.text.strip()[:500]]
+    answers = d["answers"] + [m.text.strip()[:APP_ANSWER_MAX]]
     if len(answers) < len(qs):
         await state.update_data(answers=answers)
         return await m.answer(f"<b>Вопрос {len(answers) + 1}/{len(qs)}</b>\n{esc(qs[len(answers)])}")
@@ -2679,8 +2740,10 @@ async def handle_pending_text(m: Message, bot: Bot):
         if await op_reject(bot, p["request_id"], m.from_user.id, label, m.html_text):
             await m.reply("Причина отправлена пользователю.")
     else:
-        if await op_edit(bot, p["request_id"], m.from_user.id, label, m.html_text):
-            await m.reply("Исправленный пост отправлен пользователю на согласование.")
+        res = await op_edit(bot, p["request_id"], m.from_user.id, label, m.html_text)
+        if res:
+            await m.reply("Исправленное объявление опубликовано." if res == "auto"
+                          else "Исправленный пост отправлен пользователю на согласование.")
 
 
 @router.message(F.text, F.chat.type.in_(GROUPS))
@@ -3583,7 +3646,7 @@ _touch_cache = {}
 
 @web.middleware
 async def api_mw(request, handler):
-    if not request.path.startswith("/api/"):
+    if not request.path.startswith("/api/") or request.path == "/api/v1" or request.path.startswith("/api/v1/"):
         return await handler(request)
     u = check_init_data(request.headers.get("X-Init-Data", ""))
     if not u:
@@ -3877,12 +3940,12 @@ async def avatar_info(ids):
 
 
 async def staff_badges(ids):
-    """{user_id: "d"|"a"|"da"} — значки рядом с ником: d = разработчик (ближе к нику), a = админ (дальше). Выдаёт только OWNER_ID."""
+    """{user_id: "d"|"a"|"da"} — значки рядом с ником: d = разработчик (ближе к нику), a = админ, b = BAD REP, s = SCAM. Выдаёт только OWNER_ID."""
     ids = list({int(i) for i in ids if i})
     if not ids:
         return {}
-    rows = await pool.fetch("SELECT user_id,badge_dev,badge_adm FROM users WHERE user_id=ANY($1::bigint[]) AND (badge_dev OR badge_adm)", ids)
-    return {r["user_id"]: ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else "") for r in rows}
+    rows = await pool.fetch("SELECT user_id,badge_dev,badge_adm,badge_badrep,badge_scam FROM users WHERE user_id=ANY($1::bigint[]) AND (badge_dev OR badge_adm OR badge_badrep OR badge_scam)", ids)
+    return {r["user_id"]: ("d" if r["badge_dev"] else "") + ("a" if r["badge_adm"] else "") + ("b" if r["badge_badrep"] else "") + ("s" if r["badge_scam"] else "") for r in rows}
 
 
 async def posts_json(rows, uid=None):
@@ -3893,6 +3956,7 @@ async def posts_json(rows, uid=None):
     bdg = await user_badges([p["user_id"] for p in rows])
     sbs = await staff_badges([p["user_id"] for p in rows])
     extra = await extra_photos([p["request_id"] for p in rows if p["request_id"]])
+    projs = await projects_by_ids([p["project_id"] for p in rows if "project_id" in p.keys() and p["project_id"]])
     out = []
     for p in rows:
         j = post_json(p, uid)
@@ -3906,6 +3970,12 @@ async def posts_json(rows, uid=None):
         j["days_left"] = max(0, int((p["expires_at"] - datetime.now(timezone.utc)).total_seconds() // 86400)) if p["expires_at"] else None
         j["rating"] = a
         j["reviews"] = c
+        pr = projs.get(p["project_id"]) if "project_id" in p.keys() and p["project_id"] else None
+        if pr:
+            j["project"] = {"id": pr["id"], "name": pr["name"], "kind": pr["kind"], "verified": bool(pr["mark"]), "mark": pr["mark"], "has_avatar": pr["has_avatar"]}
+            j["author"] = pr["name"]
+            j["author_url"] = project_url(pr) or j["author_url"]
+            j["contact"] = project_url(pr) or j["contact"]
         out.append(j)
     return out
 
@@ -4240,6 +4310,7 @@ async def api_me(request):
                   "has_avatar": personalization["has_avatar"] if personalization else False,
                   "sb": (await staff_badges([uid])).get(uid, "")},
         "role": rl,
+        "projects": [project_json(x) for x in await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)],
         "share": share_base(),
         "unread": await pool.fetchval("SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL", uid),
         "theme": personalization["theme"] if personalization else "dark",
@@ -4254,6 +4325,9 @@ async def api_me(request):
         "texts": {k: await get_text(k) for k in ("search_prompt", "no_results", "no_posts", "feed_end",
                                                  "apply_intro", "apply_closed", "apply_exists", "closed")},
         "gemini": bool(GEMINI_KEY),
+        "ui": await get_ui_texts(),
+        "banners": await get_banners(),
+        "beta": await get_beta(),
     })
 
 
@@ -4328,7 +4402,7 @@ async def api_submit(request):
     extras = []
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
-        d = {"text": form.get("text") or "", "topic_id": form.get("topic_id") or 0}
+        d = {"text": form.get("text") or "", "topic_id": form.get("topic_id") or 0, "project_id": form.get("project_id") or 0}
         f = form.get("photo")
         if f is not None and hasattr(f, "file"):
             data = f.file.read()
@@ -4350,10 +4424,19 @@ async def api_submit(request):
         raise ApiError(400, "empty")
     if len(text) > MAX_POST - 300:
         raise ApiError(400, "too_long")
+    project = None
+    try:
+        pid_ = int(d.get("project_id") or 0)
+    except (TypeError, ValueError):
+        pid_ = 0
+    if pid_:
+        project = await pool.fetchrow("SELECT id,name FROM projects WHERE id=$1 AND owner_id=$2", pid_, u["id"])
+        if not project:
+            raise ApiError(404, "project_not_found")
     try:
         r = await create_request(
             request.app["bot"], u["id"], u.get("username"), full_name_d(u),
-            int(d.get("topic_id", 0) or 0), esc(text), photo)
+            int(d.get("topic_id", 0) or 0), esc(text), photo, project)
     except PhotoError:
         raise ApiError(400, "bad_image")
     if not r:
@@ -4398,7 +4481,7 @@ async def api_apply(request):
     answers = d.get("answers") or []
     if not isinstance(answers, list) or len(answers) != len(qs):
         raise ApiError(400, "bad_answers")
-    answers = [str(a).strip()[:500] for a in answers]
+    answers = [str(a).strip()[:APP_ANSWER_MAX] for a in answers]
     if not all(answers):
         raise ApiError(400, "empty")
     a = await create_application(request.app["bot"], uid, u.get("username"), full_name_d(u), qs, answers)
@@ -4431,8 +4514,8 @@ async def api_profile(request):
     by_me = by_peer = False
     if uid != me_id:
         by_me, by_peer = await block_state(me_id, uid)
-    sb_row = await pool.fetchrow("SELECT badge_dev,badge_adm FROM users WHERE user_id=$1", uid)
-    sb = ("d" if sb_row and sb_row["badge_dev"] else "") + ("a" if sb_row and sb_row["badge_adm"] else "")
+    sb_row = await pool.fetchrow("SELECT badge_dev,badge_adm,badge_badrep,badge_scam FROM users WHERE user_id=$1", uid)
+    sb = ("d" if sb_row and sb_row["badge_dev"] else "") + ("a" if sb_row and sb_row["badge_adm"] else "") + ("b" if sb_row and sb_row["badge_badrep"] else "") + ("s" if sb_row and sb_row["badge_scam"] else "")
     flags = None
     if await role(me_id) is not None:
         fr = await pool.fetchrow("SELECT verified,scam FROM users WHERE user_id=$1", uid)
@@ -4445,8 +4528,9 @@ async def api_profile(request):
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
         "rating": (bc["score"] if bc else round(row["rating"],1)), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
+        "projects": [project_json(x) for x in await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)],
         "sb": sb, "can_badge": me_id == OWNER_ID,
-        "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"])} if me_id == OWNER_ID else None,
+        "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"]), "bad": bool(sb_row and sb_row["badge_badrep"]), "scam": bool(sb_row and sb_row["badge_scam"])} if me_id == OWNER_ID else None,
         "is_me": uid == request["u"]["id"]})
 
 
@@ -4646,11 +4730,12 @@ async def api_messages(request):
         if r["has_file"]:
             f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
         msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
+            "ts":r["created_at"].timestamp(),"rts":r["read_at"].timestamp() if r["read_at"] else None,
             "read":r["read_at"] is not None,"file":f,"post_id":r["post_id"],"deal":deals.get(r["deal_id"]) if r["deal_id"] else None,
             "edited":r["edited_at"] is not None,"pinned":r["pinned_at"] is not None,
             "reply":(replies.get(r["reply_to"]) or {"id":r["reply_to"],"sender":None,"text":"Сообщение удалено","gone":True}) if r["reply_to"] else None,
             "fwd":fwd_names.get(r["fwd_from"],"Пользователь") if r["fwd_from"] else None})
-    return jr({"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"blocked_by_me":by_me,"blocked_me":by_peer})
+    return jr({"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"peer_seen":seen.timestamp() if seen else None,"blocked_by_me":by_me,"blocked_me":by_peer})
 
 
 async def api_typing(request):
@@ -4873,14 +4958,271 @@ async def api_admin_user_flag(request):
 
 
 async def api_admin_user_badge(request):
-    """Только владелец (OWNER_ID из окружения): выдать/снять значок «разработчик» (dev) и/или «админ» (adm) — можно оба сразу."""
+    """Только владелец (OWNER_ID из окружения): выдать/снять значок «разработчик» (dev), «админ» (adm), плашку «BAD REP» (bad) и/или «SCAM» (scam) — в любом сочетании."""
     if request["u"]["id"] != OWNER_ID: raise ApiError(403,"forbidden")
     d=await body(request); target=int(d.get("user_id") or 0); badge=str(d.get("badge") or ""); on=bool(d.get("on"))
-    col={"dev":"badge_dev","adm":"badge_adm"}.get(badge)
+    col={"dev":"badge_dev","adm":"badge_adm","bad":"badge_badrep","scam":"badge_scam"}.get(badge)
     if not col: raise ApiError(400,"bad_input")
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",target): raise ApiError(404,"user_not_found")
     await pool.execute(f"UPDATE users SET {col}=$2 WHERE user_id=$1",target,on)
     return jr({"ok":True})
+
+
+
+# ---------------------------------------------------------------- проекты (боты, каналы, группы, сайты…)
+PROJECT_KINDS = ("bot", "channel", "group", "site", "service", "other")
+MAX_PROJECTS = 10
+# галочки проекта: green — хороший проект, yellow — средний (по заявке), blue — проект владельцев (только OWNER_ID)
+PROJECT_MARKS = {"green": "зелёная — «Хороший проект»", "yellow": "жёлтая — «Средний проект»", "blue": "голубая — «Проект владельцев»"}
+
+
+async def notify_staff_text(bot, text):
+    ids = {OWNER_ID} | {r["user_id"] for r in await pool.fetch("SELECT user_id FROM admins WHERE role='main'")}
+    for i in ids:
+        asyncio.create_task(notify_user(bot, i, text))
+PROJECT_SELECT = ("SELECT p.id,p.owner_id,p.kind,p.name,p.username,p.link,p.description,p.verified,p.mark,p.mark_req,p.created_at,"
+                  "(p.avatar_data IS NOT NULL) has_avatar FROM projects p")
+
+
+def norm_handle(v):
+    v = str(v or "").strip()
+    v = re.sub(r"^(https?://)?(t|telegram)\.me/", "", v, flags=re.I).lstrip("@").split("?")[0].split("/")[0]
+    return v if re.fullmatch(r"[A-Za-z0-9_]{4,32}", v) else ""
+
+
+def norm_link(v):
+    v = str(v or "").strip()[:200]
+    if not v:
+        return ""
+    if not re.match(r"^https?://", v, re.I):
+        v = "https://" + v
+    return v if re.fullmatch(r"https?://[^\s/]+\.[^\s/]+\S*", v, re.I) else ""
+
+
+def project_url(p):
+    return f"https://t.me/{p['username']}" if p["username"] else (p["link"] or None)
+
+
+def project_json(p):
+    return {"id": p["id"], "owner_id": p["owner_id"], "kind": p["kind"], "name": p["name"], "username": p["username"],
+            "link": p["link"], "url": project_url(p), "description": p["description"], "verified": bool(p["mark"]), "mark": p["mark"], "mark_req": p["mark_req"],
+            "has_avatar": p["has_avatar"], "created": fmt_dt(p["created_at"])}
+
+
+async def projects_by_ids(ids):
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await pool.fetch(PROJECT_SELECT + " WHERE p.id=ANY($1::int[])", ids)
+    return {r["id"]: r for r in rows}
+
+
+async def _read_form(request):
+    """JSON или multipart: (dict полей, файл-аватар (bytes, mime) | None)."""
+    if (request.content_type or "").startswith("multipart/"):
+        form = await request.post()
+        d = {k: form.get(k) for k in ("id", "kind", "name", "username", "link", "description", "remove_avatar", "owner", "mark")}
+        f = form.get("avatar")
+        av = None
+        if f is not None and hasattr(f, "file"):
+            data = f.file.read()
+            mime = getattr(f, "content_type", None) or "image/jpeg"
+            if data:
+                if len(data) > 5 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
+                    raise ApiError(400, "bad_image")
+                av = (data, mime)
+        return d, av
+    return await body(request), None
+
+
+def _project_fields(d, require_name=True):
+    kind = str(d.get("kind") or "other")
+    if kind not in PROJECT_KINDS:
+        kind = "other"
+    name = re.sub(r"\s+", " ", str(d.get("name") or "")).strip()[:60]
+    if require_name and len(name) < 2:
+        raise ApiError(400, "bad_name")
+    username = norm_handle(d.get("username"))
+    link = norm_link(d.get("link"))
+    if str(d.get("link") or "").strip() and not link:
+        raise ApiError(400, "bad_link")
+    desc = str(d.get("description") or "").strip()[:1000]
+    return kind, name, username, link, desc
+
+
+async def api_projects_mine(request):
+    uid = request["u"]["id"]
+    rows = await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)
+    cnt = {r["project_id"]: r["c"] for r in await pool.fetch(
+        "SELECT project_id,count(*)::int c FROM posts WHERE user_id=$1 AND project_id IS NOT NULL AND active AND expires_at>now() GROUP BY project_id", uid)}
+    return jr({"projects": [dict(project_json(r), posts=cnt.get(r["id"], 0)) for r in rows], "max": MAX_PROJECTS})
+
+
+async def api_project(request):
+    me = request["u"]["id"]
+    pid = int(request.query.get("id") or 0)
+    r = await pool.fetchrow(PROJECT_SELECT + " WHERE p.id=$1", pid)
+    if not r:
+        raise ApiError(404, "project_not_found")
+    owner = await pool.fetchrow("SELECT user_id,username,first_name,last_name,(avatar_data IS NOT NULL) has_avatar,photo_url FROM users WHERE user_id=$1", r["owner_id"])
+    rows = await pool.fetch("SELECT * FROM posts WHERE project_id=$1 AND active AND expires_at>now() ORDER BY id DESC LIMIT 50", pid)
+    staff = await role(me) is not None
+    return jr({"project": project_json(r),
+               "owner": {"id": r["owner_id"], "has_avatar": bool(owner and owner["has_avatar"]), "photo_url": owner["photo_url"] if owner else None,
+                         "name": (" ".join(x for x in [owner["first_name"], owner["last_name"]] if x) or (owner["username"] if owner else None) or "Пользователь") if owner else "Пользователь",
+                         "username": owner["username"] if owner else None},
+               "posts": await posts_json(rows, me),
+               "mine": r["owner_id"] == me, "can_edit": r["owner_id"] == me or staff, "staff": staff})
+
+
+async def api_project_avatar(request):
+    pid = int(request.query.get("id") or 0)
+    row = await pool.fetchrow("SELECT avatar_data,avatar_mime FROM projects WHERE id=$1", pid)
+    if not row or not row["avatar_data"]:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["avatar_data"]), content_type=row["avatar_mime"] or "image/jpeg",
+                        headers={"Cache-Control": "private, max-age=300"})
+
+
+async def api_project_save(request):
+    """Создать (без id) или изменить (id) проект. Владелец — только свои, админ — любые."""
+    me = request["u"]["id"]
+    d, av = await _read_form(request)
+    kind, name, username, link, desc = _project_fields(d)
+    try:
+        pid = int(d.get("id") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid:
+        cur = await pool.fetchrow("SELECT owner_id FROM projects WHERE id=$1", pid)
+        if not cur:
+            raise ApiError(404, "project_not_found")
+        if cur["owner_id"] != me and await role(me) is None:
+            raise ApiError(403, "forbidden")
+        await pool.execute("UPDATE projects SET kind=$2,name=$3,username=$4,link=$5,description=$6 WHERE id=$1",
+                           pid, kind, name, username, link, desc)
+    else:
+        if await pool.fetchval("SELECT count(*) FROM projects WHERE owner_id=$1", me) >= MAX_PROJECTS:
+            raise ApiError(400, "too_many_projects")
+        pid = await pool.fetchval(
+            "INSERT INTO projects(owner_id,kind,name,username,link,description,created_by) VALUES($1,$2,$3,$4,$5,$6,$1) RETURNING id",
+            me, kind, name, username, link, desc)
+    if av:
+        await pool.execute("UPDATE projects SET avatar_data=$2,avatar_mime=$3 WHERE id=$1", pid, av[0], av[1])
+    elif str(d.get("remove_avatar") or "") in ("1", "true"):
+        await pool.execute("UPDATE projects SET avatar_data=NULL,avatar_mime=NULL WHERE id=$1", pid)
+    return jr({"ok": True, "id": pid})
+
+
+async def api_project_delete(request):
+    me = request["u"]["id"]
+    pid = int((await body(request)).get("id") or 0)
+    cur = await pool.fetchrow("SELECT owner_id FROM projects WHERE id=$1", pid)
+    if not cur:
+        raise ApiError(404, "project_not_found")
+    if cur["owner_id"] != me and await role(me) is None:
+        raise ApiError(403, "forbidden")
+    await pool.execute("DELETE FROM projects WHERE id=$1", pid)
+    return jr({"ok": True})
+
+
+async def _resolve_owner(ref):
+    ref = str(ref or "").strip()
+    if not ref:
+        raise ApiError(400, "no_owner")
+    uid, _ = await base_find(ref)
+    if not uid:
+        raise ApiError(404, "user_not_found")
+    return uid
+
+
+async def api_project_mark_request(request):
+    """Владелец проекта подаёт заявку на жёлтую галочку (зелёную и голубую выдают только админы)."""
+    me = request["u"]["id"]
+    pid = int((await body(request)).get("id") or 0)
+    cur = await pool.fetchrow("SELECT name,owner_id,mark,mark_req FROM projects WHERE id=$1", pid)
+    if not cur or cur["owner_id"] != me:
+        raise ApiError(404, "project_not_found")
+    if cur["mark"]:
+        raise ApiError(400, "already_marked")
+    if cur["mark_req"]:
+        raise ApiError(400, "already_requested")
+    await pool.execute("UPDATE projects SET mark_req='yellow',mark_req_at=now() WHERE id=$1", pid)
+    await notify_staff_text(request.app["bot"], f"🟡 Заявка на жёлтую галочку для проекта «{esc(cur['name'])}» (ID {pid}).\nПриложение → Админ-панель → Проекты.")
+    return jr({"ok": True})
+
+
+async def api_admin_projects(request):
+    await need_staff(request)
+    q = str(request.query.get("q") or "").strip()[:80]
+    args, where = [], ""
+    if request.query.get("pending"):
+        rows = await pool.fetch(PROJECT_SELECT + " WHERE p.mark_req<>'' ORDER BY p.mark_req_at LIMIT 100")
+        names = {r["user_id"]: r for r in await pool.fetch("SELECT user_id,username,first_name FROM users WHERE user_id=ANY($1::bigint[])", [r["owner_id"] for r in rows])}
+        return jr({"projects": [dict(project_json(r), owner_name=("@" + names[r["owner_id"]]["username"]) if r["owner_id"] in names and names[r["owner_id"]]["username"] else str(r["owner_id"])) for r in rows]})
+    if q:
+        e = q.lstrip("@").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        args.append(f"%{e}%")
+        where = " WHERE p.name ILIKE $1 OR p.username ILIKE $1" + (" OR p.owner_id=%d" % int(q) if q.isdigit() else "")
+    rows = await pool.fetch(PROJECT_SELECT + where + " ORDER BY p.id DESC LIMIT 100", *args)
+    owners = {r["user_id"]: r for r in await pool.fetch("SELECT user_id,username,first_name FROM users WHERE user_id=ANY($1::bigint[])", [r["owner_id"] for r in rows])}
+    return jr({"projects": [dict(project_json(r), owner_name=("@" + owners[r["owner_id"]]["username"]) if r["owner_id"] in owners and owners[r["owner_id"]]["username"]
+                                else ((owners[r["owner_id"]]["first_name"] if r["owner_id"] in owners else None) or str(r["owner_id"]))) for r in rows]})
+
+
+async def api_admin_project_add(request):
+    """Админ добавляет проект любому пользователю (владелец — по ID или @username)."""
+    await need_staff(request)
+    me = request["u"]["id"]
+    d, av = await _read_form(request)
+    owner = await _resolve_owner(d.get("owner"))
+    kind, name, username, link, desc = _project_fields(d)
+    if await pool.fetchval("SELECT count(*) FROM projects WHERE owner_id=$1", owner) >= MAX_PROJECTS:
+        raise ApiError(400, "too_many_projects")
+    mark = str(d.get("mark") or "")
+    if mark and mark not in PROJECT_MARKS:
+        raise ApiError(400, "bad_mark")
+    if mark == "blue" and me != OWNER_ID:
+        raise ApiError(403, "forbidden")
+    pid = await pool.fetchval(
+        "INSERT INTO projects(owner_id,kind,name,username,link,description,mark,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+        owner, kind, name, username, link, desc, mark, me)
+    if av:
+        await pool.execute("UPDATE projects SET avatar_data=$2,avatar_mime=$3 WHERE id=$1", pid, av[0], av[1])
+    asyncio.create_task(notify_user(request.app["bot"], owner, f"🧩 Администратор добавил вам проект «{esc(name)}». Он доступен в приложении: Ещё → Мои проекты."))
+    return jr({"ok": True, "id": pid})
+
+
+async def api_admin_project_set(request):
+    """Админ: галочка проекта (green/yellow/«» снять; blue — только владелец), отклонить заявку, передать проект."""
+    await need_staff(request)
+    me = request["u"]["id"]
+    d = await body(request)
+    pid = int(d.get("id") or 0)
+    cur = await pool.fetchrow("SELECT name,owner_id,mark,mark_req FROM projects WHERE id=$1", pid)
+    if not cur:
+        raise ApiError(404, "project_not_found")
+    bot = request.app["bot"]
+    if "mark" in d:
+        mark = str(d.get("mark") or "")
+        if mark and mark not in PROJECT_MARKS:
+            raise ApiError(400, "bad_mark")
+        if (mark == "blue" or cur["mark"] == "blue") and me != OWNER_ID:
+            raise ApiError(403, "forbidden")
+        await pool.execute("UPDATE projects SET mark=$2,mark_req='',mark_req_at=NULL WHERE id=$1", pid, mark)
+        if mark and mark != cur["mark"]:
+            asyncio.create_task(notify_user(bot, cur["owner_id"], f"✅ Проекту «{esc(cur['name'])}» выдана галочка: {PROJECT_MARKS[mark]}."))
+        elif not mark and cur["mark_req"]:
+            asyncio.create_task(notify_user(bot, cur["owner_id"], f"❌ Заявка на галочку для проекта «{esc(cur['name'])}» отклонена."))
+    elif d.get("reject"):
+        await pool.execute("UPDATE projects SET mark_req='',mark_req_at=NULL WHERE id=$1", pid)
+        if cur["mark_req"]:
+            asyncio.create_task(notify_user(bot, cur["owner_id"], f"❌ Заявка на галочку для проекта «{esc(cur['name'])}» отклонена."))
+    if d.get("owner"):
+        owner = await _resolve_owner(d["owner"])
+        await pool.execute("UPDATE projects SET owner_id=$2 WHERE id=$1", pid, owner)
+        await pool.execute("UPDATE posts SET user_id=$2 WHERE project_id=$1", pid, owner)
+    return jr({"ok": True})
 
 
 # ---------------------------------------------------------------- API: база
@@ -5532,6 +5874,8 @@ async def api_admin_queue(request):
         "id": r["id"], "from": ("@" + r["username"]) if r["username"] else (r["full_name"] or str(r["user_id"])),
         "topic": r["topic_name"], "text": r["text"], "created": fmt_dt(r["created_at"]),
         "photo": img_url("r", r["id"]) if r["photo_id"] else None,
+        "auto": r["src_chat_title"] if group_watch.is_auto(r) else None,
+        "src_link": r["src_link"] if group_watch.is_auto(r) else None,
     } for r in reqs], "apps": []}
     if await is_main(request["u"]["id"]):
         apps = await pool.fetch("SELECT * FROM applications WHERE status='pending' ORDER BY id LIMIT 50")
@@ -5560,7 +5904,8 @@ async def api_admin_review(request):
         text = (d.get("text") or "").strip()
         if not text or len(text) > MAX_POST - 300:
             raise ApiError(400, "bad_text")
-        return jr({"ok": await op_edit(bot, rid, u["id"], label, esc(text)), "msg": "Отправлено на согласование"})
+        res = await op_edit(bot, rid, u["id"], label, esc(text))
+        return jr({"ok": bool(res), "msg": "Исправлено и опубликовано" if res == "auto" else "Отправлено на согласование"})
     raise ApiError(400, "bad_action")
 
 
@@ -5612,6 +5957,148 @@ async def api_admin_text_set(request):
             "INSERT INTO texts(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
             key, val)
     return jr({"ok": True})
+
+
+# ---- тексты интерфейса, баннеры и плашка беты (правятся из админ-панели мини-аппа)
+UI_TEXTS_MAX = 500
+BANNERS_MAX = 12
+BETA_TEXT_DEFAULT = "Приложение работает в режиме бета-теста: возможны ошибки и неточности. Спасибо, что помогаете нам стать лучше!"
+
+
+async def get_ui_texts():
+    raw = await get_setting("ui_texts")
+    try:
+        d = json.loads(raw) if raw else {}
+    except Exception:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
+async def get_banners(active_only=True):
+    rows = await pool.fetch(
+        "SELECT id,title,body,link,color,(img IS NOT NULL) has_img,active,sort,"
+        "extract(epoch from updated_at)::bigint v FROM banners "
+        + ("WHERE active " if active_only else "") + "ORDER BY sort,id")
+    return [{"id": r["id"], "title": r["title"], "text": r["body"], "link": r["link"], "color": r["color"],
+             "has_img": r["has_img"], "active": r["active"], "v": r["v"]} for r in rows]
+
+
+async def get_beta():
+    return {"on": (await get_setting("beta_on")) != "0",
+            "ver": (await get_setting("beta_ver")) or "v1.0",
+            "text": (await get_setting("beta_text")) or BETA_TEXT_DEFAULT}
+
+
+async def api_banner_img(request):
+    bid = int(request.query.get("id") or 0)
+    row = await pool.fetchrow("SELECT img,img_mime FROM banners WHERE id=$1", bid)
+    if not row or not row["img"]:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["img"]), content_type=row["img_mime"] or "image/jpeg",
+                        headers={"Cache-Control": "private, max-age=300"})
+
+
+async def api_admin_ui(request):
+    await need_main(request)
+    return jr({"ui": await get_ui_texts(), "banners": await get_banners(False), "beta": await get_beta()})
+
+
+async def api_admin_ui_text_set(request):
+    """{key, value} — заменить текст интерфейса; {key, reset:true} — вернуть исходный; {clear:true} — сбросить все."""
+    await need_main(request)
+    d = await body(request)
+    if d.get("clear"):
+        await set_setting("ui_texts", "{}")
+        return jr({"ok": True, "ui": {}})
+    key = str(d.get("key") or "")
+    if not key.strip() or len(key) > 400:
+        raise ApiError(400, "bad_key")
+    cur = await get_ui_texts()
+    if d.get("reset"):
+        cur.pop(key, None)
+    else:
+        val = str(d.get("value") if d.get("value") is not None else "").strip()
+        if not val or len(val) > 800:
+            raise ApiError(400, "bad_value")
+        if key not in cur and len(cur) >= UI_TEXTS_MAX:
+            raise ApiError(409, "limit")
+        if val == key.strip():
+            cur.pop(key, None)
+        else:
+            cur[key] = val
+    await set_setting("ui_texts", json.dumps(cur, ensure_ascii=False))
+    return jr({"ok": True, "ui": cur})
+
+
+def _banner_link_ok(link):
+    return not link or bool(re.match(r"^(https?://|tg://|app:[a-z_]+$)", link))
+
+
+async def api_admin_banner_save(request):
+    await need_main(request)
+    form = await request.post()
+    bid = int(form.get("id") or 0)
+    title = str(form.get("title") or "").strip()[:80]
+    text = str(form.get("text") or "").strip()[:300]
+    link = str(form.get("link") or "").strip()[:300]
+    color = str(form.get("color") or "").strip()
+    color = color if re.match(r"^#[0-9a-fA-F]{6}$", color) else ""
+    active = str(form.get("active") or "1") == "1"
+    f = form.get("file")
+    data = mime = None
+    if f is not None and hasattr(f, "file"):
+        data = f.file.read()
+        mime = getattr(f, "content_type", None) or "image/jpeg"
+        if not data or len(data) > 4 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
+            raise ApiError(400, "bad_image")
+    remove_img = str(form.get("remove_img") or "") == "1"
+    if not _banner_link_ok(link):
+        raise ApiError(400, "bad_link")
+    if not (title or text or data) and not bid:
+        raise ApiError(400, "empty")
+    if bid:
+        if not await pool.fetchval("SELECT 1 FROM banners WHERE id=$1", bid):
+            raise ApiError(404, "not_found")
+        await pool.execute(
+            "UPDATE banners SET title=$2, body=$3, link=$4, color=$5, active=$6, updated_at=now() WHERE id=$1",
+            bid, title, text, link, color, active)
+    else:
+        if await pool.fetchval("SELECT count(*) FROM banners") >= BANNERS_MAX:
+            raise ApiError(409, "limit")
+        bid = await pool.fetchval(
+            "INSERT INTO banners(title,body,link,color,active,sort) VALUES($1,$2,$3,$4,$5,"
+            "COALESCE((SELECT max(sort)+1 FROM banners),0)) RETURNING id", title, text, link, color, active)
+    if data:
+        await pool.execute("UPDATE banners SET img=$2, img_mime=$3, updated_at=now() WHERE id=$1", bid, data, mime)
+    elif remove_img:
+        await pool.execute("UPDATE banners SET img=NULL, img_mime=NULL, updated_at=now() WHERE id=$1", bid)
+    return jr({"ok": True, "id": bid})
+
+
+async def api_admin_banner_del(request):
+    await need_main(request)
+    d = await body(request)
+    await pool.execute("DELETE FROM banners WHERE id=$1", int(d.get("id") or 0))
+    return jr({"ok": True})
+
+
+async def api_admin_banner_order(request):
+    await need_main(request)
+    ids = [int(x) for x in ((await body(request)).get("ids") or [])][:BANNERS_MAX * 2]
+    for i, bid in enumerate(ids):
+        await pool.execute("UPDATE banners SET sort=$2 WHERE id=$1", bid, i)
+    return jr({"ok": True})
+
+
+async def api_admin_beta_set(request):
+    await need_main(request)
+    d = await body(request)
+    await set_setting("beta_on", "1" if d.get("on") else "0")
+    ver = str(d.get("ver") or "").strip()[:20]
+    await set_setting("beta_ver", ver or "v1.0")
+    txt = str(d.get("text") or "").strip()[:300]
+    await set_setting("beta_text", txt or BETA_TEXT_DEFAULT)
+    return jr({"ok": True, "beta": await get_beta()})
 
 
 async def api_admin_topics(request):
@@ -6113,6 +6600,15 @@ def build_web(bot: Bot):
     r.add_post("/api/search", api_search)
     r.add_get("/api/recs", api_recs)
     r.add_post("/api/submit", api_submit)
+    r.add_get("/api/projects", api_projects_mine)
+    r.add_get("/api/project", api_project)
+    r.add_get("/api/project/avatar", api_project_avatar)
+    r.add_post("/api/project/save", api_project_save)
+    r.add_post("/api/project/delete", api_project_delete)
+    r.add_post("/api/project/mark_request", api_project_mark_request)
+    r.add_get("/api/admin/projects", api_admin_projects)
+    r.add_post("/api/admin/project_add", api_admin_project_add)
+    r.add_post("/api/admin/project_set", api_admin_project_set)
     r.add_get("/api/my_requests", api_my_requests)
     r.add_post("/api/user_choice", api_user_choice)
     r.add_post("/api/apply", api_apply)
@@ -6130,6 +6626,13 @@ def build_web(bot: Bot):
     r.add_post("/api/post_del", api_post_delete)
     r.add_get("/api/admin/texts", api_admin_texts)
     r.add_post("/api/admin/text_set", api_admin_text_set)
+    r.add_get("/api/banner_img", api_banner_img)
+    r.add_get("/api/admin/ui", api_admin_ui)
+    r.add_post("/api/admin/ui_text_set", api_admin_ui_text_set)
+    r.add_post("/api/admin/banner_save", api_admin_banner_save)
+    r.add_post("/api/admin/banner_del", api_admin_banner_del)
+    r.add_post("/api/admin/banner_order", api_admin_banner_order)
+    r.add_post("/api/admin/beta_set", api_admin_beta_set)
     r.add_get("/api/admin/topics", api_admin_topics)
     r.add_post("/api/admin/topic_add", api_admin_topic_add)
     r.add_post("/api/admin/topic_del", api_admin_topic_del)
@@ -6166,6 +6669,7 @@ def build_web(bot: Bot):
     r.add_get("/api/admin/escrow", api_admin_escrow)
     r.add_post("/api/admin/escrow_action", api_admin_escrow_action)
     r.add_post("/api/admin/escrow_config", api_admin_escrow_config)
+    public_api.install(app, sys.modules[__name__])  # /api/v1/*, /api/apikeys, /developers
     return app
 
 
@@ -6187,6 +6691,8 @@ async def keepalive():
 async def main():
     global HTTP, _ai_sem
     await init_db()
+    await public_api.start(sys.modules[__name__])
+    await group_watch.start(sys.modules[__name__])
     HTTP = ClientSession(timeout=ClientTimeout(total=30))
     _ai_sem = asyncio.Semaphore(3)
 
@@ -6220,11 +6726,15 @@ async def main():
         await bot.set_my_commands([
             BotCommand(command="start", description="Запустить бота"),
             BotCommand(command="app", description="Открыть мини-апп"),
-            BotCommand(command="check", description="Проверить человека по базе: /check @юзернейм")])
+            BotCommand(command="check", description="Проверить человека по базе: /check @юзернейм"),
+            BotCommand(command="api", description="API для разработчиков: ключи и документация")])
     except Exception:
         log.exception("set_my_commands failed")
 
     dp = Dispatcher()
+    if public_api.router is not None:
+        dp.include_router(public_api.router)
+    group_watch.install(dp, sys.modules[__name__])   # ДО основного router: смотрит сообщения групп, не перехватывая их
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=False)
 
