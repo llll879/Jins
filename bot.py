@@ -4492,9 +4492,11 @@ async def api_apply(request):
 
 # ---- профили, отзывы и личные сообщения
 async def api_profile(request):
+    await _ensure_profile_banners()
     uid = int(request.query.get("id") or request["u"]["id"])
     row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.photo_url,
         (u.avatar_data IS NOT NULL) has_avatar, u.created_at,
+        EXISTS(SELECT 1 FROM profile_banners pb WHERE pb.user_id=u.user_id) has_banner,
         COALESCE(avg(r.rating),0)::float rating, count(r.id)::int reviews
         FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
         WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
@@ -4539,11 +4541,48 @@ async def api_profile_update(request):
     bio=str(d.get("bio") or "").strip()[:500]
     theme=str(d.get("theme") or "dark")
     accent=str(d.get("accent") or "#8b7cff")
-    if theme not in ("dark","light","midnight","ocean","forest"):
+    if theme not in ("dark","light","midnight","ocean","forest","rose","mono"):
         raise ApiError(400,"bad_theme")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}",accent):
         raise ApiError(400,"bad_accent")
     await pool.execute("UPDATE users SET bio=$2,theme=$3,accent=$4 WHERE user_id=$1",uid,bio,theme,accent)
+    return jr({"ok":True})
+
+
+async def _ensure_profile_banners():
+    await pool.execute("""CREATE TABLE IF NOT EXISTS profile_banners(
+        user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+        image_data BYTEA NOT NULL, mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+
+
+async def api_profile_banner(request):
+    await _ensure_profile_banners()
+    target=int(request.query.get("id") or request["u"]["id"])
+    row=await pool.fetchrow("SELECT image_data,mime_type FROM profile_banners WHERE user_id=$1",target)
+    if not row:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["image_data"]),content_type=row["mime_type"] or "image/jpeg",
+        headers={"Cache-Control":"private, max-age=300"})
+
+
+async def api_profile_banner_upload(request):
+    await _ensure_profile_banners()
+    uid=request["u"]["id"]; form=await request.post(); f=form.get("file")
+    if f is None or not hasattr(f,"file"):
+        raise ApiError(400,"no_file")
+    data=f.file.read(); mime=getattr(f,"content_type",None) or "image/jpeg"
+    if not data or len(data)>5*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
+        raise ApiError(400,"bad_image")
+    await pool.execute("""INSERT INTO profile_banners(user_id,image_data,mime_type,updated_at)
+        VALUES($1,$2,$3,now()) ON CONFLICT(user_id) DO UPDATE SET image_data=EXCLUDED.image_data,
+        mime_type=EXCLUDED.mime_type,updated_at=now()""",uid,data,mime)
+    return jr({"ok":True})
+
+
+async def api_profile_banner_delete(request):
+    await _ensure_profile_banners()
+    await pool.execute("DELETE FROM profile_banners WHERE user_id=$1",request["u"]["id"])
     return jr({"ok":True})
 
 
@@ -6560,6 +6599,9 @@ def build_web(bot: Bot):
     r.add_get("/api/profile/avatar", api_profile_avatar)
     r.add_post("/api/profile/avatar", api_profile_avatar_upload)
     r.add_delete("/api/profile/avatar", api_profile_avatar_delete)
+    r.add_get("/api/profile/banner", api_profile_banner)
+    r.add_post("/api/profile/banner", api_profile_banner_upload)
+    r.add_delete("/api/profile/banner", api_profile_banner_delete)
     r.add_get("/api/profile/reviews", api_profile_reviews)
     r.add_post("/api/profile/reviews", api_profile_review_save)
     r.add_get("/api/chats", api_chats)
