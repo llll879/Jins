@@ -1161,6 +1161,64 @@ body.ui-edit :is(#main,header.top,nav.bar) :is(b,h2,h3,p,span,small,label,button
 .ue-was{font-size:12.5px;color:var(--dim);margin:0 2px 10px;word-break:break-word}
 .ue-was code{display:block;margin-top:2px;white-space:pre-wrap;color:var(--txt)}
 
+
+/* ===== KMBP visual refresh · theme-aware glass UI ===== */
+:root{
+ --bg:#0b0b0e;--bg2:#15151b;--acc:#a56aff;--a1:#a56aff;--a2:#c29aff;--a3:#8054bd;
+ --card:linear-gradient(145deg,rgba(29,22,40,.92),rgba(12,11,17,.94));
+ --glass:rgba(23,19,32,.72);--glass2:rgba(29,24,39,.9);
+ --line:rgba(196,158,255,.16);--txt:#f7f3ff;--dim:#aaa0b9;--ink:#f7f3ff;--ink-t:#100b18;
+ --sh:0 12px 34px rgba(0,0,0,.34),0 0 22px color-mix(in srgb,var(--acc) 9%,transparent);
+ --shin:inset 0 1px 0 rgba(255,255,255,.09);--navbg:rgba(10,9,14,.94);--r:22px;
+}
+:root[data-palette="green"]{--line:rgba(75,255,155,.19);--card:linear-gradient(145deg,rgba(10,48,29,.94),rgba(5,17,11,.96));--glass:rgba(9,38,23,.76);--glass2:rgba(10,48,29,.92);--txt:#edfff4;--dim:#a1cbb2;--ink:#eafff1;--ink-t:#062014;--a1:#37e58a;--a2:#72f5ae;--a3:#239d5d;--navbg:rgba(4,18,11,.95);--sh:0 12px 34px rgba(0,0,0,.4),0 0 24px rgba(55,229,138,.12)}
+:root[data-palette="purple"]{--line:rgba(181,126,255,.2);--card:linear-gradient(145deg,rgba(37,21,55,.94),rgba(12,8,19,.96));--glass:rgba(31,18,46,.75);--glass2:rgba(43,25,62,.92);--txt:#fbf4ff;--dim:#b8a5ce;--ink:#f7eaff;--ink-t:#160b21;--a1:#a56aff;--a2:#c49bff;--a3:#7743b8;--navbg:rgba(12,7,18,.95)}
+:root[data-palette="blue"]{--line:rgba(89,165,255,.2);--card:linear-gradient(145deg,rgba(13,35,70,.94),rgba(5,12,27,.96));--glass:rgba(9,29,59,.76);--glass2:rgba(13,40,78,.92);--txt:#eff7ff;--dim:#a5bad5;--ink:#edf6ff;--ink-t:#07172d;--a1:#3995ff;--a2:#83bdff;--a3:#2869b9;--navbg:rgba(4,13,28,.95)}
+:root[data-palette="light"]{--line:rgba(92,91,175,.15);--card:linear-gradient(145deg,rgba(255,255,255,.96),rgba(233,235,250,.96));--glass:rgba(255,255,255,.72);--glass2:rgba(255,255,255,.94);--txt:#17182a;--dim:#696b87;--ink:#25264b;--ink-t:#fff;--a1:#7778ee;--a2:#626de0;--a3:#9999f4;--navbg:rgba(245,246,255,.95);--sh:0 10px 28px rgba(65,67,120,.12),0 0 20px rgba(119,120,238,.08);--shin:inset 0 1px 0 #fff}
+:root[data-palette="pink"]{--line:rgba(255,105,190,.2);--card:linear-gradient(145deg,rgba(54,17,43,.94),rgba(17,7,15,.96));--glass:rgba(44,13,34,.76);--glass2:rgba(57,18,44,.92);--txt:#fff1f8;--dim:#d0a6bd;--ink:#ffeafa;--ink-t:#230d1b;--a1:#f05aaa;--a2:#ff9bcf;--a3:#bb3d83;--navbg:rgba(16,6,13,.95)}
+:root[data-palette="black"]{--line:rgba(255,255,255,.12);--card:linear-gradient(145deg,rgba(25,25,25,.97),rgba(5,5,5,.98));--glass:rgba(17,17,17,.82);--glass2:rgba(29,29,29,.94);--txt:#f5f5f5;--dim:#a0a0a0;--ink:#fff;--ink-t:#080808;--a1:#d5d5d5;--a2:#fff;--a3:#858585;--navbg:rgba(4,4,4,.97);--sh:0 12px 30px rgba(0,0,0,.65);--shin:inset 0 1px 0 rgba(255,255,255,.06)}
+:root[data-palette="dark"]{--line:rgba(190,190,210,.12);--card:linear-gradient(145deg,rgba(34,35,43,.96),rgba(15,16,21,.97));--glass:rgba(27,28,36,.78);--glass2:rgba(37,38,48,.93);--txt:#f3f3f7;--dim:#a2a5b2;--ink:#f5f5fa;--ink-t:#111216;--a1:#9a82ff;--a2:#b7a5ff;--a3:#7660c7;--navbg:rgba(12,13,17,.96)}
+body{background:radial-gradient(90% 48% at 50% -8%,color-mix(in srgb,var(--acc) 17%,transparent),transparent 72%),linear-gradient(180deg,var(--bg2),var(--bg) 55%)}
+#main{padding-left:15px;padding-right:15px}
+.brand-t{margin:13px 2px 16px;text-align:left;font-size:23px;letter-spacing:1.2px;line-height:1.08;position:relative;padding:13px 14px 13px 16px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(110deg,color-mix(in srgb,var(--acc) 18%,var(--glass)),var(--glass) 65%);box-shadow:var(--sh),var(--shin);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.brand-t:after{content:"";position:absolute;right:14px;top:13px;width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 14px var(--acc)}
+.brand-t span{background:linear-gradient(135deg,var(--a2),var(--acc));-webkit-background-clip:text;background-clip:text}
+.shead{background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.sbar,.cat,.glass,.chat-card,.li,.pcard,.profile-stat,.theme-chip,.ph-add,.ph-t,.post,.ac .aph{border-color:var(--line)}
+.sbar{border-radius:18px;background:var(--glass2);box-shadow:var(--sh),var(--shin)}
+.cat{border-radius:14px;background:var(--glass);font-weight:650}
+.cat.sel{background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 55%,#171020));color:#fff;box-shadow:0 5px 18px color-mix(in srgb,var(--acc) 32%,transparent)}
+.glass,.chat-card,.li,.pcard,.profile-stat{backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--sh),var(--shin)}
+.card.glass{border-radius:22px}
+.chat-card{border-radius:19px;background:var(--card);padding:11px 12px;margin-bottom:9px}
+.chat-card:active,.li:active,.ac:active{border-color:var(--acc)}
+.chats-list{gap:8px}
+.profile-hero{border-radius:24px;overflow:hidden}
+.profile-stats{gap:8px}
+.profile-stat{border-radius:17px;background:var(--glass)}
+.btn{border:1px solid color-mix(in srgb,var(--acc) 45%,transparent);border-radius:17px;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 55%,#21152f));color:#fff;box-shadow:0 7px 22px color-mix(in srgb,var(--acc) 25%,transparent),inset 0 1px 0 rgba(255,255,255,.22);font-weight:750}
+.btn.ghost{background:var(--glass2);color:var(--txt);border:1px solid var(--line);box-shadow:var(--sh),var(--shin)}
+.btn.ok{background:linear-gradient(135deg,#239c69,#12623f);border-color:#36c58b}
+.btn.bad{background:linear-gradient(135deg,#c94b67,#79243c);border-color:#e06c88}
+.iconbtn{border-radius:15px;background:var(--glass2);border-color:var(--line);color:var(--txt)}
+.tile{border-radius:19px;background:var(--glass);border-color:var(--line);box-shadow:var(--sh),var(--shin)}
+.tile .ic{color:var(--acc);filter:drop-shadow(0 0 8px color-mix(in srgb,var(--acc) 32%,transparent))}
+.sec h3{letter-spacing:.15px}
+#nav{background:var(--navbg);border-top:1px solid var(--line);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);box-shadow:0 -10px 30px rgba(0,0,0,.12)}
+#nav button.on{color:var(--acc)}
+#nav button.on .e{filter:drop-shadow(0 0 9px var(--acc))}
+#ind{background:radial-gradient(circle,var(--acc),color-mix(in srgb,var(--acc) 35%,transparent));box-shadow:0 0 20px var(--acc);border-radius:50%}
+.theme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.theme-chip{min-height:46px;border-radius:15px;background:var(--glass);border:1px solid var(--line);color:var(--txt);font-weight:650}
+.theme-chip.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 0 18px color-mix(in srgb,var(--acc) 20%,transparent)}
+.theme-dot{width:16px;height:16px;border-radius:50%;border:1px solid rgba(255,255,255,.3);box-shadow:0 0 8px currentColor}
+.pav,.cav,.profile-avatar{box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 50%,transparent),0 0 18px color-mix(in srgb,var(--acc) 24%,transparent)}
+.lbl{color:var(--a2)}
+input.f,textarea.f,.f{border-radius:15px;border-color:var(--line);background:var(--glass2);color:var(--txt)}
+.ph-add{background:color-mix(in srgb,var(--acc) 7%,var(--glass));border-color:color-mix(in srgb,var(--acc) 40%,var(--line))}
+.grp{color:var(--a2);letter-spacing:.08em;text-transform:uppercase;font-size:11px;font-weight:800}
+@media(prefers-reduced-motion:no-preference){.glass,.chat-card,.li,.tile,.btn{transition:transform .22s cubic-bezier(.2,.8,.2,1),box-shadow .22s,border-color .22s}.chat-card:active,.tile:active{transform:scale(.985)}}
+
 </style>
 </head>
 <body>
@@ -1240,7 +1298,7 @@ const ic = (n, f) => {
 
 /* ============================================================ utils */
 const tg = window.Telegram && Telegram.WebApp;
-const savedTheme = (()=>{try{return localStorage.getItem('kmbp-theme')||localStorage.getItem('forest-theme')||'light'}catch(e){return 'light'}})();
+const savedTheme = (()=>{try{return localStorage.getItem('kmbp-theme')||localStorage.getItem('forest-theme')||'purple'}catch(e){return 'light'}})();
 document.documentElement.dataset.theme = savedTheme;
 try { tg && (tg.ready(), tg.expand(), tg.setHeaderColor && tg.setHeaderColor(savedTheme==='dark'?'#0d0f13':'#e8eaef'), tg.setBackgroundColor && tg.setBackgroundColor(savedTheme==='dark'?'#0d0f13':'#e8eaef'), tg.disableVerticalSwipes && tg.disableVerticalSwipes()); } catch (e) {}
 const $ = (s, r = document) => r.querySelector(s);
@@ -1685,7 +1743,27 @@ async function fail(e) {
 }
 const confirmBox = msg => new Promise(res => { if (tg && tg.showConfirm) tg.showConfirm(msg, res); else res(confirm(msg)); });
 function openLink(u) { if (!u) return; if ((/^https:\/\/t\.me\//.test(u) || /^tg:\/\//.test(u)) && tg && tg.openTelegramLink) tg.openTelegramLink(u); else if (tg && tg.openLink) tg.openLink(u); else window.open(u, '_blank'); }
-function setTheme(theme){document.documentElement.dataset.theme=theme==='light'?'light':'dark';document.documentElement.dataset.palette=theme;const p={light:['#e8eaef','#f3f4f7'],dark:['#0d0f13','#14171c'],midnight:['#090d20','#111a32'],ocean:['#0d2634','#143747'],forest:['#14291e','#1c3828']}[theme]||['#0d0f13','#14171c'];document.documentElement.style.setProperty('--bg',p[0]);document.documentElement.style.setProperty('--bg2',p[1]);try{localStorage.setItem('kmbp-theme',theme)}catch(e){};try{tg&&tg.setHeaderColor&&tg.setHeaderColor(p[0]);tg&&tg.setBackgroundColor&&tg.setBackgroundColor(p[0])}catch(e){}}
+function setTheme(theme){
+  const palettes={
+    green:{bg:'#06130d',bg2:'#0b2116',acc:'#37e58a',a2:'#55f0a0'},
+    purple:{bg:'#0b0712',bg2:'#180d24',acc:'#a56aff',a2:'#c29aff'},
+    blue:{bg:'#050d1b',bg2:'#0a1c36',acc:'#3995ff',a2:'#76b6ff'},
+    light:{bg:'#f0f1fb',bg2:'#ffffff',acc:'#7778ee',a2:'#626de0'},
+    pink:{bg:'#120710',bg2:'#250d20',acc:'#f05aaa',a2:'#ff8ac8'},
+    black:{bg:'#030303',bg2:'#090909',acc:'#d5d5d5',a2:'#ffffff'},
+    dark:{bg:'#0d0f13',bg2:'#17191f',acc:'#9a82ff',a2:'#b7a5ff'},
+    midnight:{bg:'#090d20',bg2:'#111a32',acc:'#7c8cff',a2:'#9daaff'},
+    ocean:{bg:'#0d2634',bg2:'#143747',acc:'#45b9df',a2:'#7bdcff'},
+    forest:{bg:'#14291e',bg2:'#1c3828',acc:'#65c98a',a2:'#91e6ae'}
+  };
+  const p=palettes[theme]||palettes.dark;
+  const light=theme==='light';
+  document.documentElement.dataset.theme=light?'light':'dark';
+  document.documentElement.dataset.palette=theme;
+  for(const [k,v] of Object.entries(p)){document.documentElement.style.setProperty('--'+k,v)}
+  try{localStorage.setItem('kmbp-theme',theme)}catch(e){}
+  try{tg&&tg.setHeaderColor&&tg.setHeaderColor(p.bg);tg&&tg.setBackgroundColor&&tg.setBackgroundColor(p.bg)}catch(e){}
+}
 
 /* ripple (only buttons) + haptics */
 document.addEventListener('pointerdown', e => {
@@ -2177,7 +2255,7 @@ views.more = async el => {
     <div class="grp">Настройки</div>
     <div class="stagger">
       <div class="li glass" id="tourBtn"><span class="ic">${nic('info')}</span><span class="t"><b>Как пользоваться</b><small>Короткое обучение по приложению</small></span><span class="arr">›</span></div>
-      <div class="li glass" id="themeToggle"><span class="ic">${nic('theme')}</span><span class="t"><b>Оформление</b><small>Сейчас: ${light ? 'светлая тема' : 'тёмная тема'}</small></span><span class="arr">⇄</span></div>
+      <div class="li glass" id="themeToggle"><span class="ic">${nic('theme')}</span><span class="t"><b>Оформление</b><small>Сейчас: ${{green:'изумрудная',purple:'фиолетовая',blue:'голубая',light:'белая',pink:'розовая',black:'чёрная',dark:'графитовая',midnight:'полночь',ocean:'океан',forest:'лес'}[document.documentElement.dataset.palette||'dark']}</small></span><span class="arr">⇄</span></div>
       ${isStaff() ? `<div class="li glass" data-go="admin_escrow"><span class="ic">${nic('security')}</span><span class="t"><b>Управление гарантом</b><small>Сделки, резерв и диспуты</small></span><span class="arr">›</span></div><div class="li glass" data-go="admin"><span class="ic">${nic('admin')}</span><span class="t"><b>Админ-панель</b><small>${isMain() ? 'Полный доступ, статистика, жалобы' : 'Модерация заявок'}</small></span><span class="arr">›</span></div>` : ''}
     </div>
     ${me.welcome ? `<div class="grp">О сервисе</div><div class="card glass">${me.has_photo ? '<img class="welcome-img" alt="">' : ''}<div class="rich">${safe(me.welcome)}</div></div>` : ''}${betaHtml()}`;
@@ -2187,7 +2265,7 @@ views.more = async el => {
   $('#tourBtn', el).onclick = () => showTour();
   $('#swBtn', el).onclick = e => { e.stopPropagation(); switchSheet(() => go('more', {}, { replace: true })); };
   avFill(el);
-  $('#themeToggle', el).onclick = () => { const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; setTheme(next); go('more', {}, { replace: true }); };
+  $('#themeToggle', el).onclick = () => { const themes=['green','purple','blue','light','pink','black','dark']; const cur=document.documentElement.dataset.palette||'dark'; setTheme(themes[(themes.indexOf(cur)+1)%themes.length]); go('more', {}, { replace: true }); };
 };
 
 views.admin_escrow = async el => {
@@ -2301,7 +2379,7 @@ views.profile = async (el, params={}) => {
   ${own?`<label class="lbl">Описание профиля</label><textarea class="f" id="bioEdit" maxlength="500" placeholder="Расскажите о себе…">${esc(u.bio||'')}</textarea>
   <div class="acts"><input type="file" id="avatarFile" accept="image/*" hidden><button class="btn small" id="changeAvatar">Изменить фото</button>${u.has_avatar?'<button class="btn small ghost" id="delAvatar">Удалить фото</button>':''}${u.can_badge?'<button class="btn small ghost" id="myBadges">Значки</button>':''}<button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
-  ${[['dark','Тёмная','#15171d'],['light','Светлая','#edf0f5'],['midnight','Полночь','#090d20'],['ocean','Океан','#0d2634'],['forest','Лес','#14291e']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
+  ${[['green','Изумруд','#062318'],['purple','Аметист','#170b27'],['blue','Лёд','#071a3b'],['light','Белая','#f2f3ff'],['pink','Розовая','#260b1b'],['black','Чёрная','#050505'],['dark','Графит','#111216']].map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent||'#8b7cff')}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
   <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv hist"><span>Сделка #${d.id}<small class="dim">${esc(d.side)} · ${esc(d.created||'')} · ${d.kind==='direct'?'без гаранта':'через гаранта'}</small></span><b>${d.amount?d.amount+' ⭐':'Без суммы'}<small class="dim">${esc(DEAL_ST[d.status]||d.status)}</small></b></div>`).join(''):'<div class="sub">Здесь отображаются сделки через гаранта и прямые сделки.</div>'}</div>
   <h3 class="page" style="font-size:19px">Отзывы</h3>${rv.reviews.length?(()=>{const c=[0,0,0,0,0,0];rv.reviews.forEach(r=>c[r.rating]++);const n=rv.reviews.length;return `<div class="rv-sum glass"><div class="rv-big"><b>${u.rating||'—'}</b><span class="stars">${'★'.repeat(Math.round(u.rating||0))}${'☆'.repeat(5-Math.round(u.rating||0))}</span><small>${n} ${n%10===1&&n%100!==11?'отзыв':(n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?'отзыва':'отзывов')}</small></div><div class="rv-bars">${[5,4,3,2,1].map(k=>`<div><span>${k}</span><i><u style="width:${Math.round(c[k]/n*100)}%"></u></i><span>${c[k]}</span></div>`).join('')}</div></div>`})():''}
   ${u.projects&&u.projects.length?`<div class="grp">Проекты</div><div class="stagger">${u.projects.map(pr=>`<div class="li glass" data-proj="${pr.id}">${pavHtml('',pr)}<span class="t"><b>${esc(pr.name)}${pkMark(pr.mark)}</b><small>${pkLabel(pr.kind)}${pr.username?' · @'+esc(pr.username):''}</small></span><span class="arr">›</span></div>`).join('')}</div>`:''}
@@ -3560,7 +3638,7 @@ views.receipts = async el => {
 (async function boot() {
   if (!tg || !tg.initData) { $('#main').innerHTML = `<div class="view">${empty('🔒', 'Откройте мини-апп из Telegram')}</div>`; return; }
   try { await loadMe(); } catch (e) { $('#main').innerHTML = `<div class="view">${empty('😵', ERR[e.code] || 'Не удалось подключиться')}</div>`; return; }
-  const savedTheme=localStorage.getItem('kmbp-theme') || S.me.theme || 'dark'; setTheme(savedTheme); document.documentElement.style.setProperty('--acc',S.me.accent||'#7c6cff');
+  const savedTheme=localStorage.getItem('kmbp-theme') || S.me.theme || 'purple'; setTheme(savedTheme); document.documentElement.style.setProperty('--acc',S.me.accent||'#7c6cff');
   setUnread(S.me.unread); setInterval(() => { if (!document.hidden) { refreshUnread(); checkReceipts(); } }, 15000); document.addEventListener('visibilitychange', () => { if (!document.hidden) checkReceipts(); });
   await go('home', {}, { root: true });
   setTimeout(checkReceipts, 900);
