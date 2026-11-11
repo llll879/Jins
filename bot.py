@@ -757,6 +757,12 @@ async def init_db():
             description TEXT NOT NULL DEFAULT '', verified BOOLEAN NOT NULL DEFAULT FALSE,
             avatar_data BYTEA, avatar_mime TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE INDEX IF NOT EXISTS projects_owner_idx ON projects(owner_id);
+        ALTER TABLE projects ADD COLUMN IF NOT EXISTS banner_data BYTEA;
+        ALTER TABLE projects ADD COLUMN IF NOT EXISTS banner_mime TEXT;
+        CREATE TABLE IF NOT EXISTS project_reviews(
+            id SERIAL PRIMARY KEY, project_id INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            reviewer_id BIGINT NOT NULL, rating SMALLINT NOT NULL, text TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(project_id,reviewer_id));
         ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_id INT REFERENCES projects(id) ON DELETE SET NULL;
         ALTER TABLE requests ADD COLUMN IF NOT EXISTS project_id INT REFERENCES projects(id) ON DELETE SET NULL;
         ALTER TABLE requests ADD COLUMN IF NOT EXISTS project_name TEXT;
@@ -5009,7 +5015,9 @@ async def notify_staff_text(bot, text):
     for i in ids:
         asyncio.create_task(notify_user(bot, i, text))
 PROJECT_SELECT = ("SELECT p.id,p.owner_id,p.kind,p.name,p.username,p.link,p.description,p.verified,p.mark,p.mark_req,p.created_at,"
-                  "(p.avatar_data IS NOT NULL) has_avatar FROM projects p")
+                  "(p.avatar_data IS NOT NULL) has_avatar,(p.banner_data IS NOT NULL) has_banner,"
+                  "COALESCE((SELECT avg(rating) FROM project_reviews WHERE project_id=p.id),0)::float rating,"
+                  "(SELECT count(*) FROM project_reviews WHERE project_id=p.id)::int reviews FROM projects p")
 
 
 def norm_handle(v):
@@ -5034,7 +5042,8 @@ def project_url(p):
 def project_json(p):
     return {"id": p["id"], "owner_id": p["owner_id"], "kind": p["kind"], "name": p["name"], "username": p["username"],
             "link": p["link"], "url": project_url(p), "description": p["description"], "verified": bool(p["mark"]), "mark": p["mark"], "mark_req": p["mark_req"],
-            "has_avatar": p["has_avatar"], "created": fmt_dt(p["created_at"])}
+            "has_avatar": p["has_avatar"], "created": fmt_dt(p["created_at"]),
+            "has_banner": bool(p.get("has_banner")), "rating": round(float(p.get("rating") or 0), 1), "reviews": int(p.get("reviews") or 0)}
 
 
 async def projects_by_ids(ids):
@@ -5110,6 +5119,94 @@ async def api_project_avatar(request):
         raise web.HTTPNotFound()
     return web.Response(body=bytes(row["avatar_data"]), content_type=row["avatar_mime"] or "image/jpeg",
                         headers={"Cache-Control": "private, max-age=300"})
+
+
+async def api_project_banner(request):
+    pid = int(request.query.get("id") or 0)
+    row = await pool.fetchrow("SELECT banner_data,banner_mime FROM projects WHERE id=$1", pid)
+    if not row or not row["banner_data"]:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["banner_data"]), content_type=row["banner_mime"] or "image/jpeg",
+                        headers={"Cache-Control": "private, max-age=300"})
+
+
+async def _project_editor(request, pid):
+    me = request["u"]["id"]
+    cur = await pool.fetchrow("SELECT owner_id FROM projects WHERE id=$1", pid)
+    if not cur:
+        raise ApiError(404, "project_not_found")
+    if cur["owner_id"] != me and await role(me) is None:
+        raise ApiError(403, "forbidden")
+
+
+async def api_project_banner_upload(request):
+    form = await request.post()
+    try:
+        pid = int(form.get("id") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    await _project_editor(request, pid)
+    f = form.get("file")
+    if f is None or not hasattr(f, "file"):
+        raise ApiError(400, "no_file")
+    data = f.file.read()
+    mime = getattr(f, "content_type", None) or "image/jpeg"
+    if not data or len(data) > 6 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
+        raise ApiError(400, "bad_image")
+    await pool.execute("UPDATE projects SET banner_data=$2,banner_mime=$3 WHERE id=$1", pid, data, mime)
+    return jr({"ok": True})
+
+
+async def api_project_banner_delete(request):
+    pid = int((await body(request)).get("id") or 0)
+    await _project_editor(request, pid)
+    await pool.execute("UPDATE projects SET banner_data=NULL,banner_mime=NULL WHERE id=$1", pid)
+    return jr({"ok": True})
+
+
+async def api_project_reviews(request):
+    me = request["u"]["id"]
+    pid = int(request.query.get("id") or 0)
+    rows = await pool.fetch("""SELECT r.id,r.rating,r.text,r.created_at,r.reviewer_id,u.username,u.first_name,u.last_name,u.photo_url,
+        (u.avatar_data IS NOT NULL) has_avatar FROM project_reviews r LEFT JOIN users u ON u.user_id=r.reviewer_id
+        WHERE r.project_id=$1 ORDER BY r.created_at DESC LIMIT 200""", pid)
+    return jr({"reviews": [{"id": r["id"], "rating": r["rating"], "text": r["text"], "created": fmt_dt(r["created_at"]),
+        "author_id": r["reviewer_id"], "mine": r["reviewer_id"] == me,
+        "author": (" ".join(x for x in [r["first_name"], r["last_name"]] if x) or r["username"] or "Пользователь"),
+        "author_has_avatar": bool(r["has_avatar"]), "author_photo": r["photo_url"]} for r in rows]})
+
+
+async def api_project_review(request):
+    me = request["u"]["id"]
+    d = await body(request)
+    try:
+        pid = int(d.get("project_id") or 0)
+        rating = int(d.get("rating") or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, "bad_rating")
+    if rating < 1 or rating > 5:
+        raise ApiError(400, "bad_rating")
+    text = str(d.get("text") or "").strip()[:1000]
+    cur = await pool.fetchrow("SELECT owner_id FROM projects WHERE id=$1", pid)
+    if not cur:
+        raise ApiError(404, "project_not_found")
+    if cur["owner_id"] == me:
+        raise ApiError(400, "own_project")
+    await pool.execute("""INSERT INTO project_reviews(project_id,reviewer_id,rating,text) VALUES($1,$2,$3,$4)
+        ON CONFLICT (project_id,reviewer_id) DO UPDATE SET rating=$3,text=$4,created_at=now()""", pid, me, rating, text)
+    return jr({"ok": True})
+
+
+async def api_project_review_delete(request):
+    me = request["u"]["id"]
+    rid = int((await body(request)).get("id") or 0)
+    row = await pool.fetchrow("SELECT reviewer_id FROM project_reviews WHERE id=$1", rid)
+    if not row:
+        raise ApiError(404, "not_found")
+    if row["reviewer_id"] != me and await role(me) is None:
+        raise ApiError(403, "forbidden")
+    await pool.execute("DELETE FROM project_reviews WHERE id=$1", rid)
+    return jr({"ok": True})
 
 
 async def api_project_save(request):
@@ -6634,6 +6731,12 @@ def build_web(bot: Bot):
     r.add_get("/api/projects", api_projects_mine)
     r.add_get("/api/project", api_project)
     r.add_get("/api/project/avatar", api_project_avatar)
+    r.add_get("/api/project/banner", api_project_banner)
+    r.add_post("/api/project/banner", api_project_banner_upload)
+    r.add_post("/api/project/banner_delete", api_project_banner_delete)
+    r.add_get("/api/project/reviews", api_project_reviews)
+    r.add_post("/api/project/review", api_project_review)
+    r.add_post("/api/project/review_delete", api_project_review_delete)
     r.add_post("/api/project/save", api_project_save)
     r.add_post("/api/project/delete", api_project_delete)
     r.add_post("/api/project/mark_request", api_project_mark_request)
