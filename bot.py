@@ -527,6 +527,8 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS accent TEXT NOT NULL DEFAULT '#8b7cff';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_data BYTEA;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_mime TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_dev BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_adm BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_badrep BOOLEAN NOT NULL DEFAULT FALSE;
@@ -4494,7 +4496,7 @@ async def api_apply(request):
 async def api_profile(request):
     uid = int(request.query.get("id") or request["u"]["id"])
     row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.photo_url,
-        (u.avatar_data IS NOT NULL) has_avatar, u.created_at,
+        (u.avatar_data IS NOT NULL) has_avatar, (u.banner_data IS NOT NULL) has_banner, u.created_at,
         COALESCE(avg(r.rating),0)::float rating, count(r.id)::int reviews
         FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
         WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
@@ -4525,7 +4527,7 @@ async def api_profile(request):
     return jr({"id": row["user_id"], "username": row["username"],
         "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
-        "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "created": fmt_dt(row["created_at"]),
+        "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "has_banner": row["has_banner"], "created": fmt_dt(row["created_at"]),
         "rating": (bc["score"] if bc else round(row["rating"],1)), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "projects": [project_json(x) for x in await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)],
@@ -4592,6 +4594,32 @@ async def api_profile_avatar_upload(request):
     if not data or len(data)>5*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
         raise ApiError(400,"bad_image")
     await pool.execute("UPDATE users SET avatar_data=$2,avatar_mime=$3 WHERE user_id=$1",uid,data,mime)
+    return jr({"ok":True})
+
+
+async def api_profile_banner(request):
+    target=int(request.query.get("id") or request["u"]["id"])
+    row=await pool.fetchrow("SELECT banner_data,banner_mime FROM users WHERE user_id=$1",target)
+    if not row or not row["banner_data"]:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(row["banner_data"]),content_type=row["banner_mime"] or "image/jpeg",
+        headers={"Cache-Control":"private, max-age=300"})
+
+
+async def api_profile_banner_upload(request):
+    uid=request["u"]["id"]; form=await request.post(); f=form.get("file")
+    if f is None or not hasattr(f,"file"):
+        raise ApiError(400,"no_file")
+    data=f.file.read()
+    mime=getattr(f,"content_type",None) or "image/jpeg"
+    if not data or len(data)>6*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
+        raise ApiError(400,"bad_image")
+    await pool.execute("UPDATE users SET banner_data=$2,banner_mime=$3 WHERE user_id=$1",uid,data,mime)
+    return jr({"ok":True})
+
+
+async def api_profile_banner_delete(request):
+    await pool.execute("UPDATE users SET banner_data=NULL,banner_mime=NULL WHERE user_id=$1",request["u"]["id"])
     return jr({"ok":True})
 
 
@@ -6560,6 +6588,9 @@ def build_web(bot: Bot):
     r.add_get("/api/profile/avatar", api_profile_avatar)
     r.add_post("/api/profile/avatar", api_profile_avatar_upload)
     r.add_delete("/api/profile/avatar", api_profile_avatar_delete)
+    r.add_get("/api/profile/banner", api_profile_banner)
+    r.add_post("/api/profile/banner", api_profile_banner_upload)
+    r.add_delete("/api/profile/banner", api_profile_banner_delete)
     r.add_get("/api/profile/reviews", api_profile_reviews)
     r.add_post("/api/profile/reviews", api_profile_review_save)
     r.add_get("/api/chats", api_chats)
