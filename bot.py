@@ -40,6 +40,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import support  # ИИ-поддержка + вызов оператора (первый чат у всех пользователей)
 import public_api  # публичный API v1 (ключи, вебхуки, документация) — см. API.md
 import group_watch  # v35: бот в группах — сбор объявлений на модерацию и предупреждения о скамерах
 try:
@@ -439,7 +440,7 @@ async def send_one(bot: Bot, uid, text_html, photo=None):
 
 
 async def run_broadcast(bot: Bot, text_html, photo=None):
-    users = [r["user_id"] for r in await pool.fetch("SELECT user_id FROM users ORDER BY user_id")]
+    users = [r["user_id"] for r in await pool.fetch("SELECT user_id FROM users WHERE user_id>0 ORDER BY user_id")]
     sent = 0
     reasons = Counter()
     for uid in users:
@@ -2956,8 +2957,8 @@ async def cb_panel(cb: CallbackQuery, state: FSMContext):
             await cb.message.edit_text("⚑ <b>Жалобы</b>\n\n" + txt, reply_markup=b.as_markup())
     elif act == "stats":
         stats = await pool.fetchrow("""
-            SELECT (SELECT count(*) FROM users) users,
-                   (SELECT count(*) FROM users WHERE last_seen > now()-interval '7 days') active7,
+            SELECT (SELECT count(*) FROM users WHERE user_id>0) users,
+                   (SELECT count(*) FROM users WHERE user_id>0 AND last_seen > now()-interval '7 days') active7,
                    (SELECT count(*) FROM posts WHERE active AND expires_at>now()) posts,
                    (SELECT count(*) FROM posts WHERE active AND expires_at<=now()) expired,
                    (SELECT count(*) FROM reports WHERE status='new') reports,
@@ -3012,7 +3013,7 @@ async def admin_broadcast(m: Message, state: FSMContext, bot: Bot):
     if not content.strip() and not photo:
         return await m.answer("Пришлите текст (можно с одной картинкой в подписи). Отмена — /cancel.")
     await state.clear()
-    total = await pool.fetchval("SELECT count(*) FROM users")
+    total = await pool.fetchval("SELECT count(*) FROM users WHERE user_id>0")
     await m.answer(f"⏳ Рассылка запущена для {total} пользователей. Итог пришлю сюда.")
 
     async def job():
@@ -4703,6 +4704,7 @@ async def api_profile_review_save(request):
 
 async def api_chats(request):
     uid=request["u"]["id"]
+    await support.ensure_chat(uid)
     rows=await pool.fetch("""SELECT DISTINCT ON (peer) peer,post_id,body,created_at,sender_id,read_at,file_name,file_mime FROM (
         SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,post_id,body,created_at,id,sender_id,read_at,file_name,file_mime
         FROM direct_messages WHERE (sender_id=$1 OR recipient_id=$1)
@@ -4724,11 +4726,23 @@ async def api_chats(request):
             "unread":unread.get(r["peer"],0),"blocked":r["peer"] in blocked,
             "has_avatar":bool(u["has_avatar"]),"photo_url":u["photo_url"],"sb":sbs.get(r["peer"],"")})
     out.sort(key=lambda x:x["ts"],reverse=True)
+    sup=next((x for x in out if x["id"]==support.SUPPORT_ID),None)
+    if sup is None:   # все сообщения удалены «у себя» — чат поддержки всё равно остаётся
+        su=await pool.fetchrow("SELECT user_id,username,first_name,last_name,photo_url,(avatar_data IS NOT NULL) has_avatar FROM users WHERE user_id=$1",support.SUPPORT_ID)
+        if su:
+            sup={"id":su["user_id"],"name":" ".join(x for x in [su["first_name"],su["last_name"]] if x) or "Поддержка","username":su["username"],
+                "last":"Задайте вопрос поддержке","post_id":None,"created":"","ts":0,"mine":False,"read":True,"unread":0,"blocked":False,
+                "has_avatar":bool(su["has_avatar"]),"photo_url":su["photo_url"],"sb":""}
+            out.append(sup)
+    if sup is not None:
+        sup["support"]=True
+        out.remove(sup); out.insert(0,sup)
     return jr({"chats":out,"unread":sum(x["unread"] for x in out)})
 
 
 async def api_unread(request):
     uid=request["u"]["id"]
+    await support.ensure_chat(uid)
     return jr({"count":await pool.fetchval("SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL",uid)})
 
 
@@ -4787,7 +4801,10 @@ async def api_messages(request):
             "edited":r["edited_at"] is not None,"pinned":r["pinned_at"] is not None,
             "reply":(replies.get(r["reply_to"]) or {"id":r["reply_to"],"sender":None,"text":"Сообщение удалено","gone":True}) if r["reply_to"] else None,
             "fwd":fwd_names.get(r["fwd_from"],"Пользователь") if r["fwd_from"] else None})
-    return jr({"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"peer_seen":seen.timestamp() if seen else None,"blocked_by_me":by_me,"blocked_me":by_peer})
+    res={"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"peer_seen":seen.timestamp() if seen else None,"blocked_by_me":by_me,"blocked_me":by_peer}
+    if peer==support.SUPPORT_ID:
+        res["support"]=True; res["support_mode"]=await support.mode_of(uid)
+    return jr(res)
 
 
 async def api_typing(request):
@@ -4839,7 +4856,10 @@ async def api_message_send(request):
     row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size,reply_to)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None,reply_to)
     _typing.pop((uid,peer,0),None)
-    asyncio.create_task(push_dm(uid,peer,post_id,msg,fname,fmime))
+    if peer==support.SUPPORT_ID:
+        asyncio.create_task(support.on_user_message(uid,msg,row["id"]))
+    else:
+        asyncio.create_task(push_dm(uid,peer,post_id,msg,fname,fmime))
     return jr({"ok":True,"id":row["id"],"created":fmt_dt(row["created_at"])})
 
 
@@ -5155,6 +5175,8 @@ async def _project_editor(request, pid):
         raise ApiError(404, "project_not_found")
     if cur["owner_id"] != me and await role(me) is None:
         raise ApiError(403, "forbidden")
+    if pid == await support.support_project_id() and me != OWNER_ID:
+        raise ApiError(403, "forbidden")   # профиль поддержки меняет только владелец
 
 
 async def api_project_banner_upload(request):
@@ -5172,6 +5194,7 @@ async def api_project_banner_upload(request):
     if not data or len(data) > 6 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
         raise ApiError(400, "bad_image")
     await pool.execute("UPDATE projects SET banner_data=$2,banner_mime=$3 WHERE id=$1", pid, data, mime)
+    await support.sync_if_support(pid)
     return jr({"ok": True})
 
 
@@ -5179,6 +5202,7 @@ async def api_project_banner_delete(request):
     pid = int((await body(request)).get("id") or 0)
     await _project_editor(request, pid)
     await pool.execute("UPDATE projects SET banner_data=NULL,banner_mime=NULL WHERE id=$1", pid)
+    await support.sync_if_support(pid)
     return jr({"ok": True})
 
 
@@ -5242,6 +5266,8 @@ async def api_project_save(request):
             raise ApiError(404, "project_not_found")
         if cur["owner_id"] != me and await role(me) is None:
             raise ApiError(403, "forbidden")
+        if pid == await support.support_project_id() and me != OWNER_ID:
+            raise ApiError(403, "forbidden")
         await pool.execute("UPDATE projects SET kind=$2,name=$3,username=$4,link=$5,description=$6 WHERE id=$1",
                            pid, kind, name, username, link, desc)
     else:
@@ -5254,6 +5280,7 @@ async def api_project_save(request):
         await pool.execute("UPDATE projects SET avatar_data=$2,avatar_mime=$3 WHERE id=$1", pid, av[0], av[1])
     elif str(d.get("remove_avatar") or "") in ("1", "true"):
         await pool.execute("UPDATE projects SET avatar_data=NULL,avatar_mime=NULL WHERE id=$1", pid)
+    await support.sync_if_support(pid)
     return jr({"ok": True, "id": pid})
 
 
@@ -5265,6 +5292,8 @@ async def api_project_delete(request):
         raise ApiError(404, "project_not_found")
     if cur["owner_id"] != me and await role(me) is None:
         raise ApiError(403, "forbidden")
+    if pid == await support.support_project_id():
+        raise ApiError(403, "support_project_locked")   # проект «Поддержка» удалять нельзя — можно только менять профиль
     await pool.execute("DELETE FROM projects WHERE id=$1", pid)
     return jr({"ok": True})
 
@@ -5763,8 +5792,8 @@ async def api_admin_overview(request):
 async def api_admin_stats(request):
     await need_staff(request)
     r = await pool.fetchrow("""
-        SELECT (SELECT count(*) FROM users) users,
-               (SELECT count(*) FROM users WHERE last_seen>now()-interval '7 days') active7,
+        SELECT (SELECT count(*) FROM users WHERE user_id>0) users,
+               (SELECT count(*) FROM users WHERE user_id>0 AND last_seen>now()-interval '7 days') active7,
                (SELECT count(*) FROM posts WHERE active AND expires_at>now()) active_posts,
                (SELECT count(*) FROM posts WHERE active AND expires_at<=now()) expired_posts,
                (SELECT count(*) FROM reports WHERE status='new') new_reports,
@@ -5929,7 +5958,7 @@ async def api_admin_analytics(request):
     out["saved_searches"] = await V("SELECT count(*)::int FROM saved_searches")
 
     # --- воронка
-    out["funnel"] = dict(await R("""SELECT (SELECT count(*) FROM users)::int users,
+    out["funnel"] = dict(await R("""SELECT (SELECT count(*) FROM users WHERE user_id>0)::int users,
         (SELECT count(DISTINCT user_id) FROM posts)::int posted,
         (SELECT count(DISTINCT sender_id) FROM direct_messages)::int chatted,
         (SELECT count(DISTINCT u) FROM (SELECT buyer_id u FROM direct_deals WHERE status='completed' UNION SELECT seller_id FROM direct_deals WHERE status='completed'
@@ -5993,7 +6022,7 @@ async def api_admin_broadcast(request):
     if not msg or len(msg) > 4000:
         raise ApiError(400, "bad_text")
     bot = request.app["bot"]
-    total = await pool.fetchval("SELECT count(*) FROM users")
+    total = await pool.fetchval("SELECT count(*) FROM users WHERE user_id>0")
 
     async def job():
         try:
@@ -6822,6 +6851,7 @@ def build_web(bot: Bot):
     r.add_post("/api/admin/escrow_action", api_admin_escrow_action)
     r.add_post("/api/admin/escrow_config", api_admin_escrow_config)
     public_api.install(app, sys.modules[__name__])  # /api/v1/*, /api/apikeys, /developers
+    support.install(app, sys.modules[__name__])     # /api/support/*
     return app
 
 
@@ -6844,6 +6874,7 @@ async def main():
     global HTTP, _ai_sem
     await init_db()
     await public_api.start(sys.modules[__name__])
+    await support.start(sys.modules[__name__])
     await group_watch.start(sys.modules[__name__])
     HTTP = ClientSession(timeout=ClientTimeout(total=30))
     _ai_sem = asyncio.Semaphore(3)
@@ -6886,6 +6917,8 @@ async def main():
     dp = Dispatcher()
     if public_api.router is not None:
         dp.include_router(public_api.router)
+    if support.router is not None:
+        dp.include_router(support.router)   # ответы админов (Reply) на заявки поддержки — до основного router
     group_watch.install(dp, sys.modules[__name__])   # ДО основного router: смотрит сообщения групп, не перехватывая их
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=False)

@@ -1375,6 +1375,15 @@ body.is-more header.top{display:none!important}
 body.is-more #main{padding-top:8px!important}
 .settings-profile-hero{padding-top:calc(96px + env(safe-area-inset-top))!important}
 .settings-profile-hero::before{bottom:-150px!important;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 40%,rgba(0,0,0,.85) 52%,rgba(0,0,0,.6) 64%,rgba(0,0,0,.36) 76%,rgba(0,0,0,.16) 88%,rgba(0,0,0,.05) 95%,transparent 100%)!important;mask-image:linear-gradient(to bottom,#000 0,#000 40%,rgba(0,0,0,.85) 52%,rgba(0,0,0,.6) 64%,rgba(0,0,0,.36) 76%,rgba(0,0,0,.16) 88%,rgba(0,0,0,.05) 95%,transparent 100%)!important}
+
+/* поддержка */
+.sup-tag{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:8px;background:var(--acc-soft);color:var(--acc);font-size:10px;font-weight:700;vertical-align:middle;letter-spacing:.2px}
+.cv-sup{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13px;color:var(--dim)}
+.cv-sup[hidden]{display:none}
+.cv-sup span{min-width:0}
+.sup-btn{flex:none;border:0;border-radius:14px;padding:8px 14px;background:var(--acc);color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+.sup-btn.ghost{background:var(--acc-soft);color:var(--acc)}
+.sup-btn:disabled{opacity:.5}
 .settings-profile-stats{border-top:0!important;position:relative;z-index:1}
 .settings-profile-hint{margin-left:0!important;justify-content:flex-end;gap:6px}
 /* список аккаунтов как в Telegram */
@@ -2617,7 +2626,7 @@ views.profile = async (el, params={}) => {
 views.chats = async el => {
   const d=await api('/api/chats');el.innerHTML=`<h2 class="page">Чаты</h2>`;setUnread(d.unread);
   if(!d.chats.length){el.innerHTML+=empty('✉','Здесь появятся ваши диалоги');return;}
-  el.innerHTML+=`<div class="chats-list">${d.chats.map(c=>`<div class="chat-card ${c.unread?'unr':''}" data-peer="${c.id}" data-post="${c.post_id||''}">${avHtml('cav',c.id,c.name,c.has_avatar,c.photo_url)}<div class="cmain"><div class="crow"><b>${esc(c.name)}${nameBadges(c.sb)}${c.blocked?' 🚫':''}</b><small>${esc(c.ts?listTime(c.ts):(c.created||'').slice(0,11))}</small></div><div class="clast">${c.post_id?`<span class="ctag">#${c.post_id}</span>`:''}${c.mine?`<span class="tk ${c.read?'r':''}">${c.read?'✓✓':'✓'}</span>`:''}${esc(c.last)}${c.unread?`<span class="cunread">${c.unread}</span>`:''}</div></div></div>`).join('')}</div>`;
+  el.innerHTML+=`<div class="chats-list">${d.chats.map(c=>`<div class="chat-card ${c.unread?'unr':''}" data-peer="${c.id}" data-post="${c.post_id||''}">${avHtml('cav',c.id,c.name,c.has_avatar,c.photo_url)}<div class="cmain"><div class="crow"><b>${esc(c.name)}${nameBadges(c.sb)}${c.support?'<span class="sup-tag">поддержка</span>':''}${c.blocked?' 🚫':''}</b><small>${esc(c.ts?listTime(c.ts):(c.created||'').slice(0,11))}</small></div><div class="clast">${c.post_id?`<span class="ctag">#${c.post_id}</span>`:''}${c.mine?`<span class="tk ${c.read?'r':''}">${c.read?'✓✓':'✓'}</span>`:''}${esc(c.last)}${c.unread?`<span class="cunread">${c.unread}</span>`:''}</div></div></div>`).join('')}</div>`;
   avFill(el);$$('.chat-card',el).forEach(x=>x.onclick=()=>go('chat',{peer:+x.dataset.peer,post_id:x.dataset.post?+x.dataset.post:0}));
 };
 views.chat = async (el,params={}) => {
@@ -2630,6 +2639,7 @@ views.chat = async (el,params={}) => {
   const badB=((pu&&pu.badges)||[]).filter(b=>b.tone==='bad');
   el.innerHTML=`<div class="cv">
     <div class="tg-top"><button class="tg-back" id="cvBack" aria-label="Назад"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px;stroke-width:2.2"><path d="M15 5l-7 7 7 7"/></svg></button>${avHtml('cav',peer,pname,pu&&pu.has_avatar,pu&&pu.photo_url)}<div class="ct" id="peerProfile"><b>${esc(pname)}${nameBadges(pu&&pu.sb)}</b><small id="cvSub"></small></div><button class="tg-more" id="cvMore" aria-label="Меню">⋮</button></div>
+    <div class="cv-sup" id="cvSup" hidden></div>
     ${badB.length?`<div class="cv-warn">⚠️ ${badB.map(b=>esc(b.t)).join(', ')}. Будьте осторожны — проводите сделку через гаранта.</div>`:''}
     ${post_id?'<div class="tg-pin"><i>🛡</i><span>Безопасная сделка по объявлению #'+post_id+'</span><button id="startEscrow">Сделка</button></div>':''}
     <div class="cv-pins" id="cvPins" hidden><div class="rb"></div><div class="rt"><b></b><span></span></div><button id="cvUnpin" aria-label="Открепить"><span class="mi mi-x_pin"></span></button></div>
@@ -2676,9 +2686,21 @@ views.chat = async (el,params={}) => {
     log.innerHTML=html;firstDraw=false;
     if(near||force)log.scrollTop=log.scrollHeight;
   };
-  const sub=n=>{const s=$('#cvSub',el);if(!s)return;if(n.peer_typing){s.textContent='печатает…';s.className='typing';}else{s.className='';s.textContent=n.peer_online?'в сети':((n.peer_seen?'был(а) '+seenLabel(n.peer_seen):(pu&&pu.username?'@'+pu.username:'был(а) недавно'))+(post_id?' · объявление #'+post_id:''));}};
+  const sub=n=>{const s=$('#cvSub',el);if(!s)return;if(n.support){s.className=n.peer_typing?'typing':'';s.textContent=n.peer_typing?'печатает…':(n.support_mode==='operator'?'оператор на связи':'ИИ-помощник');return;}if(n.peer_typing){s.textContent='печатает…';s.className='typing';}else{s.className='';s.textContent=n.peer_online?'в сети':((n.peer_seen?'был(а) '+seenLabel(n.peer_seen):(pu&&pu.username?'@'+pu.username:'был(а) недавно'))+(post_id?' · объявление #'+post_id:''));}};
   const apply=(n,force)=>{
     st=n;sub(n);const blk=n.blocked_by_me||n.blocked_me;
+    const sb=$('#cvSup',el);
+    if(sb){
+      if(n.support){
+        const m=n.support_mode||'ai';const key=m;
+        if(sb.dataset.m!==key){
+          sb.dataset.m=key;sb.hidden=false;
+          sb.innerHTML=m==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="sup-btn" id="supOp">🙋 Позвать оператора</button>':m==='waiting'?'<span>⏳ Оператор вызван — ответит здесь</span><button class="sup-btn ghost" id="supCancel">Отменить</button>':'<span>👤 С вами на связи оператор</span>';
+          const op=$('#supOp',sb);if(op)op.onclick=async()=>{op.disabled=true;try{await api('/api/support/operator',{});buzz('light');await refresh();}catch(e){op.disabled=false;fail(e)}};
+          const cn=$('#supCancel',sb);if(cn)cn.onclick=async()=>{cn.disabled=true;try{await api('/api/support/cancel',{});await refresh();}catch(e){cn.disabled=false;fail(e)}};
+        }
+      }else sb.hidden=true;
+    }
     $('#cvBar',el).style.display=blk?'none':'';
     const bb=$('#cvBlocked',el);bb.style.display=blk?'':'none';
     if(blk){bb.innerHTML=n.blocked_by_me?'Вы заблокировали этого пользователя <button class="btn small" id="cvUnblock">Разблокировать</button>':'Пользователь ограничил вам сообщения';
