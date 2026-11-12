@@ -1248,6 +1248,9 @@ h2.page{font-weight:800;letter-spacing:-.2px}
 .profile-hero.has-banner::after{display:none}
 .profile-hero.has-banner .pbn-shade{display:block}
 .pbn-shade{display:none;position:absolute;left:0;right:0;top:70px;height:80px;z-index:0;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--bg) 70%,transparent))}
+/* профиль: без верхней плашки, баннер доходит до самого верха */
+body.is-profile header.top{display:none!important}
+body.is-profile #main{padding-top:8px!important}
 /* ===== профиль пользователя v2: баннер на всю ширину, растворяется в фон ===== */
 .profile-hero.glass{--ph-mask:linear-gradient(to bottom,rgba(0,0,0,.35) 0,rgba(0,0,0,.7) 6%,#000 16%,#000 52%,rgba(0,0,0,.93) 60%,rgba(0,0,0,.76) 68%,rgba(0,0,0,.54) 76%,rgba(0,0,0,.32) 84%,rgba(0,0,0,.14) 92%,rgba(0,0,0,.04) 97%,transparent 100%);position:relative;display:block;overflow:visible;margin:-8px -16px 14px;padding:calc(88px + env(safe-area-inset-top)) 16px 4px;border:0;border-radius:0;background:none;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
 .profile-hero.glass::before{top:0;bottom:-70px;height:auto;-webkit-mask-image:var(--ph-mask);mask-image:var(--ph-mask)}
@@ -1879,7 +1882,7 @@ async function go(name, params = {}, opt = {}) {
   S.cur = name; S.curParams = params; setInd(name);
   const old = $('.view', main);
   if (old) { old.classList.add('leave', 'd-' + dir); await sleep(dir === 'fade' ? 90 : 130); if (tok !== S.navTok) return; }
-  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat');
+  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat'); document.body.classList.toggle('is-profile', name === 'profile');
   const v = document.createElement('div'); v.className = 'view d-' + dir; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
   $('#backBtn').style.display = S.hist.length ? 'inline-block' : 'none';
   try { tg && (S.hist.length ? tg.BackButton.show() : tg.BackButton.hide()); } catch (e) {}
