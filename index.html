@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#08040f">
+<meta name="theme-color" content="#16131a">
 <script>try{var _t=localStorage.getItem("kmbp-theme")||"violet";var _L={dark:"violet",light:"lilac",midnight:"blue",ocean:"blue",forest:"green"};_t=_L[_t]||_t;if(!/^(violet|green|blue|pink|mono|lilac|sky)$/.test(_t))_t="violet";document.documentElement.dataset.palette=_t;document.documentElement.dataset.theme=/^(lilac|sky)$/.test(_t)?"light":"dark"}catch(e){document.documentElement.dataset.palette="violet";document.documentElement.dataset.theme="dark"}</script>
 <title>KMBP EXCHANGE</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
@@ -1326,6 +1326,40 @@ body.is-profile #main{padding-top:8px!important}
 .li.glass:not(.act-on),.rv-sum.glass,.prof.glass,.ad-d.glass,.review,.chat-card,.rcard{padding-left:0;padding-right:0;margin-top:0;margin-bottom:0}
 .profile-stats{gap:0!important;margin:6px 0 0!important;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .profile-stat{background:none!important;border:0!important;border-radius:0!important;box-shadow:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+
+/* плоский вид: сплошные поверхности, границы вместо теней */
+:root,:root[data-theme]{
+  --card:var(--bg2);--glass:var(--bg2);--glass2:var(--bg2);
+  --sh:none;--shin:none;--sshadow:none;
+}
+:root[data-theme="light"]{--bg:#ece8e1;--bg2:#f4f1eb;--navbg:#f4f1eb;--line:rgba(40,34,26,.14);--txt:#1d1a16;--dim:#6f685d}
+:root[data-palette="violet"]{--bg:#16131a;--bg2:#1e1a24;--navbg:#1e1a24;--line:rgba(220,210,235,.13);--txt:#efeaf4;--dim:#a39bb0;--acc:#8c7bd0;--acc-soft:rgba(140,123,208,.16);--acc-line:rgba(140,123,208,.4)}
+:root[data-palette="green"]{--bg:#111613;--bg2:#181f1b;--navbg:#181f1b;--line:rgba(210,230,215,.13);--acc:#5e9e75;--acc-soft:rgba(94,158,117,.16);--acc-line:rgba(94,158,117,.4)}
+:root[data-palette="blue"]{--bg:#12151a;--bg2:#191d24;--navbg:#191d24;--line:rgba(210,220,235,.13);--acc:#6a8fcf;--acc-soft:rgba(106,143,207,.16);--acc-line:rgba(106,143,207,.4)}
+:root[data-palette="pink"]{--bg:#181316;--bg2:#211a1e;--navbg:#211a1e;--line:rgba(235,215,225,.13);--acc:#c0728f;--acc-soft:rgba(192,114,143,.16);--acc-line:rgba(192,114,143,.4)}
+:root[data-palette="lilac"]{--bg:#ebe7ee;--bg2:#f4f1f6;--navbg:#f4f1f6;--acc:#6f5cc0;--acc-soft:rgba(111,92,192,.12);--acc-line:rgba(111,92,192,.35)}
+:root[data-palette="sky"]{--bg:#e6eaee;--bg2:#f1f4f6;--navbg:#f1f4f6;--acc:#4a78b5;--acc-soft:rgba(74,120,181,.12);--acc-line:rgba(74,120,181,.35)}
+html,body,input,textarea,select,button{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+body,:root[data-theme] body{background:var(--bg)!important}
+:where(*:not(.sp-hole):not(.nb):not(.hl):not(.sw)){box-shadow:none!important;text-shadow:none!important}
+.tour,.sp-card,#toast,.sheet{box-shadow:0 2px 14px rgba(0,0,0,.28)!important}
+input.f:focus,textarea.f:focus,select.f:focus,.sbar:focus-within,.cv-bar:focus-within,.rform textarea:focus{box-shadow:0 0 0 2px var(--acc)!important;border-color:var(--acc)}
+/* кнопки, аватарки, пузыри: сплошной акцент вместо градиента */
+:root[data-theme] .btn:not(.ghost):not(.ok):not(.bad):not(.danger),.rsubmit,.cv-send,.chip.sel,.cat.sel,.cv-msg.mine,.chat-bubble.mine{background:var(--acc)!important;color:#fff}
+.btn.ok{background:var(--ok)!important}.btn.bad,.btn.danger{background:var(--bad)!important}
+.pav,.sav,.cav,.rcard-av,.bav,.bp-av,.tg-top .cav,.chat-card .cav,.cv-head .cav,.bn,.aph-n,.tour-ic,.rform,.rc-ic,.rc-badge .dot,.rc-close,.rv-bars i u{background-image:none!important}
+.pav,.sav,.cav,.rcard-av,.bav,.bp-av{background-color:var(--acc)!important}
+.aph-n,.tour-ic,.rc-ic{background-color:var(--acc-soft)!important}
+.rform{background-color:var(--bg2)!important}
+.bn:not(.has-img){background:var(--bc,var(--acc))!important}
+.rc-badge .dot,.rc-close{background-color:var(--acc)!important}
+.rc{background:var(--bg)!important}
+.rv-bars i u{background-color:var(--warn)!important}
+.btn{background-image:none}
+.tour::before,.bp-hero::before{display:none}
+/* стекло и размытие только там, где нужно перекрыть контент */
+.searchbar,.sbar,.tile,.pbtn,.chip,.bsearch,.tg-top,.tg-pin,.cv-bar,.cv-pins,#toast,nav.bar{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.brand-t span{background:none!important;-webkit-text-fill-color:currentColor!important;color:var(--acc)!important}
 </style>
 </head>
 <body>
