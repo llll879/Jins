@@ -1320,6 +1320,12 @@ body.is-profile #main{padding-top:8px!important}
 .pj-acts .btn.on{border-color:var(--acc)}
 .pj-h{margin-top:22px}
 #pjPostsRow .xi{--ico:var(--acc);width:2em;height:2em}
+/* ===== блоки без рамок и плашек: разделяются только тонкими горизонтальными линиями (нижняя панель не трогается) ===== */
+.card.glass,.li.glass:not(.act-on),.rv-sum.glass,.prof.glass,.ad-d.glass,.review,.chat-card,.rcard{background:none!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;box-shadow:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.card.glass{padding-left:0;padding-right:0;margin-bottom:0}
+.li.glass:not(.act-on),.rv-sum.glass,.prof.glass,.ad-d.glass,.review,.chat-card,.rcard{padding-left:0;padding-right:0;margin-top:0;margin-bottom:0}
+.profile-stats{gap:0!important;margin:6px 0 0!important;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.profile-stat{background:none!important;border:0!important;border-radius:0!important;box-shadow:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
 </style>
 </head>
 <body>
