@@ -1369,6 +1369,28 @@ input.f:focus,textarea.f:focus,select.f:focus,.sbar:focus-within,.cv-bar:focus-w
 .settings-profile-hint{display:flex;justify-content:space-between;align-items:center;margin:14px 0 0 118px;color:var(--dim);font-size:13px}
 .settings-profile-hint span{font-size:24px}
 .settings-profile-stats{margin:0 0 14px!important}
+
+/* настройки: без надписи сверху, баннер до самого верха, плавный переход вниз */
+body.is-more header.top{display:none!important}
+body.is-more #main{padding-top:8px!important}
+.settings-profile-hero{padding-top:calc(96px + env(safe-area-inset-top))!important}
+.settings-profile-hero::before{bottom:-150px!important;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 40%,rgba(0,0,0,.85) 52%,rgba(0,0,0,.6) 64%,rgba(0,0,0,.36) 76%,rgba(0,0,0,.16) 88%,rgba(0,0,0,.05) 95%,transparent 100%)!important;mask-image:linear-gradient(to bottom,#000 0,#000 40%,rgba(0,0,0,.85) 52%,rgba(0,0,0,.6) 64%,rgba(0,0,0,.36) 76%,rgba(0,0,0,.16) 88%,rgba(0,0,0,.05) 95%,transparent 100%)!important}
+.settings-profile-stats{border-top:0!important;position:relative;z-index:1}
+.settings-profile-hint{margin-left:0!important;justify-content:flex-end;gap:6px}
+/* список аккаунтов как в Telegram */
+.acc-grp{margin:14px 0 6px;padding:0 2px;color:var(--acc);font-weight:700;font-size:14px}
+.acc-list{margin-bottom:6px}
+.acc-row{display:flex;align-items:center;gap:14px;padding:10px 2px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.acc-row .pav2{width:44px;height:44px;border-radius:50%;font-size:18px}
+.acc-row .t{flex:1;min-width:0;display:flex;flex-direction:column}
+.acc-row .t b{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-row .t small{color:var(--dim);font-size:12px}
+.acc-row .ck{flex:none;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--acc);color:#fff;font-size:13px;font-weight:800}
+.acc-row .ck.off{background:none;color:var(--dim);font-size:22px;font-weight:400}
+.acc-row.on .t b{color:var(--acc)}
+.acc-row.add{color:var(--acc)}
+.acc-row.add .pav2{background:none;border:1.5px dashed var(--acc);color:var(--acc);font-size:22px;font-weight:400}
+.acc-row:active{opacity:.6}
 </style>
 </head>
 <body>
@@ -1931,7 +1953,7 @@ async function go(name, params = {}, opt = {}) {
   S.cur = name; S.curParams = params; setInd(name);
   const old = $('.view', main);
   if (old) { old.classList.add('leave', 'd-' + dir); await sleep(dir === 'fade' ? 90 : 130); if (tok !== S.navTok) return; }
-  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat'); document.body.classList.toggle('is-profile', name === 'profile');
+  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat'); document.body.classList.toggle('is-profile', name === 'profile'); document.body.classList.toggle('is-more', name === 'more');
   const v = document.createElement('div'); v.className = 'view d-' + dir; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
   $('#backBtn').style.display = S.hist.length ? 'inline-block' : 'none';
   try { tg && (S.hist.length ? tg.BackButton.show() : tg.BackButton.hide()); } catch (e) {}
@@ -2393,8 +2415,9 @@ views.more = async el => {
   const rows = [['profile', 'profile', 'Мой профиль', 'Аватар, рейтинг и отзывы'], ['projects', 'profile', 'Мои проекты', 'Бот, канал, сайт — отдельные профили'], ['base', 'search', 'VETRIXBASE', 'Проверить человека: рейтинг, жалобы, юзернеймы'], ['escrow', 'deals', 'Сделки', 'Через гаранта или напрямую'], ['receipts', 'doc', 'Чеки сделок', 'Завершённые, отменённые и возвраты'], ['favorites', 'star', 'Избранное', 'Сохранённые объявления'], ['submit', 'plus', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', 'list', 'Мои заявки', 'Статусы и правки админов'], ['recs', 'sparkle', 'Рекомендации', 'Подборка специально для вас'], ['recent', 'list', 'Недавно просмотренное', 'Последние открытые объявления'], ['search', 'sparkle', 'Сохранённые поиски', 'Уведомим о новых объявлениях'], ['blocks', 'security', 'Чёрный список', 'Заблокированные пользователи']];
   if (me.recruit_open && !me.role) rows.push(['apply', 'admin', 'Хочу стать админом', 'Набор открыт — заполните анкету']);
   const name = (me.user && me.user.name) || 'друг';
-  el.innerHTML = `${(() => { const ap = actingProject(), sw = '<button class="sw-btn" id="swBtn" aria-label="Переключить профиль">⇄</button>'; if(ap) return `<div class="prof glass" data-go="project" data-p='${JSON.stringify({ id: ap.id })}'>${pavHtml('big', ap)}<div class="pn"><b>${esc(ap.name)}</b><small>Проект · ${pkLabel(ap.kind)}</small></div>${sw}<span class="arr">›</span></div>`; const u=ownProfile||{}; const av=avatarSrc(u); return `<div class="profile-hero glass settings-profile-hero" id="settingsProfileHero" data-go="profile"><div class="ph-top"><div class="ph-av"><div class="profile-avatar" id="meAvatar">${av?`<img src="${esc(av)}" alt="Аватар">`:esc(name.charAt(0).toUpperCase())}</div></div><div class="ph-info"><b class="ph-name">${esc(u.name||name)}${nameBadges(me.user&&me.user.sb)}</b><div class="ph-un">${u.username?'@'+esc(u.username):'Участник KMBP EXCHANGE'}</div><small class="dim">${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div>${sw}</div><div class="settings-profile-hint">Изменить аватар, баннер и профиль <span>›</span></div></div>`; })()}
+  el.innerHTML = `${(() => { const ap = actingProject(), sw = ''; if(ap) return `<div class="prof glass" data-go="project" data-p='${JSON.stringify({ id: ap.id })}'>${pavHtml('big', ap)}<div class="pn"><b>${esc(ap.name)}</b><small>Проект · ${pkLabel(ap.kind)}</small></div>${sw}<span class="arr">›</span></div>`; const u=ownProfile||{}; const av=avatarSrc(u); return `<div class="profile-hero glass settings-profile-hero" id="settingsProfileHero" data-go="profile"><div class="ph-top"><div class="ph-av"><div class="profile-avatar" id="meAvatar">${av?`<img src="${esc(av)}" alt="Аватар">`:esc(name.charAt(0).toUpperCase())}</div></div><div class="ph-info"><b class="ph-name">${esc(u.name||name)}${nameBadges(me.user&&me.user.sb)}</b><div class="ph-un">${u.username?'@'+esc(u.username):'Участник KMBP EXCHANGE'}</div><small class="dim">${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div>${sw}</div><div class="settings-profile-hint">Изменить аватар, баннер и профиль <span>›</span></div></div>`; })()}
   ${!actingProject() && ownProfile ? `<div class="profile-stats settings-profile-stats"><div class="profile-stat">${xi('bars')}<b>${ownProfile.rating||'—'}</b><small>Рейтинг ★</small></div><div class="profile-stat">${xi('x_review')}<b>${ownProfile.reviews||0}</b><small>Отзывов</small></div><div class="profile-stat">${xi('x_deal')}<b>${ownProfile.completed_deals||0}</b><small>Сделок</small></div></div>` : ''}
+    ${(() => { const ap = actingProject(), ps = me.projects || [], uu = me.user || {}; const row = (id, av, t, sub, on) => `<div class="acc-row${on ? ' on' : ''}" data-acc="${id}">${av}<span class="t"><b>${t}</b><small>${sub}</small></span>${on ? '<span class="ck">✓</span>' : '<span class="ck off">›</span>'}</div>`; return `<div class="acc-grp">Аккаунты</div><div class="acc-list">${row(0, `<div class="pav2" id="accMeAv">${esc(String(uu.name || name).charAt(0).toUpperCase())}</div>`, esc(uu.name || name), 'Личный аккаунт', !ap)}${ps.map(p => row(p.id, pavHtml('', p), esc(p.name), pkLabel(p.kind), !!ap && ap.id === p.id)).join('')}<div class="acc-row add" id="accAdd"><div class="pav2">+</div><span class="t"><b>Добавить проект</b></span></div></div>`; })()}
     <div class="stagger">${rows.map(([g, i, t, s]) => `<div class="li glass" data-go="${g}"><span class="ic">${nic(i)}</span><span class="t"><b>${t}</b><small>${s}</small></span><span class="arr">›</span></div>`).join('')}</div>
     <div class="grp">Настройки</div>
     <div class="stagger">
@@ -2404,11 +2427,18 @@ views.more = async el => {
     </div>
     ${me.welcome ? `<div class="grp">О сервисе</div><div class="card glass">${me.has_photo ? '<img class="welcome-img" alt="">' : ''}<div class="rich">${safe(me.welcome)}</div></div>` : ''}${betaHtml()}`;
   if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
-  if (me.user) { const av=$('#meAvatar',el); if(av){const put=u=>{const a=$('#meAvatar',el);if(a)a.innerHTML=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`};
+  if (me.user) { const av=$('#meAvatar',el); if(av){const put=u=>{const a=$('#meAvatar',el),b=$('#accMeAv',el);if(a)a.innerHTML=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`;if(b)b.innerHTML=`<img src="${esc(u)}">`};
     if(me.user.has_avatar||!me.user.photo_url)avBlob(String(me.user.id)).then(u=>{if(u)put(u);else if(me.user.photo_url)put(me.user.photo_url)});else put(me.user.photo_url);} }
   if (ownProfile && ownProfile.has_banner) fetch('/api/profile/banner?id='+me.user.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('#settingsProfileHero',el);if(b&&h){h.style.setProperty('--pbn','url('+URL.createObjectURL(b)+')');h.classList.add('has-banner')}}).catch(()=>{});
   $('#tourBtn', el).onclick = () => showTour();
-  $('#swBtn', el).onclick = e => { e.stopPropagation(); switchSheet(() => go('more', {}, { replace: true })); };
+  $$('.acc-row[data-acc]', el).forEach(r => r.onclick = () => {
+    const id = +r.dataset.acc; if (id === actingId()) return;
+    setActing(id); buzz('light');
+    const pr = (me.projects || []).find(p => p.id === id);
+    toast(pr ? 'Вы действуете от «' + pr.name + '»' : 'Вы действуете от своего аккаунта', 'good');
+    go('more', {}, { replace: true });
+  });
+  const addB = $('#accAdd', el); if (addB) addB.onclick = () => go('project_edit', {});
   avFill(el);
   $('#themeToggle', el).onclick = () => sheet('Оформление', Object.keys(PALS).map(k => ({ t: PALS[k].n, fn: () => { try { localStorage.removeItem('kmbp-acc'); } catch (e) {} setTheme(k); api('/api/profile', { theme: k, accent: PALS[k].acc }).catch(() => {}); go('more', {}, { replace: true }); } })));
 };
