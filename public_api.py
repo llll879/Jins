@@ -36,10 +36,15 @@ from aiohttp import ClientSession, ClientTimeout, web
 from multidict import MultiDict
 
 try:  # aiogram нужен только для команды /api; без него модуль работает как чистый HTTP API
-    from aiogram import Router
+    from aiogram import Bot, F, Router
     from aiogram.filters import Command
-    from aiogram.types import Message
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.state import State, StatesGroup
+    from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
     router = Router(name="public_api")
+
+    class ApiFlow(StatesGroup):
+        purpose = State()   # ждём от пользователя ответ «зачем нужен ключ»
 except Exception:  # pragma: no cover
     router = None
 
@@ -1219,6 +1224,11 @@ async def api_keys_list(request):
 
 async def api_keys_create(request):
     d = await bm.body(request)
+    if request["u"]["id"] != bm.OWNER_ID:
+        # ключи выдаются только по заявке с одобрением админов (бот: /api new Название)
+        return bm.jr({"error": "approval_required",
+                      "message": "Ключ выдаётся по заявке: отправьте боту /api new Название, опишите, зачем он нужен, "
+                                 "и дождитесь решения админов."}, 403)
     try:
         row, token = await create_key(request["u"]["id"], d.get("name"), d.get("scopes"), d.get("rate_limit"),
                                       d.get("expires_days"), d.get("allowed_ips"))
@@ -1239,10 +1249,11 @@ async def api_keys_revoke(request):
 # ====================================================================== команда бота /api
 if router is not None:
     @router.message(Command("api"))
-    async def cmd_api(m: Message):
+    async def cmd_api(m: Message, state: FSMContext):
         if m.chat.type != "private":
             await m.answer("Команда /api работает только в личном чате с ботом.")
             return
+        await state.clear()
         esc = bm.esc
         uid = m.from_user.id
         parts = (m.text or "").split(maxsplit=3)
@@ -1251,13 +1262,25 @@ if router is not None:
         try:
             if sub in ("new", "create", "создать"):
                 name = parts[2] if len(parts) > 2 else "Мой ключ"
-                row, token = await create_key(uid, name, parts[3] if len(parts) > 3 else "read")
+                if uid == bm.OWNER_ID:   # владельцу одобрение не нужно
+                    row, token = await create_key(uid, name, parts[3] if len(parts) > 3 else "read")
+                    await m.answer(_key_text(row, token, base))
+                    return
+                name = name.strip()[:40]
+                scopes = _norm_scopes(parts[3] if len(parts) > 3 else "read")
+                active = await P().fetchval("SELECT count(*) FROM api_keys WHERE user_id=$1 AND revoked_at IS NULL", uid)
+                if active >= MAX_KEYS:
+                    raise E(409, "too_many_keys", f"Достигнут лимит активных ключей ({MAX_KEYS}). Отзовите ненужные.")
+                if await P().fetchval("SELECT 1 FROM api_key_requests WHERE user_id=$1 AND status='pending'", uid):
+                    raise E(409, "request_pending", "Ваша заявка на ключ уже на рассмотрении у админов. Дождитесь решения.")
+                await state.set_state(ApiFlow.purpose)
+                await state.update_data(api_name=name, api_scopes=scopes)
                 await m.answer(
-                    f"🔑 <b>Ключ создан:</b> {esc(row['name'])}\n\n<code>{esc(token)}</code>\n\n"
-                    f"Области: {esc(', '.join(row['scopes']))}\nЛимит: {row['rate_limit']} запросов/мин\n\n"
-                    "⚠️ Ключ показан <b>один раз</b> — сохраните его сейчас и никому не передавайте. "
-                    "Удалите это сообщение после копирования.\n"
-                    f"Проверка: <code>curl -H \"Authorization: Bearer КЛЮЧ\" {esc(base)}/me</code>")
+                    f"📝 <b>Заявка на API-ключ «{esc(name)}»</b>\n"
+                    f"Права: {esc(', '.join(scopes))}\n\n"
+                    "Напишите одним сообщением, <b>зачем вам нужен ключ</b>: что за проект и как вы будете использовать API.\n"
+                    "Заявку рассмотрят админы — вы получите ответ здесь.\n\n"
+                    "Отмена: /cancel")
             elif sub == "all" and uid == bm.OWNER_ID:
                 rows = await P().fetch(
                     "SELECT id,user_id,name,prefix,scopes,requests FROM api_keys WHERE revoked_at IS NULL ORDER BY id DESC LIMIT 50")
@@ -1277,14 +1300,135 @@ if router is not None:
                     "Подключайте базу репутации, объявления, сделки и чаты к любому своему проекту.\n\n"
                     f"<b>Документация:</b> {esc(base)}/docs\n<b>OpenAPI:</b> {esc(base)}/openapi.json\n\n"
                     "<b>Команды</b>\n"
-                    "<code>/api new Название</code> — ключ только для чтения\n"
+                    "<code>/api new Название</code> — заявка на ключ только для чтения\n"
                     "<code>/api new Название all</code> — все права\n"
                     "<code>/api new Название read,deals:read</code> — выбранные права\n"
                     "<code>/api revoke 3</code> — отозвать ключ №3\n\n"
+                    "ℹ️ Ключ выдаётся после одобрения админами: бот спросит, зачем он нужен, и отправит заявку на проверку.\n\n"
                     f"<b>Права:</b> {esc(', '.join(SCOPES))}\n\n"
                     + ("<b>Ваши ключи</b>\n" + "\n".join(lines) if lines else "У вас пока нет ключей."))
         except E as e:
             await m.answer(f"⚠️ {esc(e.message)}")
+
+
+def _key_text(row, token, base):
+    esc = bm.esc
+    return (f"🔑 <b>Ключ создан:</b> {esc(row['name'])}\n\n<code>{esc(token)}</code>\n\n"
+            f"Области: {esc(', '.join(row['scopes']))}\nЛимит: {row['rate_limit']} запросов/мин\n\n"
+            "⚠️ Ключ показан <b>один раз</b> — сохраните его сейчас и никому не передавайте. "
+            "Удалите это сообщение после копирования.\n"
+            f"Проверка: <code>curl -H \"Authorization: Bearer КЛЮЧ\" {esc(base)}/me</code>")
+
+
+if router is not None:
+    @router.message(ApiFlow.purpose, F.text, ~F.text.startswith("/"), F.chat.type == "private")
+    async def api_purpose(m: Message, state: FSMContext, bot: Bot):
+        esc = bm.esc
+        purpose = (m.text or "").strip()
+        if len(purpose) < 10:
+            await m.answer("Опишите подробнее (минимум 10 символов): что за проект и зачем нужен доступ к API. Отмена: /cancel")
+            return
+        if len(purpose) > 600:
+            await m.answer("Слишком длинно — уложитесь в 600 символов. Отмена: /cancel")
+            return
+        data = await state.get_data()
+        name, scopes = data.get("api_name"), data.get("api_scopes")
+        await state.clear()
+        if not name or not scopes:
+            await m.answer("Что-то пошло не так. Начните заново: /api new Название")
+            return
+        uid = m.from_user.id
+        if await P().fetchval("SELECT 1 FROM api_key_requests WHERE user_id=$1 AND status='pending'", uid):
+            await m.answer("Ваша заявка на ключ уже на рассмотрении у админов.")
+            return
+        rid = await P().fetchval(
+            "INSERT INTO api_key_requests(user_id,name,scopes,purpose) VALUES($1,$2,$3,$4) RETURNING id",
+            uid, name, list(scopes), purpose)
+        who = f'<a href="tg://user?id={uid}">{esc(m.from_user.full_name)}</a>' + (f" (@{esc(m.from_user.username)})" if m.from_user.username else "")
+        text = (f"🔑 <b>Заявка на API-ключ #{rid}</b>\n\n"
+                f"👤 {who}\nID: <code>{uid}</code>\n"
+                f"Название: <b>{esc(name)}</b>\nПрава: {esc(', '.join(scopes))}\n\n"
+                f"<b>Зачем нужен:</b>\n{esc(purpose)}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"apk:ok:{rid}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"apk:no:{rid}")]])
+        sent = False
+        mod = await bm.get_setting("mod_chat")
+        if mod:
+            try:
+                await bot.send_message(int(mod), text, reply_markup=kb)
+                sent = True
+            except Exception as e:
+                log.warning("mod chat %s unavailable for api request: %s", mod, e)
+        if not sent:   # админ-группа недоступна — шлём владельцу и главным админам в личку
+            staff = {bm.OWNER_ID} | {r["user_id"] for r in await P().fetch("SELECT user_id FROM admins WHERE role='main'")}
+            for cid in staff:
+                try:
+                    await bot.send_message(cid, text, reply_markup=kb)
+                    sent = True
+                except Exception as e:
+                    log.warning("cannot DM staff %s about api request: %s", cid, e)
+        if not sent:
+            await P().execute("DELETE FROM api_key_requests WHERE id=$1", rid)
+            await m.answer("⚠️ Не удалось отправить заявку админам. Попробуйте позже.")
+            return
+        await m.answer(f"✅ Заявка #{rid} отправлена админам. Когда её рассмотрят, я напишу вам здесь.")
+
+    @router.callback_query(F.data.startswith("apk:"))
+    async def cb_api_request(cb: CallbackQuery, bot: Bot):
+        esc = bm.esc
+        try:
+            _, act, rid = cb.data.split(":")
+            rid = int(rid)
+        except ValueError:
+            return await cb.answer()
+        if await bm.role(cb.from_user.id) is None:
+            return await cb.answer("Решать могут только админы", show_alert=True)
+        req = await P().fetchrow("SELECT * FROM api_key_requests WHERE id=$1", rid)
+        if not req:
+            return await cb.answer("Заявка не найдена", show_alert=True)
+        if req["user_id"] == cb.from_user.id and cb.from_user.id != bm.OWNER_ID:
+            return await cb.answer("Свою заявку одобрить нельзя", show_alert=True)
+        req = await P().fetchrow(
+            "UPDATE api_key_requests SET status=$2, decided_by=$3, decided_at=now() WHERE id=$1 AND status='pending' RETURNING *",
+            rid, "approved" if act == "ok" else "rejected", cb.from_user.id)
+        if not req:
+            return await cb.answer("Заявка уже обработана", show_alert=True)
+        admin = esc(cb.from_user.full_name)
+        uid = req["user_id"]
+        verdict = None
+        if act == "ok":
+            try:
+                row, token = await create_key(uid, req["name"], list(req["scopes"]))
+                await bot.send_message(uid, "✅ <b>Заявка на API-ключ одобрена!</b>\n\n" + _key_text(row, token, _base_url() + PREFIX))
+                verdict = f"✅ Одобрено: {admin}"
+            except E as e:
+                await P().execute("UPDATE api_key_requests SET status='failed' WHERE id=$1", rid)
+                verdict = f"⚠️ Одобрено ({admin}), но ключ не создан: {esc(e.message)}"
+                try:
+                    await bot.send_message(uid, f"Заявка одобрена, но ключ не создан: {esc(e.message)}")
+                except Exception:
+                    pass
+            except Exception:
+                # не смогли доставить ключ пользователю — отзываем, чтобы он нигде не висел
+                log.exception("api key delivery failed")
+                await P().execute("UPDATE api_keys SET revoked_at=now() WHERE user_id=$1 AND name=$2 AND revoked_at IS NULL AND created_at > now() - interval '1 minute'", uid, req["name"])
+                await P().execute("UPDATE api_key_requests SET status='failed' WHERE id=$1", rid)
+                verdict = f"⚠️ Одобрено ({admin}), но ключ не доставлен (пользователь не открывал бота или заблокировал его). Ключ не выдан."
+        else:
+            verdict = f"❌ Отклонено: {admin}"
+            try:
+                await bot.send_message(uid, f"❌ Заявка #{rid} на API-ключ «{esc(req['name'])}» отклонена админами. Ключ не выдан.")
+            except Exception:
+                pass
+        try:
+            await cb.message.edit_text((cb.message.html_text or "") + "\n\n" + verdict, reply_markup=None)
+        except Exception:
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await cb.answer("Готово")
 
 
 # ====================================================================== OpenAPI и документация
@@ -1352,7 +1496,7 @@ def build_docs(base):
            f"<h1>Jins API <span class=mut>v{VERSION}</span></h1>"
            f"<p class=mut>Подключите базу репутации, объявления, проекты, сделки и чаты к любому своему проекту: сайту, боту, CRM, приложению.</p>"
            f"<nav><a href='{e(api)}/openapi.json'>OpenAPI JSON</a><a href='#start'>Быстрый старт</a><a href='#hooks'>Вебхуки</a><a href='#ref'>Справочник</a></nav>",
-           "<h2 id=start>Быстрый старт</h2><ol><li>Откройте бота и отправьте <code>/api new Мой сайт</code> — бот выдаст ключ <code>jns_…</code> (показывается один раз).</li>"
+           "<h2 id=start>Быстрый старт</h2><ol><li>Откройте бота и отправьте <code>/api new Мой сайт</code>, напишите, зачем нужен ключ, — после одобрения админами бот пришлёт ключ <code>jns_…</code> (показывается один раз).</li>"
            "<li>Передавайте его в заголовке <code>Authorization: Bearer jns_…</code>.</li></ol>",
            f"<pre>curl -H \"Authorization: Bearer $JINS_KEY\" {e(api)}/check/@username</pre>",
            "<p>Ответ всегда в одном формате:</p><pre>{ \"ok\": true, \"data\": { … }, \"meta\": { \"limit\": 20, \"offset\": 0, \"has_more\": true } }\n"
@@ -1427,6 +1571,11 @@ CREATE TABLE IF NOT EXISTS api_keys(
     allowed_ips TEXT[], expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_used_at TIMESTAMPTZ, last_ip TEXT, revoked_at TIMESTAMPTZ, requests BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS api_keys_user_idx ON api_keys(user_id);
+CREATE TABLE IF NOT EXISTS api_key_requests(
+    id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, name TEXT NOT NULL, scopes TEXT[] NOT NULL, purpose TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', decided_by BIGINT, decided_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS api_key_requests_user_idx ON api_key_requests(user_id, status);
 CREATE TABLE IF NOT EXISTS api_webhooks(
     id SERIAL PRIMARY KEY, key_id INT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, user_id BIGINT NOT NULL,
     url TEXT NOT NULL, secret TEXT NOT NULL, events TEXT[] NOT NULL, description TEXT NOT NULL DEFAULT '',
