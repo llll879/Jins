@@ -1918,7 +1918,8 @@ async function fail(e) {
 }
 const confirmBox = msg => new Promise(res => { if (tg && tg.showConfirm) tg.showConfirm(msg, res); else res(confirm(msg)); });
 function openLink(u) { if (!u) return; if ((/^https:\/\/t\.me\//.test(u) || /^tg:\/\//.test(u)) && tg && tg.openTelegramLink) tg.openTelegramLink(u); else if (tg && tg.openLink) tg.openLink(u); else window.open(u, '_blank'); }
-function setTheme(theme){theme=LEGACY[theme]||theme;if(!PALS[theme])theme='violet';const P=PALS[theme],R=document.documentElement;R.dataset.theme=P.light?'light':'dark';R.dataset.palette=theme;R.style.removeProperty('--bg');R.style.removeProperty('--bg2');let ca='';try{ca=localStorage.getItem('kmbp-acc')||''}catch(e){}if(ca)R.style.setProperty('--acc',ca);else R.style.removeProperty('--acc');try{localStorage.setItem('kmbp-theme',theme)}catch(e){};const m=document.querySelector('meta[name=theme-color]');if(m)m.content=P.bg;try{tg&&tg.setHeaderColor&&tg.setHeaderColor(P.bg);tg&&tg.setBackgroundColor&&tg.setBackgroundColor(P.bg)}catch(e){}}
+function restoreTheme(){if(!window.__tmpTheme)return;window.__tmpTheme=false;let t='violet';try{t=localStorage.getItem('kmbp-theme')||'violet'}catch(e){}setTheme(t)}
+function setTheme(theme,tmp){theme=LEGACY[theme]||theme;if(!PALS[theme])theme='violet';const P=PALS[theme],R=document.documentElement;R.dataset.theme=P.light?'light':'dark';R.dataset.palette=theme;R.style.removeProperty('--bg');R.style.removeProperty('--bg2');let ca='';try{if(!tmp)ca=localStorage.getItem('kmbp-acc')||''}catch(e){}if(ca)R.style.setProperty('--acc',ca);else R.style.removeProperty('--acc');if(!tmp)try{localStorage.setItem('kmbp-theme',theme)}catch(e){};const m=document.querySelector('meta[name=theme-color]');if(m)m.content=P.bg;try{tg&&tg.setHeaderColor&&tg.setHeaderColor(P.bg);tg&&tg.setBackgroundColor&&tg.setBackgroundColor(P.bg)}catch(e){}}
 
 /* ripple (only buttons) + haptics */
 document.addEventListener('pointerdown', e => {
@@ -1953,7 +1954,7 @@ async function go(name, params = {}, opt = {}) {
   S.cur = name; S.curParams = params; setInd(name);
   const old = $('.view', main);
   if (old) { old.classList.add('leave', 'd-' + dir); await sleep(dir === 'fade' ? 90 : 130); if (tok !== S.navTok) return; }
-  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat'); document.body.classList.toggle('is-profile', name === 'profile'); document.body.classList.toggle('is-more', name === 'more');
+  document.body.classList.toggle('is-home', name === 'home'); document.body.classList.toggle('in-chat', name === 'chat'); document.body.classList.toggle('is-profile', name === 'profile'); document.body.classList.toggle('is-more', name === 'more'); if (name !== 'profile') restoreTheme();
   const v = document.createElement('div'); v.className = 'view d-' + dir; v.innerHTML = loader(); main.innerHTML = ''; main.appendChild(v); main.scrollTop = 0;
   $('#backBtn').style.display = S.hist.length ? 'inline-block' : 'none';
   try { tg && (S.hist.length ? tg.BackButton.show() : tg.BackButton.hide()); } catch (e) {}
@@ -2545,6 +2546,7 @@ views.profile = async (el, params={}) => {
   const [u,rv]=await Promise.all([api('/api/profile?id='+id),api('/api/profile/reviews?id='+id)]);
   const img=avatarSrc(u);
   const own=!!u.is_me;
+  if(!own&&u.profile_theme&&PALS[LEGACY[u.profile_theme]||u.profile_theme]){window.__tmpTheme=true;setTheme(u.profile_theme,true)}else restoreTheme();
   const avatarEl=img?`<img class="profile-avatar" id="pAvatar" src="${esc(img)}" alt="Аватар">`:`<div class="profile-avatar" id="pAvatar" style="display:grid;place-items:center;font-size:36px">${esc(u.name.slice(0,1).toUpperCase())}</div>`;
   el.innerHTML=`<div class="profile-hero glass">
     <div class="ph-top"><div class="ph-av${u.online?' on':''}">${avatarEl}</div>
@@ -2556,6 +2558,7 @@ views.profile = async (el, params={}) => {
   ${!own?`<div class="ph-acts"><button class="btn" id="openPeerChat">${xi('x_pencil')}Написать сообщение</button><button class="btn ghost ph-ic" id="peerMore" aria-label="Ещё">⋯</button></div>${u.blocked_by_me?'<small class="dim" style="display:block;margin-top:8px">Вы заблокировали этого пользователя</small>':''}`:''}
   ${own?`<label class="lbl">Описание профиля</label><textarea class="f" id="bioEdit" maxlength="500" placeholder="Расскажите о себе…">${esc(u.bio||'')}</textarea>
   <div class="acts"><input type="file" id="avatarFile" accept="image/*" hidden><input type="file" id="bannerFile" accept="image/*" hidden><button class="btn small" id="changeAvatar">Изменить фото</button><button class="btn small" id="changeBanner">Свой баннер</button>${u.has_banner?'<button class="btn small ghost" id="delBanner">Убрать баннер</button>':''}${u.has_avatar?'<button class="btn small ghost" id="delAvatar">Удалить фото</button>':''}${u.can_badge?'<button class="btn small ghost" id="myBadges">Значки</button>':''}<button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
+  ${own?`<div class="card glass"><b>Тема вашего профиля</b><p class="sub" style="margin:5px 0 10px">В какой теме люди увидят ваш профиль — независимо от их настроек.</p><div class="theme-grid"><button class="theme-chip ${u.profile_theme?'':'active'}" data-ptheme-pick=""><span class="theme-dot" style="background:linear-gradient(135deg,#08040f 50%,#eceafc 50%)"></span>Как у зрителя</button>${Object.keys(PALS).map(k=>`<button class="theme-chip ${u.profile_theme===k?'active':''}" data-ptheme-pick="${k}"><span class="theme-dot" style="background:${PALS[k].acc}"></span>${PALS[k].n}</button>`).join('')}</div></div>`:''}
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
   ${Object.keys(PALS).map(k=>[k,PALS[k].n,PALS[k].acc]).map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent&&OLD_ACC.indexOf(u.accent)<0?u.accent:(PALS[document.documentElement.dataset.palette]||PALS.violet).acc)}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
   <h3 class="page" style="font-size:19px">История сделок</h3><div class="card glass">${u.history.length?u.history.map(d=>`<div class="kv hist"><span>Сделка #${d.id}<small class="dim">${esc(d.side)} · ${esc(d.created||'')} · ${d.kind==='direct'?'без гаранта':'через гаранта'}</small></span><b>${d.amount?d.amount+' ⭐':'Без суммы'}<small class="dim">${esc(DEAL_ST[d.status]||d.status)}</small></b></div>`).join(''):'<div class="sub">Здесь отображаются сделки через гаранта и прямые сделки.</div>'}</div>
@@ -2606,6 +2609,7 @@ views.profile = async (el, params={}) => {
     const mb=$('#myBadges',el);if(mb)mb.onclick=()=>sheet('Значки рядом с ником',badgeRows());
     const da=$('#delAvatar',el);if(da)da.onclick=async()=>{if(!await confirmBox('Удалить фото профиля? Вернётся фото из Telegram.'))return;try{await api('/api/profile/avatar',undefined,'DELETE');AVC.clear();if(S.me.user)S.me.user.has_avatar=false;toast('Фото удалено','good');go('profile',{},{replace:true});}catch(er){fail(er)}};
     $('#saveProfile',el).onclick=async()=>{try{await api('/api/profile',{bio:$('#bioEdit',el).value,theme:document.documentElement.dataset.palette||'violet',accent:$('#accentPick',el).value});toast('Профиль сохранён','good');}catch(er){fail(er)}};
+    $$('[data-ptheme-pick]',el).forEach(b=>b.onclick=async()=>{try{await api('/api/profile',{profile_theme:b.dataset.pthemePick});buzz('light');toast(b.dataset.pthemePick?'Другие увидят профиль в теме «'+PALS[b.dataset.pthemePick].n+'»':'Профиль будет в теме зрителя','good');go('profile',{}, {replace:true});}catch(er){fail(er)}});
     $$('[data-theme-pick]',el).forEach(b=>b.onclick=async()=>{const t=b.dataset.themePick;try{localStorage.removeItem('kmbp-acc')}catch(e){}setTheme(t);await api('/api/profile',{bio:$('#bioEdit',el).value,theme:t,accent:PALS[t].acc});go('profile',{}, {replace:true});});
     $('#accentPick',el).onchange=async e=>{document.documentElement.style.setProperty('--acc',e.target.value);try{localStorage.setItem('kmbp-acc',e.target.value)}catch(er){}await api('/api/profile',{bio:$('#bioEdit',el).value,theme:document.documentElement.dataset.palette||'violet',accent:e.target.value});};
   }

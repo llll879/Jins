@@ -525,6 +525,7 @@ async def init_db():
         ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'dark';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS accent TEXT NOT NULL DEFAULT '#8b7cff';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_theme TEXT NOT NULL DEFAULT '';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_data BYTEA;
@@ -1918,7 +1919,7 @@ BASE_REPORT_CATS = ["Скам / обман", "Не выполнил услови
                     "Спам / реклама", "Оскорбления", "Другое"]
 
 def eff_score(manual, avg, cnt):
-    """Единый рейтинг человека — одно и то же число на бирже и в базе.
+    """Единый рейтинг человека — одно и то же число на бирже и в VETRIXBASE.
     Админ поставил звёзды вручную (1–5) — берём их; иначе среднее по отзывам (до десятых); иначе 0."""
     manual = int(manual or 0)
     if 1 <= manual <= 5:
@@ -1978,7 +1979,7 @@ async def track_username(uid, username):
 
 
 async def sync_known_user(user):
-    """Если человек уже есть в базе — обновляем его имя/юзернейм из Telegram (когда мы его видим в чате)."""
+    """Если человек уже есть в VETRIXBASE — обновляем его имя/юзернейм из Telegram (когда мы его видим в чате)."""
     if not await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1", user.id):
         return
     await pool.execute("UPDATE users SET username=$2, first_name=$3, last_name=$4 WHERE user_id=$1",
@@ -2130,7 +2131,7 @@ def base_card_html(c):
     if c["username"]:
         ids.append(f'<a href="https://t.me/{c["username"]}">@{esc(c["username"])}</a>')
     ids.append(f"<code>{esc(c['code'])}</code>")
-    L = ["🔎 <b>Проверка по базе</b>", "", f"{BASE_ICON[tier]} <b>{head}</b> {marks}".rstrip(), " · ".join(ids)]
+    L = ["🔎 <b>Проверка по VETRIXBASE</b>", "", f"{BASE_ICON[tier]} <b>{head}</b> {marks}".rstrip(), " · ".join(ids)]
     if c.get("via"):
         L.append(f"↪️ <i>Найден по старому юзернейму</i> <b>@{esc(c['via'])}</b>")
     L.append("")
@@ -2172,13 +2173,13 @@ def base_card_html(c):
 
 
 def base_missing_html(label):
-    return (f"🔎 <b>Проверка по базе</b>\n\n❓ <b>{esc(label)}</b> — <b>нет в базе</b>\n\n"
+    return (f"🔎 <b>Проверка по VETRIXBASE</b>\n\n❓ <b>{esc(label)}</b> — <b>нет в VETRIXBASE</b>\n\n"
             "<blockquote>Этот человек ещё не пользовался KMBP (ботом или мини-аппом), поэтому данных о нём нет. "
             "Это не значит, что он плохой — просто проверить нечем. Сделки лучше проводить через гаранта.\n"
             "Если человек недавно менял юзернейм — проверьте по его ID.</blockquote>")
 
 
-BASE_HELP = ("🔎 <b>Проверка человека по базе</b>\n\n"
+BASE_HELP = ("🔎 <b>Проверка человека по VETRIXBASE</b>\n\n"
              "<code>/check @юзернейм</code>\n<code>/check 123456789</code>\n<code>чек @юзернейм</code>\n\n"
              "Работает и по старому юзернейму, и по ссылке <code>Exg:/@ник</code>. "
              "В группе можно ответить командой <code>/check</code> на сообщение человека.")
@@ -2187,7 +2188,7 @@ BASE_HELP = ("🔎 <b>Проверка человека по базе</b>\n\n"
 def base_kb(c, staff=False):
     uid = c["id"]
     kb = InlineKeyboardBuilder()
-    links = [("📖 Открыть в базе", app_link(f"b_{uid}")), ("🚩 Пожаловаться", app_link(f"bc_{uid}")),
+    links = [("📖 Открыть в VETRIXBASE", app_link(f"b_{uid}")), ("🚩 Пожаловаться", app_link(f"bc_{uid}")),
              ("✈️ Telegram", f"https://t.me/{c['username']}" if c["username"] else "")]
     links = [x for x in links if x[1]]
     for t, u in links:
@@ -2279,7 +2280,7 @@ async def cmd_rate(m: Message, command: CommandObject, bot: Bot):
     """/rate @ник 5 админ заметка… — только главные админы. Роль и заметка необязательны, «-» очищает."""
     if not m.from_user or not await is_main(m.from_user.id):
         return
-    usage = ("<b>Выставить рейтинг в базе</b>\n<code>/rate @ник 0-5 [админ|продавец|пиарщик|монтажёр] [заметка]</code>\n"
+    usage = ("<b>Выставить рейтинг в VETRIXBASE</b>\n<code>/rate @ник 0-5 [админ|продавец|пиарщик|монтажёр] [заметка]</code>\n"
              "0 — убрать ручную оценку: рейтинг станет автоматическим (по отзывам, как на бирже).\n"
              "Роль <code>-</code> — убрать роль, заметка <code>-</code> — убрать заметку. "
              "Можно ответить на сообщение: <code>/rate 5 админ</code>.")
@@ -3928,7 +3929,7 @@ def post_json(p, uid=None):
 
 
 async def seller_ratings(user_ids):
-    """{user_id: (единый рейтинг, число отзывов)} — то же число, что и в «Базе»."""
+    """{user_id: (единый рейтинг, число отзывов)} — то же число, что и в «VETRIXBASE»."""
     ids = list({int(i) for i in user_ids if i})
     if not ids:
         return {}
@@ -4501,8 +4502,8 @@ async def api_apply(request):
 # ---- профили, отзывы и личные сообщения
 async def api_profile(request):
     uid = int(request.query.get("id") or request["u"]["id"])
-    row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.photo_url,
-        (u.avatar_data IS NOT NULL) has_avatar, (u.banner_data IS NOT NULL) has_banner, u.created_at,
+    row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.profile_theme,u.photo_url,
+        (u.avatar_data IS NOT NULL) has_avatar, (u.banner_data IS NOT NULL) has_banner, u.created_at, u.last_seen,
         COALESCE(avg(r.rating),0)::float rating, count(r.id)::int reviews
         FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
         WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
@@ -4532,26 +4533,43 @@ async def api_profile(request):
         "kind":x["kind"],"side":"Покупатель" if x["buyer_id"]==uid else "Продавец"} for x in deal_rows]
     return jr({"id": row["user_id"], "username": row["username"],
         "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
-        "bio": row["bio"], "theme": row["theme"], "accent": row["accent"],
+        "bio": row["bio"], "theme": row["theme"], "accent": row["accent"], "profile_theme": row["profile_theme"] or "",
         "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "has_banner": row["has_banner"], "created": fmt_dt(row["created_at"]),
         "rating": (bc["score"] if bc else round(row["rating"],1)), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "projects": [project_json(x) for x in await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)],
         "sb": sb, "can_badge": me_id == OWNER_ID,
         "badge_flags": {"dev": bool(sb_row and sb_row["badge_dev"]), "adm": bool(sb_row and sb_row["badge_adm"]), "bad": bool(sb_row and sb_row["badge_badrep"]), "scam": bool(sb_row and sb_row["badge_scam"])} if me_id == OWNER_ID else None,
+        "online": uid == request["u"]["id"] or bool(row["last_seen"] and (datetime.now(timezone.utc) - row["last_seen"]).total_seconds() < 90),
         "is_me": uid == request["u"]["id"]})
 
 
 async def api_profile_update(request):
     uid=request["u"]["id"]; d=await body(request)
-    bio=str(d.get("bio") or "").strip()[:500]
-    theme=str(d.get("theme") or "dark")
-    accent=str(d.get("accent") or "#8b7cff")
-    if theme not in ("dark","light","midnight","ocean","forest","violet","green","blue","pink","mono","lilac","sky"):
-        raise ApiError(400,"bad_theme")
-    if not re.fullmatch(r"#[0-9a-fA-F]{6}",accent):
-        raise ApiError(400,"bad_accent")
-    await pool.execute("UPDATE users SET bio=$2,theme=$3,accent=$4 WHERE user_id=$1",uid,bio,theme,accent)
+    themes=("dark","light","midnight","ocean","forest","violet","green","blue","pink","mono","lilac","sky")
+    sets=[]; args=[uid]
+    def add(col,val):
+        args.append(val); sets.append(f"{col}=${len(args)}")
+    if "bio" in d:
+        add("bio",str(d.get("bio") or "").strip()[:500])
+    if "theme" in d:
+        theme=str(d.get("theme") or "dark")
+        if theme not in themes:
+            raise ApiError(400,"bad_theme")
+        add("theme",theme)
+    if "accent" in d:
+        accent=str(d.get("accent") or "#8b7cff")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}",accent):
+            raise ApiError(400,"bad_accent")
+        add("accent",accent)
+    if "profile_theme" in d:
+        # тема, в которой другие люди видят профиль; пусто = у зрителя своя тема
+        pt=str(d.get("profile_theme") or "")
+        if pt and pt not in themes:
+            raise ApiError(400,"bad_theme")
+        add("profile_theme",pt)
+    if sets:
+        await pool.execute("UPDATE users SET "+",".join(sets)+" WHERE user_id=$1",*args)
     return jr({"ok":True})
 
 
@@ -4609,7 +4627,7 @@ async def api_profile_banner(request):
     if not row or not row["banner_data"]:
         raise web.HTTPNotFound()
     return web.Response(body=bytes(row["banner_data"]),content_type=row["banner_mime"] or "image/jpeg",
-        headers={"Cache-Control":"private, max-age=300"})
+        headers={"Cache-Control":"private, no-cache"})
 
 
 async def api_profile_banner_upload(request):
@@ -4951,7 +4969,7 @@ async def api_report_user(request):
         kb.button(text="🗑 Удалить полностью",callback_data=f"ur:del:{row['id']}")
         tun=await pool.fetchval("SELECT username FROM users WHERE user_id=$1",target)
         add_link_buttons(kb,[("👤 Профиль",app_link(f"n_{tun}" if tun else f"u_{target}")),
-                             ("📖 В базе",app_link(f"b_{target}")),
+                             ("📖 В VETRIXBASE",app_link(f"b_{target}")),
                              ("📄 Объявление",app_link(f"ad_{post_id}") if post_id else "")])
         kb.adjust(2,1,2,1)
         text=(f"🚩 <b>Жалоба #{row['id']} на пользователя</b>\n"
@@ -4973,7 +4991,7 @@ async def api_report_user(request):
         n=await pool.fetchval("SELECT count(DISTINCT reporter_id) FROM user_reports WHERE target_id=$1 AND status='new'",target)
         if n==BASE_MINUS_REPORTS:
             asyncio.create_task(notify_staff(
-                f"⛔ <b>В базе новый минус:</b> {await who_html(target)}\n"
+                f"⛔ <b>В VETRIXBASE новый минус:</b> {await who_html(target)}\n"
                 f"Набралось {n} активных жалоб — человек помечен как «Ненадёжный». Если жалобы необоснованны — закройте их («✅ Закрыть») или удалите, и метка снимется."))
     return jr({"ok":True,"duplicate":row is None})
 
@@ -5127,7 +5145,7 @@ async def api_project_banner(request):
     if not row or not row["banner_data"]:
         raise web.HTTPNotFound()
     return web.Response(body=bytes(row["banner_data"]), content_type=row["banner_mime"] or "image/jpeg",
-                        headers={"Cache-Control": "private, max-age=300"})
+                        headers={"Cache-Control": "private, no-cache"})
 
 
 async def _project_editor(request, pid):
@@ -6860,7 +6878,7 @@ async def main():
         await bot.set_my_commands([
             BotCommand(command="start", description="Запустить бота"),
             BotCommand(command="app", description="Открыть мини-апп"),
-            BotCommand(command="check", description="Проверить человека по базе: /check @юзернейм"),
+            BotCommand(command="check", description="Проверить человека по VETRIXBASE: /check @юзернейм"),
             BotCommand(command="api", description="API для разработчиков: ключи и документация")])
     except Exception:
         log.exception("set_my_commands failed")
