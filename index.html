@@ -1129,6 +1129,18 @@ body.stuck .shead::before,body.stuck .shead::after{opacity:1}
 body.scrolled #main::before{opacity:1}
 body.is-home #main::before,body.in-chat #main::before{display:none}
 
+/* ===== верхняя шапка: контент уходит ПОД неё и плавно размывается (прогрессивный блюр) ===== */
+:root{--hh:calc(58px + env(safe-area-inset-top))}
+#main::before{display:none!important}
+header.top{position:absolute;top:0;left:0;right:0;z-index:6;background:transparent}
+header.top::before,header.top::after{content:"";position:absolute;left:0;right:0;top:0;z-index:-1;pointer-events:none;opacity:0;transition:opacity .3s ease}
+/* мягкая подложка-тинт, плавно сходящая на нет */
+header.top::before{bottom:-44px;background:linear-gradient(to bottom,color-mix(in srgb,var(--bg) 82%,transparent) 0%,color-mix(in srgb,var(--bg) 58%,transparent) 45%,color-mix(in srgb,var(--bg) 22%,transparent) 78%,transparent 100%);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 35%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 35%,transparent 100%)}
+/* сильный блюр у самой шапки, ослабевающий вниз */
+header.top::after{bottom:-24px;-webkit-backdrop-filter:blur(22px) saturate(1.15);backdrop-filter:blur(22px) saturate(1.15);-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 50%,rgba(0,0,0,.55) 75%,transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 50%,rgba(0,0,0,.55) 75%,transparent 100%)}
+body.scrolled header.top::before,body.scrolled header.top::after{opacity:1}
+body:not(.is-home):not(.in-chat) #main{padding-top:calc(var(--hh) + 8px)}
+
 /* баннеры */
 .bn-wrap{margin:0 -16px 14px;position:relative}
 .bn-track{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 16px 4px;scroll-padding:0 16px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
@@ -2005,6 +2017,12 @@ const betaHtml = () => { const b = S.me && S.me.beta; return b && b.on ? `<div c
     b.classList.toggle('stuck', !!sh && top > 6 && sh.getBoundingClientRect().top <= m.getBoundingClientRect().top + 1);
   };
   m.addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(upd); }, { passive: true });
+  const hd = $('header.top');
+  if (hd) {
+    const setH = () => { const h = hd.offsetHeight; if (h) document.documentElement.style.setProperty('--hh', h + 'px'); };
+    setH();
+    if ('ResizeObserver' in window) new ResizeObserver(setH).observe(hd); else addEventListener('resize', setH);
+  }
 })();
 
 const isStaff = () => !!S.me.role, isMain = () => ['owner', 'main'].includes(S.me.role);
