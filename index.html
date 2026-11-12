@@ -1360,6 +1360,15 @@ input.f:focus,textarea.f:focus,select.f:focus,.sbar:focus-within,.cv-bar:focus-w
 /* стекло и размытие только там, где нужно перекрыть контент */
 .searchbar,.sbar,.tile,.pbtn,.chip,.bsearch,.tg-top,.tg-pin,.cv-bar,.cv-pins,#toast,nav.bar{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
 .brand-t span{background:none!important;-webkit-text-fill-color:currentColor!important;color:var(--acc)!important}
+
+.settings-profile-hero{cursor:pointer;margin-bottom:0!important;padding-top:calc(70px + env(safe-area-inset-top))!important}
+.settings-profile-hero .ph-top{align-items:center}
+.settings-profile-hero .profile-avatar{display:grid;place-items:center;overflow:hidden;font-size:36px}
+.settings-profile-hero .profile-avatar img{width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.settings-profile-hero .sw-btn{position:relative;z-index:3;flex:none}
+.settings-profile-hint{display:flex;justify-content:space-between;align-items:center;margin:14px 0 0 118px;color:var(--dim);font-size:13px}
+.settings-profile-hint span{font-size:24px}
+.settings-profile-stats{margin:0 0 14px!important}
 </style>
 </head>
 <body>
@@ -2379,11 +2388,13 @@ views.favorites = async el => {
 // ===== профиль: всё, что раньше было «настройками» на главной =====
 views.more = async el => {
   const me = S.me, light = document.documentElement.dataset.theme === 'light';
+  const ownProfile = me.user ? await api('/api/profile?id=' + me.user.id).catch(() => null) : null;
   const ROLE = { owner: 'Владелец', main: 'Главный админ' };
-  const rows = [['profile', 'profile', 'Мой профиль', 'Аватар, рейтинг и отзывы'], ['projects', 'profile', 'Мои проекты', 'Бот, канал, сайт — отдельные профили'], ['base', 'search', 'База', 'Проверить человека: рейтинг, жалобы, юзернеймы'], ['escrow', 'deals', 'Сделки', 'Через гаранта или напрямую'], ['receipts', 'doc', 'Чеки сделок', 'Завершённые, отменённые и возвраты'], ['favorites', 'star', 'Избранное', 'Сохранённые объявления'], ['submit', 'plus', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', 'list', 'Мои заявки', 'Статусы и правки админов'], ['recs', 'sparkle', 'Рекомендации', 'Подборка специально для вас'], ['recent', 'list', 'Недавно просмотренное', 'Последние открытые объявления'], ['search', 'sparkle', 'Сохранённые поиски', 'Уведомим о новых объявлениях'], ['blocks', 'security', 'Чёрный список', 'Заблокированные пользователи']];
+  const rows = [['profile', 'profile', 'Мой профиль', 'Аватар, рейтинг и отзывы'], ['projects', 'profile', 'Мои проекты', 'Бот, канал, сайт — отдельные профили'], ['base', 'search', 'VETRIXBASE', 'Проверить человека: рейтинг, жалобы, юзернеймы'], ['escrow', 'deals', 'Сделки', 'Через гаранта или напрямую'], ['receipts', 'doc', 'Чеки сделок', 'Завершённые, отменённые и возвраты'], ['favorites', 'star', 'Избранное', 'Сохранённые объявления'], ['submit', 'plus', 'Подать объявление', 'Опубликовать в боте и чате'], ['mine', 'list', 'Мои заявки', 'Статусы и правки админов'], ['recs', 'sparkle', 'Рекомендации', 'Подборка специально для вас'], ['recent', 'list', 'Недавно просмотренное', 'Последние открытые объявления'], ['search', 'sparkle', 'Сохранённые поиски', 'Уведомим о новых объявлениях'], ['blocks', 'security', 'Чёрный список', 'Заблокированные пользователи']];
   if (me.recruit_open && !me.role) rows.push(['apply', 'admin', 'Хочу стать админом', 'Набор открыт — заполните анкету']);
   const name = (me.user && me.user.name) || 'друг';
-  el.innerHTML = `${(() => { const ap = actingProject(), sw = '<button class="sw-btn" id="swBtn" aria-label="Переключить профиль">⇄</button>'; return ap ? `<div class="prof glass" data-go="project" data-p='${JSON.stringify({ id: ap.id })}'>${pavHtml('big', ap)}<div class="pn"><b>${esc(ap.name)}</b><small>Проект · ${pkLabel(ap.kind)}</small></div>${sw}<span class="arr">›</span></div>` : `<div class="prof glass" data-go="profile"><div class="pav" id="meAvatar">${esc(name.charAt(0).toUpperCase())}</div><div class="pn"><b>${esc(name)}${nameBadges(me.user&&me.user.sb)}</b><small>${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div>${sw}<span class="arr">›</span></div>`; })()}
+  el.innerHTML = `${(() => { const ap = actingProject(), sw = '<button class="sw-btn" id="swBtn" aria-label="Переключить профиль">⇄</button>'; if(ap) return `<div class="prof glass" data-go="project" data-p='${JSON.stringify({ id: ap.id })}'>${pavHtml('big', ap)}<div class="pn"><b>${esc(ap.name)}</b><small>Проект · ${pkLabel(ap.kind)}</small></div>${sw}<span class="arr">›</span></div>`; const u=ownProfile||{}; const av=avatarSrc(u); return `<div class="profile-hero glass settings-profile-hero" id="settingsProfileHero" data-go="profile"><div class="ph-top"><div class="ph-av"><div class="profile-avatar" id="meAvatar">${av?`<img src="${esc(av)}" alt="Аватар">`:esc(name.charAt(0).toUpperCase())}</div></div><div class="ph-info"><b class="ph-name">${esc(u.name||name)}${nameBadges(me.user&&me.user.sb)}</b><div class="ph-un">${u.username?'@'+esc(u.username):'Участник KMBP EXCHANGE'}</div><small class="dim">${esc(ROLE[me.role] || (me.role ? 'Админ' : 'Участник'))}</small></div>${sw}</div><div class="settings-profile-hint">Изменить аватар, баннер и профиль <span>›</span></div></div>`; })()}
+  ${!actingProject() && ownProfile ? `<div class="profile-stats settings-profile-stats"><div class="profile-stat">${xi('bars')}<b>${ownProfile.rating||'—'}</b><small>Рейтинг ★</small></div><div class="profile-stat">${xi('x_review')}<b>${ownProfile.reviews||0}</b><small>Отзывов</small></div><div class="profile-stat">${xi('x_deal')}<b>${ownProfile.completed_deals||0}</b><small>Сделок</small></div></div>` : ''}
     <div class="stagger">${rows.map(([g, i, t, s]) => `<div class="li glass" data-go="${g}"><span class="ic">${nic(i)}</span><span class="t"><b>${t}</b><small>${s}</small></span><span class="arr">›</span></div>`).join('')}</div>
     <div class="grp">Настройки</div>
     <div class="stagger">
@@ -2395,6 +2406,7 @@ views.more = async el => {
   if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
   if (me.user) { const av=$('#meAvatar',el); if(av){const put=u=>{const a=$('#meAvatar',el);if(a)a.innerHTML=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`};
     if(me.user.has_avatar||!me.user.photo_url)avBlob(String(me.user.id)).then(u=>{if(u)put(u);else if(me.user.photo_url)put(me.user.photo_url)});else put(me.user.photo_url);} }
+  if (ownProfile && ownProfile.has_banner) fetch('/api/profile/banner?id='+me.user.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('#settingsProfileHero',el);if(b&&h){h.style.setProperty('--pbn','url('+URL.createObjectURL(b)+')');h.classList.add('has-banner')}}).catch(()=>{});
   $('#tourBtn', el).onclick = () => showTour();
   $('#swBtn', el).onclick = e => { e.stopPropagation(); switchSheet(() => go('more', {}, { replace: true })); };
   avFill(el);
@@ -2507,7 +2519,7 @@ views.profile = async (el, params={}) => {
   el.innerHTML=`<div class="profile-hero glass">
     <div class="ph-top"><div class="ph-av${u.online?' on':''}">${avatarEl}</div>
     <div class="ph-info"><b class="ph-name">${esc(u.name)}${nameBadges(u.sb)}</b><div class="ph-un">${u.username?'@'+esc(u.username):'Telegram ID: '+u.id}</div><small class="dim">В KMBP с ${esc(u.created||'')}</small><div><button class="xl-chip" id="pLink" data-xlc="${u.username?'@'+esc(u.username):'u'+u.id}" data-xld="${u.username?'n_'+esc(u.username):'u_'+u.id}">Exg:/${u.username?'@'+esc(u.username):'u'+u.id}</button></div></div></div>
-    ${bdgHtml(u.badges)}${baseChip(u.base,id)}${own?'<button class="btn block ph-cta" id="myBase">🛡 Проверить свой статус в базе</button>':''}
+    ${bdgHtml(u.badges)}${baseChip(u.base,id)}${own?'<button class="btn block ph-cta" id="myBase">🛡 Проверить свой статус в VETRIXBASE</button>':''}
   </div>
   <div class="profile-stats"><div class="profile-stat">${xi('bars')}<b>${u.rating||'—'}</b><small>Рейтинг ★</small></div><div class="profile-stat">${xi('x_review')}<b>${u.reviews}</b><small>Отзывов</small></div><div class="profile-stat">${xi('x_deal')}<b>${u.completed_deals}</b><small>Сделок</small></div></div>
   <div class="card glass ph-about"><div class="ph-h"><span class="ph-i">i</span><b>О себе</b></div><p class="rich" id="bioText">${esc(u.bio||'Пользователь пока ничего не рассказал о себе.')}</p>
@@ -3301,7 +3313,7 @@ views.admin_stats = async el => {
 
     ${card('📈 Динамика по дням', bars)}
 
-    ${card('👥 Пользователи', [['Всего', u.total], ['Новых ' + per, u.fresh], ['Активных ' + per, u.active_period], ['Активны сегодня / за неделю / за месяц', `${N(u.dau)} / ${N(u.wau)} / ${N(u.mau)}`], ['С юзернеймом', N(u.with_username) + ' (' + pct(u.with_username, u.total) + ')'], ['Админов и модераторов', u.staff], ['Мошенников (метка)', u.scam], ['Проверенных', u.verified], ['С ручной оценкой в базе', u.rated_manual], ['Блокировок между людьми', u.blocks]].map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join(''))}
+    ${card('👥 Пользователи', [['Всего', u.total], ['Новых ' + per, u.fresh], ['Активных ' + per, u.active_period], ['Активны сегодня / за неделю / за месяц', `${N(u.dau)} / ${N(u.wau)} / ${N(u.mau)}`], ['С юзернеймом', N(u.with_username) + ' (' + pct(u.with_username, u.total) + ')'], ['Админов и модераторов', u.staff], ['Мошенников (метка)', u.scam], ['Проверенных', u.verified], ['С ручной оценкой в VETRIXBASE', u.rated_manual], ['Блокировок между людьми', u.blocks]].map(([k, v]) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join(''))}
 
     ${card('🧭 Воронка (за всё время)', funnel)}
 
@@ -3332,7 +3344,7 @@ views.admin_stats = async el => {
 
     ${card('🚩 Жалобы', `<div class="sub">На людей</div>${rowsHtml(rp.users, x => `<div class="an-row"><span class="nm">${esc(x.category)} · ${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="sub" style="margin-top:8px">На объявления</div>${rowsHtml(rp.posts, x => `<div class="an-row"><span class="nm">${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="sub" style="margin-top:8px">На отзывы и сделки</div>${rowsHtml(rp.misc, x => `<div class="an-row"><span class="nm">${x.kind === 'review' ? 'отзыв' : 'сделка'} · ${esc(st(x.status))}</span><span class="v">${N(x.n)}</span><span class="s">+${N(x.period)}</span></div>`)}<div class="kv"><span>Жалоб с доказательствами</span><b>${N(rp.with_proofs)}</b></div>`)}
     ${card('🎯 Больше всего жалоб на человека', rowsHtml(rp.top_reported, x => `<div class="an-row">${who(x)}<span class="v">${N(x.n)}</span><span class="s">открытых ${N(x.opened)}</span></div>`))}
-    ${card('📖 База', `<div class="kv"><span>В «минусе» сейчас</span><b>${N(d.base.minus)}</b></div><div class="kv"><span>Помечены «Мошенник»</span><b>${N(d.base.scam)}</b></div>${rowsHtml(d.base.stars, x => `<div class="an-row"><span class="nm">Ручная оценка ${'★'.repeat(x.s)}</span><span class="v">${N(x.n)}</span></div>`)}`)}
+    ${card('📖 VETRIXBASE', `<div class="kv"><span>В «минусе» сейчас</span><b>${N(d.base.minus)}</b></div><div class="kv"><span>Помечены «Мошенник»</span><b>${N(d.base.scam)}</b></div>${rowsHtml(d.base.stars, x => `<div class="an-row"><span class="nm">Ручная оценка ${'★'.repeat(x.s)}</span><span class="v">${N(x.n)}</span></div>`)}`)}
 
     ${card('🔎 Поведение ' + per, rowsHtml(d.activity, x => `<div class="an-row"><span class="nm">${({view:'Просмотры объявлений',search:'Поиски',topic:'Открытия категорий'})[x.kind] || esc(x.kind)}</span><span class="v">${N(x.n)}</span><span class="s">${N(x.users)} чел.</span></div>`))}
     ${card('🔤 Частые поисковые запросы ' + per, rowsHtml(d.queries, x => `<div class="an-row"><span class="nm">${esc(x.q)}</span><span class="v">${N(x.n)}</span></div>`))}`;
@@ -3510,7 +3522,7 @@ async function showTour() {
 }
 
 /* ============================================================ БАЗА: поиск человека, рейтинг, жалобы */
-Object.assign(ERR, { user_not_found: 'Человека нет в базе' });
+Object.assign(ERR, { user_not_found: 'Человека нет в VETRIXBASE' });
 const BASE_CATS = ['Скам / обман', 'Не выполнил условия', 'Выдаёт себя за другого', 'Спам / реклама', 'Оскорбления', 'Другое'];
 const BASE_ROLE_LIST = [['', 'Без роли'], ['admin', 'Админ'], ['seller', 'Продавец'], ['pr', 'Пиарщик'], ['editor', 'Монтажёр']];
 const BASE_WORD = { 5: 'Отличный', 4: 'Хороший', 3: 'Так себе', 2: 'Плохой', 1: 'Ужасный' };
@@ -3522,11 +3534,11 @@ const baseLabelOf = (stars, role) => stars > 0 ? `${BASE_WORD[stars]} ${BASE_NOU
 const bStars = (n, minus) => minus ? '<span class="bs minus"><b>−</b></span>'
   : `<span class="bs">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? '' : 'off'}">${STAR_SVG}</i>`).join('')}</span>`;
 
-// плашка «База» в обычном профиле
+// плашка «VETRIXBASE» в обычном профиле
 function baseChip(b, id) {
   if (!b) return '';
   const rated = b.minus || b.stars > 0;
-  return `<div><button class="bchip t-${b.tier}" data-base="${id}">📖 ${rated ? (b.minus ? esc(b.status) : `★ ${b.score} · ${esc(b.label)}`) : 'Открыть в базе'} ›</button></div>`;
+  return `<div><button class="bchip t-${b.tier}" data-base="${id}">📖 ${rated ? (b.minus ? esc(b.status) : `★ ${b.score} · ${esc(b.label)}`) : 'Открыть в VETRIXBASE'} ›</button></div>`;
 }
 
 const baseRow = c => `<div class="bcard glass t-${c.tier}" data-bid="${c.id}">
@@ -3544,9 +3556,9 @@ function baseList(box, list) {
 }
 
 views.base = async el => {
-  el.innerHTML = `<h2 class="page">База</h2>
+  el.innerHTML = `<h2 class="page">VETRIXBASE</h2>
     <p class="sub">Проверьте человека перед сделкой: введите юзернейм, ID или ссылку — покажем рейтинг, жалобы и прежние юзернеймы.</p>
-    <button class="btn" id="myBaseBtn" style="width:100%;margin-bottom:12px">🛡 Проверить свой статус в базе</button>
+    <button class="btn" id="myBaseBtn" style="width:100%;margin-bottom:12px">🛡 Проверить свой статус в VETRIXBASE</button>
     <div class="bsearch glass">${ic('search', false)}<input id="bq" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="100" placeholder="@юзернейм или ID" value="${esc(S.baseQ || '')}"><button class="btn small" id="bgo">Найти</button></div>
     <div class="chips btabs" id="btabs"><span class="chip" data-t="search">🔎 Поиск</span><span class="chip" data-t="top">🏆 Топ</span><span class="chip" data-t="minus">⛔ Минус</span></div>
     <div id="bres"></div>`;
@@ -3555,11 +3567,11 @@ views.base = async el => {
   let tab = S.baseTab || 'search', tok = 0, minusAt = 3, stats = null;
   const mark = () => $$('#btabs .chip', el).forEach(c => c.classList.toggle('sel', c.dataset.t === tab));
   const idle = () => {
-    box.innerHTML = `${stats ? `<div class="bstats"><div class="bp-stat"><small>В базе</small><b>${fmtN(stats.total)}</b></div><div class="bp-stat"><small>С оценкой</small><b>${fmtN(stats.rated)}</b></div><div class="bp-stat ${stats.minus ? 'warn' : ''}"><small>В минусе</small><b>${fmtN(stats.minus)}</b></div></div>` : ''}
+    box.innerHTML = `${stats ? `<div class="bstats"><div class="bp-stat"><small>В VETRIXBASE</small><b>${fmtN(stats.total)}</b></div><div class="bp-stat"><small>С оценкой</small><b>${fmtN(stats.rated)}</b></div><div class="bp-stat ${stats.minus ? 'warn' : ''}"><small>В минусе</small><b>${fmtN(stats.minus)}</b></div></div>` : ''}
       <div class="card glass"><b>Как читать рейтинг</b><div style="margin-top:8px">
       ${[[5, 'Отличный админ / продавец'], [4, 'Хороший'], [3, 'Так себе'], [2, 'Плохой'], [1, 'Ужасный'], [0, 'Нет оценки (авто — по отзывам)']].map(([n, t]) => `<div class="lg t-${BASE_TIER_OF[n]}">${bStars(n)}<span>${esc(t)}</span></div>`).join('')}
       <div class="lg t-minus">${bStars(0, true)}<span>Много жалоб (от ${minusAt}) — ненадёжный человек</span></div></div>
-      <small class="dim">Рейтинг один и тот же на бирже и в базе: если модератор поставил звёзды — берутся они, иначе среднее по отзывам. «Минус» уходит автоматически, если на человека пожаловались ${minusAt}+ разных пользователей и жалобы ещё не закрыты.</small></div>`;
+      <small class="dim">Рейтинг один и тот же на бирже и в VETRIXBASE: если модератор поставил звёзды — берутся они, иначе среднее по отзывам. «Минус» уходит автоматически, если на человека пожаловались ${minusAt}+ разных пользователей и жалобы ещё не закрыты.</small></div>`;
   };
   const run = async () => {
     const my = ++tok; mark();
@@ -3577,7 +3589,7 @@ views.base = async el => {
       box.innerHTML = loader();
       const d = await api('/api/base/search?q=' + encodeURIComponent(q)); if (my !== tok) return;
       if (!d.results.length) {
-        box.innerHTML = `<div class="bnone glass"><div class="big">❓</div><b>«${esc(q)}» — нет в базе</b>
+        box.innerHTML = `<div class="bnone glass"><div class="big">❓</div><b>«${esc(q)}» — нет в VETRIXBASE</b>
           <p>${d.parsed ? 'Этот человек ещё не пользовался KMBP, поэтому данных о нём нет. Это не значит, что он плохой — просто проверить нечем. Сделки лучше проводить через гаранта.' : 'Введите юзернейм (например, @name), числовой ID или ссылку Exg:/@name.'}</p></div>`;
         return;
       }
@@ -3596,12 +3608,12 @@ views.base = async el => {
 function rateSheet(c, done) {
   let stars = c.manual != null ? c.manual : c.stars, role = c.role_key || '';
   const bg = document.createElement('div'); bg.className = 'sheet-bg';
-  bg.innerHTML = `<div class="sheet"><div class="sh-t">Рейтинг в базе · ${esc(c.name)}</div>
+  bg.innerHTML = `<div class="sheet"><div class="sh-t">Рейтинг в VETRIXBASE · ${esc(c.name)}</div>
     <div class="rate-stars" id="rsStars">${[0, 1, 2, 3, 4, 5].map(n => `<button data-n="${n}" class="t-${BASE_TIER_OF[n]}">${n}</button>`).join('')}</div>
     <div class="rate-prev" id="rsPrev"></div>
     <div class="chips" id="rsRoles" style="margin:6px 0 10px">${BASE_ROLE_LIST.map(([k, n]) => `<span class="chip" data-r="${k}">${n}</span>`).join('')}</div>
     <textarea class="f" id="rsNote" maxlength="300" placeholder="Заметка модераторов (видна всем, необязательно)" style="min-height:76px">${esc(c.note || '')}</textarea>
-    <small class="dim" style="display:block;margin:6px 4px 0">Если на человека много активных жалоб, в базе он всё равно будет в «Минусе», пока жалобы не закрыты.</small>
+    <small class="dim" style="display:block;margin:6px 4px 0">Если на человека много активных жалоб, в VETRIXBASE он всё равно будет в «Минусе», пока жалобы не закрыты.</small>
     <button class="sh-b" id="rsSave" style="background:var(--acc);color:#fff;border:0">Сохранить</button><button class="sh-b cancel">Отмена</button></div>`;
   const close = () => { bg.classList.add('out'); setTimeout(() => bg.remove(), 200); };
   const paint = () => {
@@ -3629,10 +3641,10 @@ const reportBase = c => reportSheet('Жалоба на ' + c.name, async (reason
 views.base_user = async (el, params = {}) => {
   let c;
   try { c = await api('/api/base/profile?id=' + Number(params.id)); }
-  catch (e) { if (e.status === 404) { el.innerHTML = '<h2 class="page">База</h2>' + empty('❓', 'Человека нет в базе'); return; } throw e; }
+  catch (e) { if (e.status === 404) { el.innerHTML = '<h2 class="page">VETRIXBASE</h2>' + empty('❓', 'Человека нет в VETRIXBASE'); return; } throw e; }
   const own = c.is_me, lk = profLink(c.id, c.username);
   const score = c.minus ? (c.minus === 'scam' ? 'Мошенник' : 'Минус') : `${c.score} / 5`;
-  el.innerHTML = `<h2 class="page">Карточка из базы</h2><div class="t-${c.tier}">
+  el.innerHTML = `<h2 class="page">Карточка из VETRIXBASE</h2><div class="t-${c.tier}">
     <div class="bp-hero glass">
       ${avHtml('bp-av', c.id, c.name, c.has_avatar, c.photo_url)}
       <b class="bp-name">${esc(c.name)}${nameBadges(c.sb)}</b>
@@ -3667,7 +3679,7 @@ views.base_user = async (el, params = {}) => {
   </div>`;
   avFill(el);
   $('#bpLink', el).onclick = () => linkSheet('Ссылка на профиль', lk.code, lk.deep);
-  $('#bpShare', el).onclick = () => { const d = xlDeep('b', c.id); linkSheet('Карточка из базы', lk.code, d || lk.deep); };
+  $('#bpShare', el).onclick = () => { const d = xlDeep('b', c.id); linkSheet('Карточка из VETRIXBASE', lk.code, d || lk.deep); };
   const pc = $('#bpChat', el); if (pc) pc.onclick = () => go('chat', { peer: c.id });
   const pp = $('#bpProf', el); if (pp) pp.onclick = () => go('profile', { id: c.id });
   const rp = $('#bpRep', el); if (rp) rp.onclick = () => reportBase(c);
@@ -3807,7 +3819,7 @@ views.receipts = async el => {
 };
 
 /* ============================================================ boot */
-{ const NAVI = { home: 'x_home', heart: 'x_heart', plus: 'x_plus', chat: 'x_chat', user: 'x_person' }; $$('#nav .e').forEach(e => e.innerHTML = `<span class="i mi mi-${NAVI[e.dataset.i]}" aria-hidden="true"></span>`); }
+{ const NAVI = { home: 'x_home', heart: 'x_heart', plus: 'x_plus', chat: 'x_chat', user: 'x_person', gear: 'n_gear' }; $$('#nav .e').forEach(e => e.innerHTML = `<span class="i mi mi-${NAVI[e.dataset.i]}" aria-hidden="true"></span>`); }
 
 (async function boot() {
   if (!tg || !tg.initData) { $('#main').innerHTML = `<div class="view">${empty('🔒', 'Откройте мини-апп из Telegram')}</div>`; return; }
