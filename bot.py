@@ -5006,7 +5006,7 @@ async def api_admin_user_badge(request):
 # ---------------------------------------------------------------- проекты (боты, каналы, группы, сайты…)
 PROJECT_KINDS = ("bot", "channel", "group", "site", "service", "other")
 MAX_PROJECTS = 10
-# галочки проекта: green — хороший проект, yellow — средний (по заявке), blue — проект владельцев (только OWNER_ID)
+# галочки проекта: green — хороший проект, yellow — средний (по заявке), blue — проект владельцев (владелец и все главные админы)
 PROJECT_MARKS = {"green": "зелёная — «Хороший проект»", "yellow": "жёлтая — «Средний проект»", "blue": "голубая — «Проект владельцев»"}
 
 
@@ -5307,7 +5307,7 @@ async def api_admin_project_add(request):
     mark = str(d.get("mark") or "")
     if mark and mark not in PROJECT_MARKS:
         raise ApiError(400, "bad_mark")
-    if mark == "blue" and me != OWNER_ID:
+    if mark == "blue" and not await is_main(me):
         raise ApiError(403, "forbidden")
     pid = await pool.fetchval(
         "INSERT INTO projects(owner_id,kind,name,username,link,description,mark,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
@@ -5319,7 +5319,7 @@ async def api_admin_project_add(request):
 
 
 async def api_admin_project_set(request):
-    """Админ: галочка проекта (green/yellow/«» снять; blue — только владелец), отклонить заявку, передать проект."""
+    """Админ: галочка проекта (green/yellow/«» снять; blue — владелец и главные админы), отклонить заявку, передать проект."""
     await need_staff(request)
     me = request["u"]["id"]
     d = await body(request)
@@ -5332,7 +5332,7 @@ async def api_admin_project_set(request):
         mark = str(d.get("mark") or "")
         if mark and mark not in PROJECT_MARKS:
             raise ApiError(400, "bad_mark")
-        if (mark == "blue" or cur["mark"] == "blue") and me != OWNER_ID:
+        if (mark == "blue" or cur["mark"] == "blue") and not await is_main(me):
             raise ApiError(403, "forbidden")
         await pool.execute("UPDATE projects SET mark=$2,mark_req='',mark_req_at=NULL WHERE id=$1", pid, mark)
         if mark and mark != cur["mark"]:
