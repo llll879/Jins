@@ -5,20 +5,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b0a12">
 <title>KMBP FORUM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap">
 <style>
-:root{--acc:#8b7cff;--acc-soft:rgba(139,124,255,.16);--bg:#0b0a12;--card:#15131f;--card2:#1c1a29;--line:rgba(255,255,255,.08);--txt:#f1effa;--dim:#9b97b3;--bad:#ff6b7a;--ok:#4cd6a0;--safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px)}
-[data-theme=light]{--bg:#f4f3fb;--card:#fff;--card2:#ecebf6;--line:rgba(20,16,50,.1);--txt:#17142b;--dim:#6b6788;--acc-soft:rgba(110,90,255,.12)}
-[data-theme=amoled]{--bg:#000;--card:#0b0b0f;--card2:#141419}
+:root{--acc:#a99bff;--acc-soft:rgba(169,155,255,.16);--bg:#07060b;--card:#120f1a;--card2:#1a1726;--line:rgba(255,255,255,.08);--txt:#f2f0fa;--dim:#948fb0;--bad:#ff6b7a;--ok:#4cd6a0;--gold:#d9c27a;--safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px);--serif:'Cormorant Garamond',Georgia,serif}
+[data-theme=light]{--bg:#f1efe8;--card:#fff;--card2:#eceadf;--line:rgba(20,16,10,.1);--txt:#1c1a22;--dim:#6b6677;--acc-soft:rgba(110,90,255,.12)}
+[data-theme=amoled]{--bg:#000;--card:#07070a;--card2:#111016}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;overscroll-behavior:none}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overscroll-behavior:none}
+body{background-image:radial-gradient(ellipse 120% 60% at 50% -10%,rgba(169,155,255,.10),transparent 60%)}
 body{display:flex;justify-content:center}
 #app{width:100%;max-width:680px;height:100%;display:flex;flex-direction:column;position:relative;background:var(--bg)}
 a{color:var(--acc);text-decoration:none}
 button{font:inherit;color:inherit;cursor:pointer}
 svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
-header.top{flex:none;display:flex;align-items:center;gap:6px;padding:calc(10px + var(--safe-t)) 12px 10px;border-bottom:1px solid var(--line);background:var(--bg);z-index:5}
-header.top h1{flex:1;margin:0;font-size:19px;font-weight:800;letter-spacing:.2px}
-header.top h1 b{color:var(--acc)}
+header.top{flex:none;display:flex;align-items:center;gap:8px;padding:calc(10px + var(--safe-t)) 14px 10px;border-bottom:1px solid var(--line);background:var(--bg);z-index:5}
+header.top h1{flex:1;margin:0;font-family:var(--serif);font-size:15px;line-height:1.05;font-weight:700;letter-spacing:.3px;color:var(--txt);text-transform:uppercase}
+header.top h1 b{display:block;font-size:20px;font-weight:700;letter-spacing:1.5px;color:var(--txt)}
+header.top .av{width:34px;height:34px}
 .ib{position:relative;width:40px;height:40px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center}
 .ib:active{background:var(--card2)}
 .badge{position:absolute;top:3px;right:2px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--bad);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
@@ -71,6 +74,32 @@ nav.bar .badge{top:0;right:calc(50% - 20px)}
 .inp:focus{border-color:var(--acc)}
 textarea.inp{resize:none;min-height:120px}
 .lbl{display:block;font-size:12px;color:var(--dim);margin:14px 2px 6px;font-weight:600}
+/*__HERO_CSS__*/
+/* готический герой и «Актуальное» */
+.hero{position:relative;margin:12px 14px 4px;border-radius:22px;overflow:hidden;min-height:150px;display:flex;align-items:flex-end;padding:18px;border:1px solid var(--line);
+  background:radial-gradient(130% 160% at 20% -30%,rgba(169,155,255,.35),transparent 55%),radial-gradient(120% 140% at 100% 120%,rgba(217,194,122,.16),transparent 55%),linear-gradient(160deg,#17131f 0%,#0a0810 75%)}
+.hero::before{content:"";position:absolute;inset:0;background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><g fill="none" stroke="white" stroke-width="0.6" opacity="0.14"><path d="M150 10 C 90 60, 90 140, 150 150 C 210 140, 210 60, 150 10 Z"/><path d="M150 150 C 110 180, 100 240, 150 290 C 200 240, 190 180, 150 150 Z"/><circle cx="150" cy="150" r="110"/></g></svg>');background-size:340px;background-position:110% 10%;background-repeat:no-repeat;opacity:.5;pointer-events:none}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,6,11,.55),transparent 55%)}
+.hero .hc{position:relative;z-index:1}
+.hero .k{font-family:var(--serif);font-weight:700;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--gold);opacity:.9}
+.hero .t{font-family:var(--serif);font-weight:700;font-size:23px;line-height:1.2;margin-top:4px;max-width:78%}
+.hero .go{position:absolute;right:14px;bottom:14px;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.1);backdrop-filter:blur(6px);display:grid;place-items:center;color:#fff;border:1px solid rgba(255,255,255,.18)}
+.trend{padding:16px 0 2px}
+.trend .th{display:flex;align-items:center;justify-content:space-between;padding:0 14px 10px}
+.trend .th b{font-family:var(--serif);font-size:17px;font-weight:700;display:flex;align-items:center;gap:7px}
+.trend .th a{font-size:13px;color:var(--dim)}
+.trend-row{display:flex;gap:10px;overflow-x:auto;padding:0 14px 4px;scrollbar-width:none}
+.trend-row::-webkit-scrollbar{display:none}
+.tcard{flex:none;width:150px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--card);position:relative;min-height:148px;display:flex;flex-direction:column;justify-content:flex-end}
+.tcard .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:saturate(.85)}
+.tcard .bg.none{background:linear-gradient(160deg,#1c1830,#0c0a14)}
+.tcard::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,.1) 60%)}
+.tcard .tc{position:relative;z-index:1;padding:10px}
+.tcard .cat{display:inline-block;background:rgba(255,255,255,.14);backdrop-filter:blur(4px);color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;margin-bottom:6px}
+.tcard .tt{color:#fff;font-size:13px;font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tcard .st{display:flex;gap:10px;margin-top:6px;color:rgba(255,255,255,.75);font-size:11px}
+.compose-row{display:flex;align-items:center;gap:10px;margin:12px 14px;padding:11px 14px;border-radius:18px;background:var(--card);border:1px solid var(--line);color:var(--dim)}
+.compose-row span{flex:1}
 .sec{padding:6px 14px;color:var(--dim);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-top:8px}
 .row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
 .row:active{background:var(--card2)}
@@ -191,7 +220,7 @@ function postCard(p,full){
     <div class="ph">${av(p.user)}<div class="pn"><b data-href="#/u/${p.user.id}">${esc(p.user.name)}${tags(p.user.sb)}</b><small>${ago(p.ts)}${p.edited?' · изменено':''}${p.board?` · <a href="#/b/${p.board.id}">${p.board.emoji} ${esc(p.board.name)}</a>`:''}</small></div>${p.pinned?'<span class="tag pin">ЗАКРЕП</span>':''}<button class="ib" data-act="menu" style="width:34px;height:34px">${IC.more}</button></div>
     ${p.title?`<div class="pt" data-href="#/p/${p.id}">${esc(p.title)}</div>`:''}
     <div ${full?'':`data-href="#/p/${p.id}"`}>${body}</div>${imgs}
-    <div class="acts"><button class="act ${p.liked?'on':''}" data-act="like">${IC.heart}<span>${num(p.likes)}</span></button><button class="act" data-href="#/p/${p.id}">${IC.comment}<span>${num(p.comments)}</span></button><span class="act" style="pointer-events:none">${IC.eye}<span>${num(p.views)}</span></span><span class="sp"></span><button class="act sv ${p.saved?'on':''}" data-act="save">${IC.mark}</button><button class="act" data-act="share">${IC.share}</button></div></article>`}
+    <div class="acts"><button class="act ${p.liked?'on':''}" data-act="like">${IC.heart}<span>${num(p.likes)}</span></button><button class="act" data-href="#/p/${p.id}">${IC.comment}<span>${num(p.comments)}</span></button><button class="act" data-act="share">${IC.share}<span>${num(p.views)?'':''}</span></button><span class="sp"></span><button class="act sv ${p.saved?'on':''}" data-act="save">${IC.mark}</button></div></article>`}
 
 /* ---------- лента ---------- */
 async function loadPosts(box,params,state){
@@ -201,10 +230,17 @@ async function loadPosts(box,params,state){
   $$('.more-btn',box).forEach(x=>x.remove());state.off+=d.posts.length;
   if(d.more)box.insertAdjacentHTML('beforeend','<div class="pad" style="text-align:center"><button class="btn ghost more-btn">Показать ещё</button></div>');
   const mb=$('.more-btn',box);if(mb)mb.onclick=()=>loadPosts(box,params,state).catch(e=>toast(e.message,1))}
+function tcard(p){const img=p.imgs[0]?`${BASE}/forum/api/img/${p.imgs[0]}`:'';const cat=p.board?p.board.name:'Пост';
+  return `<a class="tcard" data-href="#/p/${p.id}"><div class="bg ${img?'':'none'}" style="${img?`background-image:url(${img})`:''}"></div><div class="tc"><span class="cat">${esc(cat)}</span><div class="tt">${esc(p.title||p.body.slice(0,60))}</div><div class="st">${IC.heart.replace('class="i"','class="i" style="width:12px;height:12px"')}${p.likes} ${IC.comment.replace('class="i"','class="i" style="width:12px;height:12px"')}${p.comments}</div></div></a>`}
 async function viewFeed(el,p){
   const tab=ls.get('tab')||'all';
-  el.innerHTML=`<div class="tabs">${[['all','Лента'],['top','Популярное'],['follow','Подписки']].map(([k,n])=>`<button class="tab ${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</div><div id="fl"><div class="spin"></div></div>`;
+  el.innerHTML=`<div class="hero"><div class="hc"><div class="k">KMBP Forum</div><div class="t">Общайся. Делись.<br>Найди своё комьюнити.</div></div><a class="go" href="#/boards">${IC.back.replace('d="M15 5l-7 7 7 7"','d="M9 5l7 7-7 7"').replace('style="width:26px;height:26px"','style="width:17px;height:17px"')}</a></div>
+  <div class="compose-row" data-href="#/new">${av(S.me,'s')}<span>Создать пост…</span>${IC.img.replace('class="i"','class="i" style="width:19px;height:19px;color:var(--dim)"')}</div>
+  <div class="trend" id="trend" hidden><div class="th"><b>👑 Актуальное</b><a href="#" data-tab2="top">Смотреть всё ›</a></div><div class="trend-row" id="trendRow"></div></div>
+  <div class="tabs">${[['all','Лента'],['top','Популярное'],['follow','Подписки']].map(([k,n])=>`<button class="tab ${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</div><div id="fl"><div class="spin"></div></div>`;
   $$('.tab',el).forEach(b=>b.onclick=()=>{ls.set('tab',b.dataset.tab);viewFeed(el,p)});
+  const t2=$('[data-tab2]',el);if(t2)t2.onclick=e=>{e.preventDefault();ls.set('tab','top');viewFeed(el,p)};
+  api('/feed?tab=top&offset=0').then(d=>{if(!d.posts.length)return;const tr=$('#trend',el);if(tr){tr.hidden=false;$('#trendRow',el).innerHTML=d.posts.slice(0,6).map(tcard).join('')}}).catch(()=>{});
   const box=$('#fl',el);box.innerHTML='';
   const st={off:0,empty:tab==='follow'?'Подпишитесь на авторов — их посты появятся здесь':'Постов пока нет. Напишите первый!'};
   await loadPosts(box,{tab},st)}
@@ -357,7 +393,7 @@ function viewSettings(el){
 async function boot(){const b=await api('/boot');S.boards=b.boards;S.bot=b.bot;if(S.token){const m=await api('/me');S.me=m.me;await ping()}applyTheme()}
 async function ping(){try{S.counts=await api('/ping');chrome()}catch(e){}}
 function chrome(){const bn=$('#bellB'),mb=$('#msgB');if(bn){bn.hidden=!S.counts.notifs;bn.textContent=S.counts.notifs>99?'99+':S.counts.notifs}if(mb){mb.hidden=!S.counts.msgs;mb.textContent=S.counts.msgs>99?'99+':S.counts.msgs}}
-function shell(){const app=$('#app');if($('#hdr'))return;app.innerHTML=`<header class="top" id="hdr"><h1>KMBP <b>FORUM</b></h1><button class="ib" data-href="#/search/">${IC.search}</button><button class="ib" data-href="#/notif">${IC.bell}<span class="badge" id="bellB" hidden></span></button></header><div id="view"></div><nav class="bar" id="nav"><button data-n="feed" data-href="#/">${IC.home}Лента</button><button data-n="boards" data-href="#/boards">${IC.grid}Разделы</button><button class="plus" data-href="#/new">${IC.plus}</button><button data-n="chats" data-href="#/chats">${IC.chat}Чаты<span class="badge" id="msgB" hidden></span></button><button data-n="me" data-href="#/me">${IC.user}Профиль</button></nav>`}
+function shell(){const app=$('#app');if($('#hdr'))return;app.innerHTML=`<header class="top" id="hdr"><h1>KMBP<b>FORUM</b></h1><button class="ib" data-href="#/search/">${IC.search}</button><button class="ib" data-href="#/notif">${IC.bell}<span class="badge" id="bellB" hidden></span></button><span class="av" style="width:34px;height:34px" data-href="#/me" id="hdrAv"></span></header><div id="view"></div><nav class="bar" id="nav"><button data-n="feed" data-href="#/">${IC.home}Лента</button><button data-n="boards" data-href="#/boards">${IC.grid}Разделы</button><button class="plus" data-href="#/new">${IC.plus}</button><button data-n="chats" data-href="#/chats">${IC.chat}Чаты<span class="badge" id="msgB" hidden></span></button><button data-n="me" data-href="#/me">${IC.user}Профиль</button></nav>`;const ha=$('#hdrAv');if(S.me)ha.outerHTML=av(S.me,'').replace('class="av ','id="hdrAv" class="av ')}
 let rid=0;
 async function render(){
   const my=++rid;clearInterval(chatT);
