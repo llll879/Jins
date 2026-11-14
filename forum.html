@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0a12">
+<title>KMBP FORUM</title>
+<style>
+:root{--acc:#8b7cff;--acc-soft:rgba(139,124,255,.16);--bg:#0b0a12;--card:#15131f;--card2:#1c1a29;--line:rgba(255,255,255,.08);--txt:#f1effa;--dim:#9b97b3;--bad:#ff6b7a;--ok:#4cd6a0;--safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px)}
+[data-theme=light]{--bg:#f4f3fb;--card:#fff;--card2:#ecebf6;--line:rgba(20,16,50,.1);--txt:#17142b;--dim:#6b6788;--acc-soft:rgba(110,90,255,.12)}
+[data-theme=amoled]{--bg:#000;--card:#0b0b0f;--card2:#141419}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;overscroll-behavior:none}
+body{display:flex;justify-content:center}
+#app{width:100%;max-width:680px;height:100%;display:flex;flex-direction:column;position:relative;background:var(--bg)}
+a{color:var(--acc);text-decoration:none}
+button{font:inherit;color:inherit;cursor:pointer}
+svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+header.top{flex:none;display:flex;align-items:center;gap:6px;padding:calc(10px + var(--safe-t)) 12px 10px;border-bottom:1px solid var(--line);background:var(--bg);z-index:5}
+header.top h1{flex:1;margin:0;font-size:19px;font-weight:800;letter-spacing:.2px}
+header.top h1 b{color:var(--acc)}
+.ib{position:relative;width:40px;height:40px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center}
+.ib:active{background:var(--card2)}
+.badge{position:absolute;top:3px;right:2px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--bad);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
+#view{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;padding-bottom:20px}
+nav.bar{flex:none;display:flex;align-items:center;justify-content:space-around;padding:6px 6px calc(6px + var(--safe-b));border-top:1px solid var(--line);background:var(--bg)}
+nav.bar button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;color:var(--dim);padding:5px 0;position:relative}
+nav.bar button.on{color:var(--acc)}
+nav.bar .plus{flex:none;width:50px;height:38px;border-radius:14px;background:var(--acc);color:#fff;display:grid;place-items:center;margin:0 6px}
+nav.bar .plus svg{stroke:#fff}
+nav.bar .badge{top:0;right:calc(50% - 20px)}
+.pad{padding:12px}
+.tabs{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;padding:7px 14px;border-radius:18px;border:1px solid var(--line);background:var(--card);color:var(--dim);font-weight:600;font-size:13.5px}
+.tab.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.post{background:var(--card);border:1px solid var(--line);border-radius:18px;margin:10px 12px;padding:14px}
+.ph{display:flex;align-items:center;gap:10px}
+.av{position:relative;flex:none;width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--acc),#5b4bd6);color:#fff;display:grid;place-items:center;font-weight:800;overflow:hidden}
+.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.av.s{width:32px;height:32px;font-size:13px}.av.l{width:84px;height:84px;font-size:32px;border:3px solid var(--bg)}
+.pn{min-width:0;flex:1}
+.pn b{font-size:15px;display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.pn small{display:block;color:var(--dim);font-size:12px}
+.tag{display:inline-block;padding:1px 6px;border-radius:7px;font-size:9.5px;font-weight:800;letter-spacing:.3px;background:var(--acc-soft);color:var(--acc)}
+.tag.bad{background:rgba(255,107,122,.16);color:var(--bad)}
+.tag.pin{background:rgba(255,200,80,.16);color:#ffc850}
+.pt{font-size:17px;font-weight:800;margin:10px 0 4px}
+.pb{margin:8px 0 0;word-wrap:break-word;overflow-wrap:anywhere}
+.pb.clamp{display:-webkit-box;-webkit-line-clamp:7;-webkit-box-orient:vertical;overflow:hidden}
+.more{color:var(--acc);font-weight:600;margin-top:4px;display:inline-block}
+.imgs{display:grid;gap:4px;margin-top:10px;border-radius:14px;overflow:hidden}
+.imgs.n1{grid-template-columns:1fr}.imgs.n2,.imgs.n4{grid-template-columns:1fr 1fr}.imgs.n3{grid-template-columns:2fr 1fr}
+.imgs img{width:100%;height:100%;object-fit:cover;max-height:360px;display:block;background:var(--card2);cursor:zoom-in}
+.imgs.n1 img{max-height:480px}
+.imgs.n3 img:first-child{grid-row:span 2}
+.acts{display:flex;align-items:center;gap:4px;margin-top:10px;margin-left:-8px}
+.act{border:0;background:none;display:flex;align-items:center;gap:6px;color:var(--dim);padding:8px;border-radius:12px;font-size:14px}
+.act:active{background:var(--card2)}
+.act.on{color:var(--bad)}.act.on.sv{color:var(--acc)}
+.act.on svg{fill:currentColor}
+.sp{flex:1}
+.empty{text-align:center;color:var(--dim);padding:50px 24px}
+.empty .big{font-size:42px;margin-bottom:8px}
+.btn{border:0;border-radius:14px;padding:11px 18px;background:var(--acc);color:#fff;font-weight:700}
+.btn.ghost{background:var(--acc-soft);color:var(--acc)}
+.btn.bad{background:rgba(255,107,122,.16);color:var(--bad)}
+.btn.sm{padding:7px 13px;font-size:13px;border-radius:12px}
+.btn:disabled{opacity:.5}
+.inp{width:100%;border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:14px;padding:12px 14px;font:inherit;outline:0}
+.inp:focus{border-color:var(--acc)}
+textarea.inp{resize:none;min-height:120px}
+.lbl{display:block;font-size:12px;color:var(--dim);margin:14px 2px 6px;font-weight:600}
+.sec{padding:6px 14px;color:var(--dim);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-top:8px}
+.row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.row:active{background:var(--card2)}
+.row .t{flex:1;min-width:0}
+.row .t b{display:block}
+.row .t small{color:var(--dim);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .e{font-size:24px;width:42px;text-align:center}
+.unr{min-width:20px;height:20px;border-radius:10px;background:var(--acc);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center;padding:0 6px}
+.cmt{display:flex;gap:10px;padding:10px 14px}
+.cmt.rep{padding-left:54px}
+.cb{flex:1;min-width:0}
+.cb .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.cb .h b{font-size:14px}.cb .h small{color:var(--dim);font-size:12px}
+.cb p{margin:2px 0;overflow-wrap:anywhere}
+.cb .ca{display:flex;gap:14px;color:var(--dim);font-size:13px;margin-top:2px}
+.cb .ca button{border:0;background:none;color:inherit;padding:2px 0;display:flex;align-items:center;gap:4px}
+.cb .ca button.on{color:var(--bad)}
+.del{color:var(--dim);font-style:italic}
+.cform{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 10px calc(8px);display:flex;gap:8px;align-items:flex-end}
+.cform textarea{flex:1;border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:20px;padding:10px 14px;font:inherit;resize:none;max-height:120px;min-height:42px;outline:0}
+.send{width:42px;height:42px;border-radius:50%;border:0;background:var(--acc);color:#fff;display:grid;place-items:center;flex:none}
+.send:disabled{opacity:.4}
+.reply-to{padding:6px 14px;background:var(--card2);font-size:13px;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
+.banner{height:140px;background:linear-gradient(135deg,var(--acc),#2a2250);background-size:cover;background-position:center;position:relative}
+.prof{padding:0 14px 8px;margin-top:-42px;position:relative}
+.stats{display:flex;gap:22px;margin:12px 0}
+.stats div{cursor:pointer}.stats b{display:block;font-size:17px}.stats small{color:var(--dim)}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+.sheet{width:100%;max-width:680px;background:var(--card);border-radius:22px 22px 0 0;padding:14px 8px calc(14px + var(--safe-b));max-height:80%;overflow:auto}
+.sheet .row{border:0;border-radius:12px}
+.sheet .row.bad{color:var(--bad)}
+.toast{position:fixed;left:50%;bottom:calc(86px + var(--safe-b));transform:translateX(-50%);background:var(--card2);color:var(--txt);border:1px solid var(--line);padding:10px 16px;border-radius:14px;z-index:99;max-width:86%;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.toast.err{border-color:var(--bad);color:var(--bad)}
+.login{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;min-height:100%;gap:12px}
+.login .logo{font-size:44px;font-weight:900;letter-spacing:1px}.login .logo b{color:var(--acc)}
+.code{font:800 26px/1 ui-monospace,Menlo,monospace;letter-spacing:3px;background:var(--card);border:1px dashed var(--acc);border-radius:14px;padding:14px 18px;color:var(--acc)}
+.chat{display:flex;flex-direction:column;height:100%}
+.chat-h{flex:none;display:flex;align-items:center;gap:8px;padding:calc(8px + var(--safe-t)) 8px 8px;border-bottom:1px solid var(--line)}
+.chat-log{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.msg{max-width:80%;padding:8px 12px;border-radius:18px;background:var(--card2);align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
+.msg.me{align-self:flex-end;background:var(--acc);color:#fff}
+.msg small{display:block;font-size:10.5px;opacity:.65;text-align:right;margin-top:2px}
+.supbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13px;color:var(--dim)}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.thumbs div{position:relative;width:76px;height:76px;border-radius:12px;overflow:hidden}
+.thumbs img{width:100%;height:100%;object-fit:cover}
+.thumbs button{position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;font-size:13px;line-height:1}
+.pal{display:flex;gap:10px;flex-wrap:wrap}
+.pal i{width:34px;height:34px;border-radius:50%;display:block;border:3px solid transparent;cursor:pointer}
+.pal i.on{border-color:var(--txt)}
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:80;display:flex;align-items:center;justify-content:center}
+.lb img{max-width:100%;max-height:100%}
+.spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite;margin:40px auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+/* ============ настройки сервера ============
+   Адрес вписывается автоматически, когда файл скачан с вашего сайта (/forum/app.html?dl=1).
+   Если файл открыт локально (в APK) и адрес пуст — приложение само спросит адрес сервера. */
+const SERVER0="__BASE__";
+
+/* ---------- хранилище (работает даже если localStorage недоступен) ---------- */
+const mem={};
+const ls={get(k){try{return localStorage.getItem('kf_'+k)}catch(e){return mem[k]||null}},set(k,v){try{localStorage.setItem('kf_'+k,v)}catch(e){mem[k]=v}},del(k){try{localStorage.removeItem('kf_'+k)}catch(e){delete mem[k]}}};
+const BASE=(()=>{let b=ls.get('base')||(SERVER0.indexOf('__BASE')===0?'':SERVER0);if(!b&&/^https?:/.test(location.protocol))b=location.origin;return (b||'').replace(/\/+$/,'')})();
+const S={token:ls.get('token')||'',me:null,boards:[],counts:{notifs:0,msgs:0},bot:''};
+const $=(s,el=document)=>el.querySelector(s),$$=(s,el=document)=>[...el.querySelectorAll(s)];
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------- иконки ---------- */
+const I=(p,x='')=>`<svg class="i" viewBox="0 0 24 24" ${x}>${p}</svg>`;
+const IC={home:I('<path d="M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/>'),grid:I('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),plus:I('<path d="M12 5v14M5 12h14"/>'),chat:I('<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z"/>'),user:I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),search:I('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),bell:I('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10 21a2 2 0 0 0 4 0"/>'),heart:I('<path d="M12 21s-8-5.2-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 5.8-8 11-8 11z"/>'),comment:I('<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z"/>'),eye:I('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),mark:I('<path d="M6 3h12v18l-6-4-6 4z"/>'),share:I('<path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/>'),more:I('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'),back:I('<path d="M15 5l-7 7 7 7"/>','style="width:26px;height:26px"'),send:I('<path d="M3.4 20.4L21 12 3.4 3.6 3.3 10l12.4 2-12.4 2z" style="fill:currentColor;stroke:none"/>'),img:I('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>')};
+
+/* ---------- утилиты ---------- */
+function toast(t,err){const d=document.createElement('div');d.className='toast'+(err?' err':'');d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2600)}
+function ago(ts){const s=Date.now()/1000-ts;if(s<60)return 'только что';if(s<3600)return Math.floor(s/60)+' мин';if(s<86400)return Math.floor(s/3600)+' ч';const d=new Date(ts*1000);if(s<172800)return 'вчера, '+d.toTimeString().slice(0,5);return d.toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:s>31536000?'numeric':undefined})}
+function clock(ts){return new Date(ts*1000).toTimeString().slice(0,5)}
+function fmt(t){let s=esc(t);s=s.replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g,'<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');s=s.replace(/(^|[\s(])#([\p{L}\p{N}_]{2,40})/gu,'$1<a href="#/search/%23$2">#$2</a>');s=s.replace(/(^|[\s(])@([A-Za-z0-9_]{4,32})/g,'$1<a href="#/search/%40$2">@$2</a>');return s.replace(/\n/g,'<br>')}
+function num(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n}
+function tags(sb){return (sb||'').split('').map(c=>({d:'<span class="tag">DEV</span>',a:'<span class="tag">ADM</span>',b:'<span class="tag bad">BAD REP</span>',s:'<span class="tag bad">SCAM</span>'}[c]||'')).join('')}
+function av(u,cls=''){const l=esc((u.name||'?').trim().charAt(0).toUpperCase());return `<span class="av ${cls}" data-href="#/u/${u.id}">${l}${u.av?`<img loading="lazy" src="${BASE}/forum/api/avatar/${u.id}" onerror="this.remove()" alt="">`:''}</span>`}
+async function api(path,o={}){const h={};if(S.token)h.Authorization='Bearer '+S.token;const opt={method:o.method||'GET',headers:h};if(o.form)opt.body=o.form;else if(o.body){h['Content-Type']='application/json';opt.body=JSON.stringify(o.body)}
+  let r;try{r=await fetch(BASE+'/forum/api'+path,opt)}catch(e){throw new Error('Нет соединения с сервером')}
+  let d={};try{d=await r.json()}catch(e){}
+  if(r.status===401&&S.token){logout(true);throw new Error('Нужно войти заново')}
+  if(!r.ok)throw new Error(d.message||d.error||('Ошибка '+r.status));return d}
+const post_=(p,b)=>api(p,{method:'POST',body:b||{}});
+function sheet(items){return new Promise(res=>{const bg=document.createElement('div');bg.className='sheet-bg';bg.innerHTML=`<div class="sheet">${items.map((x,i)=>`<div class="row ${x.bad?'bad':''}" data-i="${i}"><span class="t"><b>${x.t}</b></span></div>`).join('')}</div>`;bg.onclick=e=>{const r=e.target.closest('[data-i]');bg.remove();res(r?items[+r.dataset.i]:null)};document.body.appendChild(bg)})}
+function confirmBox(t){return sheet([{t:t,k:'y',bad:true},{t:'Отмена',k:'n'}]).then(x=>x&&x.k==='y')}
+
+/* ---------- тема ---------- */
+const PAL=['#8b7cff','#4cd6a0','#4aa8ff','#ff6fae','#ffb454','#ff6b7a','#b0b0c0'];
+function applyTheme(){const t=ls.get('theme')||'dark';document.documentElement.dataset.theme=t;let a=ls.get('acc')||(S.me&&/^#[0-9a-f]{6}$/i.test(S.me.accent||'')?S.me.accent:'#8b7cff');document.documentElement.style.setProperty('--acc',a);const m=a.match(/\w\w/g).map(x=>parseInt(x,16));document.documentElement.style.setProperty('--acc-soft',`rgba(${m[0]},${m[1]},${m[2]},.16)`);const mt=$('meta[name=theme-color]');if(mt)mt.content=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()||'#0b0a12'}
+
+/* ---------- авторизация ---------- */
+function logout(silent){if(!silent)api('/auth/logout',{method:'POST'}).catch(()=>{});S.token='';S.me=null;ls.del('token');location.hash='#/login';render()}
+let pollT=null;
+async function viewLogin(el){
+  if(!BASE){el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:var(--dim)">Укажите адрес вашего сервера (например, https://ваш-проект.onrender.com)</p><input class="inp" id="srv" placeholder="https://..." autocapitalize="off"><button class="btn" id="srvOk">Продолжить</button></div>`;$('#srvOk').onclick=()=>{const v=$('#srv').value.trim();if(!/^https?:\/\//.test(v))return toast('Адрес должен начинаться с https://',1);ls.set('base',v);location.reload()};return}
+  el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:var(--dim);max-width:320px;margin:0">Форум и соцсеть сообщества. Аккаунт общий с ботом и мини-аппом KMBP EXCHANGE — вход через Telegram, без паролей.</p><button class="btn" id="lgBtn" style="width:100%;max-width:320px;margin-top:10px">Войти через Telegram</button><div id="lgBox"></div><small style="color:var(--dim);margin-top:14px" id="srvInfo"></small></div>`;
+  $('#srvInfo').innerHTML=`Сервер: ${esc(BASE)} · <a href="#" id="chSrv">сменить</a>`;$('#chSrv').onclick=e=>{e.preventDefault();ls.del('base');const v=prompt('Адрес сервера',BASE);if(v){ls.set('base',v.trim());location.reload()}};
+  $('#lgBtn').onclick=async()=>{const b=$('#lgBtn');b.disabled=true;try{const d=await post_('/auth/start');
+    $('#lgBox').innerHTML=`<p style="color:var(--dim);margin:14px 0 8px">Нажмите «Открыть Telegram» и подтвердите вход в боте. Если бот не открылся — отправьте ему вручную:</p><div class="code" id="cmd">/start forum_${d.code}</div><div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap"><a class="btn" href="${d.tg}" id="oTg">Открыть Telegram</a><a class="btn ghost" href="${d.link}" target="_blank" rel="noopener">Через браузер</a></div><div class="spin"></div><small style="color:var(--dim)">Жду подтверждения…</small>`;
+    $('#cmd').onclick=()=>{try{navigator.clipboard.writeText('/start forum_'+d.code);toast('Скопировано')}catch(e){}};
+    clearInterval(pollT);let n=0;pollT=setInterval(async()=>{if(++n>300){clearInterval(pollT);return}try{const r=await api('/auth/poll?code='+d.code);if(r.status==='ok'){clearInterval(pollT);S.token=r.token;ls.set('token',r.token);S.me=r.me;await boot();location.hash='#/';render()}else if(r.status==='expired'){clearInterval(pollT);$('#lgBox').innerHTML='<p style="color:var(--bad)">Код устарел. Нажмите «Войти через Telegram» ещё раз.</p>';b.disabled=false}}catch(e){}},2000)
+  }catch(e){toast(e.message,1);b.disabled=false}}}
+
+/* ---------- карточка поста ---------- */
+function postCard(p,full){
+  const body=p.body?`<div class="pb ${!full&&p.body.length>380?'clamp':''}">${fmt(p.body)}</div>${!full&&p.body.length>380?'<span class="more">Читать далее</span>':''}`:'';
+  const n=p.imgs.length;
+  const imgs=n?`<div class="imgs n${Math.min(n,4)}">${p.imgs.map(i=>`<img loading="lazy" data-lb="${BASE}/forum/api/img/${i}" src="${BASE}/forum/api/img/${i}" alt="">`).join('')}</div>`:'';
+  return `<article class="post" data-id="${p.id}">
+    <div class="ph">${av(p.user)}<div class="pn"><b data-href="#/u/${p.user.id}">${esc(p.user.name)}${tags(p.user.sb)}</b><small>${ago(p.ts)}${p.edited?' · изменено':''}${p.board?` · <a href="#/b/${p.board.id}">${p.board.emoji} ${esc(p.board.name)}</a>`:''}</small></div>${p.pinned?'<span class="tag pin">ЗАКРЕП</span>':''}<button class="ib" data-act="menu" style="width:34px;height:34px">${IC.more}</button></div>
+    ${p.title?`<div class="pt" data-href="#/p/${p.id}">${esc(p.title)}</div>`:''}
+    <div ${full?'':`data-href="#/p/${p.id}"`}>${body}</div>${imgs}
+    <div class="acts"><button class="act ${p.liked?'on':''}" data-act="like">${IC.heart}<span>${num(p.likes)}</span></button><button class="act" data-href="#/p/${p.id}">${IC.comment}<span>${num(p.comments)}</span></button><span class="act" style="pointer-events:none">${IC.eye}<span>${num(p.views)}</span></span><span class="sp"></span><button class="act sv ${p.saved?'on':''}" data-act="save">${IC.mark}</button><button class="act" data-act="share">${IC.share}</button></div></article>`}
+
+/* ---------- лента ---------- */
+async function loadPosts(box,params,state){
+  const q=new URLSearchParams({...params,offset:state.off});const d=await api('/feed?'+q);
+  if(state.off===0&&!d.posts.length){box.innerHTML=`<div class="empty"><div class="big">📭</div>${state.empty||'Здесь пока пусто'}</div>`}
+  else{box.insertAdjacentHTML('beforeend',d.posts.map(p=>postCard(p)).join(''));}
+  $$('.more-btn',box).forEach(x=>x.remove());state.off+=d.posts.length;
+  if(d.more)box.insertAdjacentHTML('beforeend','<div class="pad" style="text-align:center"><button class="btn ghost more-btn">Показать ещё</button></div>');
+  const mb=$('.more-btn',box);if(mb)mb.onclick=()=>loadPosts(box,params,state).catch(e=>toast(e.message,1))}
+async function viewFeed(el,p){
+  const tab=ls.get('tab')||'all';
+  el.innerHTML=`<div class="tabs">${[['all','Лента'],['top','Популярное'],['follow','Подписки']].map(([k,n])=>`<button class="tab ${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</div><div id="fl"><div class="spin"></div></div>`;
+  $$('.tab',el).forEach(b=>b.onclick=()=>{ls.set('tab',b.dataset.tab);viewFeed(el,p)});
+  const box=$('#fl',el);box.innerHTML='';
+  const st={off:0,empty:tab==='follow'?'Подпишитесь на авторов — их посты появятся здесь':'Постов пока нет. Напишите первый!'};
+  await loadPosts(box,{tab},st)}
+async function viewBoards(el){
+  el.innerHTML=`<div class="sec">Разделы форума</div>${S.boards.map(b=>`<div class="row" data-href="#/b/${b.id}"><span class="e">${b.emoji}</span><span class="t"><b>${esc(b.name)}</b><small>${b.admin_only?'Пишут только админы':'Открытый раздел'}</small></span></div>`).join('')}
+  ${S.me.main?`<div class="pad"><button class="btn ghost" id="addB">+ Новый раздел</button></div>`:''}`;
+  const ab=$('#addB',el);if(ab)ab.onclick=async()=>{const n=prompt('Название раздела');if(!n)return;const e=prompt('Эмодзи','💬')||'💬';try{await post_('/board',{name:n,emoji:e});await boot();viewBoards(el)}catch(x){toast(x.message,1)}}}
+async function viewBoard(el,id){
+  const b=S.boards.find(x=>x.id==id);if(!b){el.innerHTML='<div class="empty">Раздел не найден</div>';return}
+  el.innerHTML=`<div class="pad" style="display:flex;align-items:center;gap:10px"><button class="ib" data-href="#/boards">${IC.back}</button><div style="flex:1"><b style="font-size:18px">${b.emoji} ${esc(b.name)}</b></div><button class="btn sm" data-href="#/new/${b.id}">Написать</button></div><div id="fl"></div>`;
+  if(S.me.main)$('.pad',el).insertAdjacentHTML('beforeend',`<button class="ib" id="delB" title="Удалить раздел">🗑</button>`);
+  const d=$('#delB',el);if(d)d.onclick=async()=>{if(await confirmBox('Удалить раздел? Посты останутся без раздела')){await post_('/board/delete',{id:b.id});await boot();location.hash='#/boards'}};
+  await loadPosts($('#fl',el),{board:b.id},{off:0,empty:'В этом разделе пока нет постов'})}
+async function viewSaved(el){el.innerHTML=`<div class="pad" style="display:flex;align-items:center;gap:10px"><button class="ib" data-href="#/me">${IC.back}</button><b style="font-size:18px">Закладки</b></div><div id="fl"></div>`;await loadPosts($('#fl',el),{tab:'saved'},{off:0,empty:'Сохранённых постов нет'})}
+
+/* ---------- пост + комментарии ---------- */
+let replyTo=null;
+async function viewPost(el,id){
+  const d=await api('/post?id='+id);const p=d.post;replyTo=null;
+  const top=d.comments.filter(c=>!c.parent),kids={};d.comments.filter(c=>c.parent).forEach(c=>(kids[c.parent]=kids[c.parent]||[]).push(c));
+  const cm=(c,rep)=>`<div class="cmt ${rep?'rep':''}" data-cid="${c.id}">${av(c.user,'s')}<div class="cb"><div class="h"><b data-href="#/u/${c.user.id}">${esc(c.deleted?'—':c.user.name)}</b>${c.deleted?'':tags(c.user.sb)}<small>${ago(c.ts)}</small></div>${c.deleted?'<p class="del">Комментарий удалён</p>':`<p>${fmt(c.body)}</p>`}${c.deleted?'':`<div class="ca"><button data-act="clike" class="${c.liked?'on':''}">${IC.heart.replace('class="i"','class="i" style="width:16px;height:16px"')}<span>${c.likes||''}</span></button><button data-act="creply" data-n="${esc(c.user.username||c.user.name)}">Ответить</button>${c.can_delete?'<button data-act="cdel">Удалить</button>':''}</div>`}</div></div>`;
+  el.innerHTML=`<div style="display:flex;flex-direction:column;min-height:100%"><div class="pad" style="padding-bottom:0"><button class="ib" data-href="#/">${IC.back}</button></div><div style="flex:1">${postCard(p,true)}<div class="sec">Комментарии · ${p.comments}</div>${top.length?top.map(c=>cm(c)+(kids[c.id]||[]).map(k=>cm(k,true)).join('')).join(''):'<div class="empty" style="padding:24px">Комментариев пока нет — будьте первым</div>'}</div>
+  <div style="position:sticky;bottom:0;background:var(--bg)"><div class="reply-to" id="rpl" hidden><span></span><button class="ib" style="width:28px;height:28px" id="rplX">✕</button></div><div class="cform"><textarea id="cTxt" rows="1" maxlength="2000" placeholder="Написать комментарий…"></textarea><button class="send" id="cSend" disabled>${IC.send}</button></div></div></div>`;
+  const ta=$('#cTxt',el),sb=$('#cSend',el);ta.oninput=()=>{sb.disabled=!ta.value.trim();ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px'};
+  sb.onclick=async()=>{sb.disabled=true;try{await post_('/comment',{post_id:p.id,body:ta.value,parent_id:replyTo});viewPost(el,id)}catch(e){toast(e.message,1);sb.disabled=false}};
+  el.onclick=async e=>{const b=e.target.closest('[data-act]');if(!b)return;const cid=+(b.closest('[data-cid]')||{dataset:{}}).dataset.cid;
+    if(b.dataset.act==='creply'){replyTo=cid;const r=$('#rpl',el);r.hidden=false;r.firstElementChild.textContent='Ответ для '+b.dataset.n;ta.value='@'+b.dataset.n.replace(/\s/g,'_')+' ';ta.focus();$('#rplX',el).onclick=()=>{replyTo=null;r.hidden=true};ta.oninput()}
+    else if(b.dataset.act==='clike'){try{const r=await post_('/like',{kind:'c',id:cid});b.classList.toggle('on',r.liked);b.lastElementChild.textContent=r.count||''}catch(x){toast(x.message,1)}}
+    else if(b.dataset.act==='cdel'){if(await confirmBox('Удалить комментарий?')){try{await post_('/comment/delete',{id:cid});viewPost(el,id)}catch(x){toast(x.message,1)}}}}}
+
+/* ---------- действия над постами (делегирование) ---------- */
+document.addEventListener('click',async e=>{
+  const lb=e.target.closest('[data-lb]');if(lb){const d=document.createElement('div');d.className='lb';d.innerHTML=`<img src="${lb.dataset.lb}">`;d.onclick=()=>d.remove();document.body.appendChild(d);return}
+  const hr=e.target.closest('[data-href]');
+  const act=e.target.closest('[data-act]');
+  const card=e.target.closest('.post');
+  if(act&&card&&['like','save','menu','share'].includes(act.dataset.act)){e.stopPropagation();const id=+card.dataset.id;
+    try{
+      if(act.dataset.act==='like'){const r=await post_('/like',{kind:'p',id});act.classList.toggle('on',r.liked);act.lastElementChild.textContent=num(r.count)}
+      else if(act.dataset.act==='save'){const r=await post_('/bookmark',{post_id:id});act.classList.toggle('on',r.saved);toast(r.saved?'Сохранено в закладки':'Убрано из закладок')}
+      else if(act.dataset.act==='share'){const url=(BASE||location.origin)+'/forum#/p/'+id;if(navigator.share){navigator.share({url}).catch(()=>{})}else{try{await navigator.clipboard.writeText(url);toast('Ссылка скопирована')}catch(x){prompt('Ссылка',url)}}}
+      else if(act.dataset.act==='menu'){const can=card.querySelector('.pn b')&&true;const pd=await api('/post?id='+id);const p=pd.post;const items=[];
+        if(p.can_edit)items.push({t:'✏️ Редактировать',k:'edit'});
+        if(S.me.staff)items.push({t:p.pinned?'📌 Открепить':'📌 Закрепить',k:'pin'});
+        if(!p.mine)items.push({t:'🚩 Пожаловаться',k:'rep'});
+        if(p.can_edit)items.push({t:'🗑 Удалить',k:'del',bad:true});
+        const c=await sheet(items);if(!c)return;
+        if(c.k==='edit')location.hash='#/edit/'+id;
+        else if(c.k==='pin'){await post_('/post/pin',{id,pin:!p.pinned});toast('Готово');render()}
+        else if(c.k==='rep'){const r=prompt('Причина жалобы');if(r!==null){await post_('/report',{kind:'p',id,reason:r});toast('Жалоба отправлена')}}
+        else if(c.k==='del'&&await confirmBox('Удалить пост?')){await post_('/post/delete',{id});toast('Удалено');if(location.hash.startsWith('#/p/'))location.hash='#/';else render()}}
+    }catch(x){toast(x.message,1)}return}
+  if(hr&&!e.target.closest('a')){e.preventDefault();if(card&&e.target.closest('.more')||true)location.hash=hr.dataset.href}});
+
+/* ---------- создание / редактирование ---------- */
+function compress(file){return new Promise(res=>{if(file.type==='image/gif'||file.size<350000){res(file);return}const im=new Image(),u=URL.createObjectURL(file);im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);c.toBlob(b=>{URL.revokeObjectURL(u);res(b?new File([b],'p.jpg',{type:'image/jpeg'}):file)},'image/jpeg',.82)};im.onerror=()=>res(file);im.src=u})}
+async function viewCompose(el,boardId,editId){
+  let ed=null;if(editId){ed=(await api('/post?id='+editId)).post}
+  const files=[];
+  const opts=S.boards.filter(b=>!b.admin_only||S.me.staff).map(b=>`<option value="${b.id}" ${(ed&&ed.board&&ed.board.id==b.id)||(!ed&&boardId==b.id)?'selected':''}>${b.emoji} ${esc(b.name)}</option>`).join('');
+  el.innerHTML=`<div class="pad"><div style="display:flex;align-items:center;gap:10px"><button class="ib" onclick="history.back()">${IC.back}</button><b style="font-size:18px;flex:1">${ed?'Редактировать пост':'Новый пост'}</b><button class="btn sm" id="pub">${ed?'Сохранить':'Опубликовать'}</button></div>
+  ${ed?'':`<label class="lbl">Раздел</label><select class="inp" id="pBoard">${opts}</select>`}
+  <label class="lbl">Заголовок (необязательно)</label><input class="inp" id="pTitle" maxlength="120" value="${esc(ed?ed.title:'')}">
+  <label class="lbl">Текст</label><textarea class="inp" id="pBody" maxlength="8000" placeholder="О чём хотите рассказать? Можно #теги и @упоминания">${esc(ed?ed.body:'')}</textarea>
+  ${ed?'':`<div class="thumbs" id="thumbs"></div><div style="margin-top:12px"><input type="file" id="pFile" accept="image/*" multiple hidden><button class="btn ghost sm" id="pAdd">${IC.img.replace('class="i"','class="i" style="width:18px;height:18px;vertical-align:-4px"')} Добавить фото (до 4)</button></div>`}</div>`;
+  const draw=()=>{const t=$('#thumbs',el);if(!t)return;t.innerHTML=files.map((f,i)=>`<div><img src="${URL.createObjectURL(f)}"><button data-rm="${i}">✕</button></div>`).join('');$$('[data-rm]',t).forEach(b=>b.onclick=()=>{files.splice(+b.dataset.rm,1);draw()})};
+  const pf=$('#pFile',el);if(pf){$('#pAdd',el).onclick=()=>pf.click();pf.onchange=async()=>{for(const f of pf.files){if(files.length>=4)break;files.push(await compress(f))}pf.value='';draw()}}
+  $('#pub',el).onclick=async()=>{const b=$('#pub',el);b.disabled=true;try{
+    if(ed){await post_('/post/edit',{id:ed.id,title:$('#pTitle',el).value,body:$('#pBody',el).value});location.hash='#/p/'+ed.id}
+    else{const f=new FormData();f.append('board_id',$('#pBoard',el).value);f.append('title',$('#pTitle',el).value);f.append('body',$('#pBody',el).value);files.forEach(x=>f.append('img',x,x.name||'p.jpg'));const r=await api('/post',{method:'POST',form:f});location.hash='#/p/'+r.id}
+  }catch(e){toast(e.message,1);b.disabled=false}}}
+
+/* ---------- профиль ---------- */
+async function viewUser(el,id){
+  const d=await api('/user?id='+id);const u=d.user;
+  el.innerHTML=`<div class="banner" style="${u.bn?`background-image:url(${BASE}/forum/api/banner/${u.id})`:''}"><button class="ib" style="position:absolute;top:calc(8px + var(--safe-t));left:8px;background:rgba(0,0,0,.4);color:#fff" onclick="history.back()">${IC.back}</button></div>
+  <div class="prof"><div style="display:flex;align-items:flex-end;justify-content:space-between">${av(u,'l')}<div style="display:flex;gap:8px;padding-bottom:6px" id="pbt"></div></div>
+  <div style="margin-top:8px"><b style="font-size:20px">${esc(u.name)}</b> ${tags(u.sb)}<div style="color:var(--dim)">${u.username?'@'+esc(u.username):''}</div>${u.bio?`<p style="margin:8px 0 0">${fmt(u.bio)}</p>`:''}${d.joined?`<small style="color:var(--dim)">В сообществе с ${new Date(d.joined*1000).toLocaleDateString('ru-RU',{month:'long',year:'numeric'})}</small>`:''}</div>
+  <div class="stats"><div><b>${d.posts}</b><small>постов</small></div><div data-href="#/fl/${u.id}/followers"><b id="fc">${d.followers}</b><small>подписчиков</small></div><div data-href="#/fl/${u.id}/following"><b>${d.following}</b><small>подписок</small></div></div></div><div id="fl"></div>`;
+  const bt=$('#pbt',el);
+  if(d.me){bt.innerHTML=`<button class="btn ghost sm" data-href="#/edit-profile">Изменить</button><button class="btn ghost sm" data-href="#/settings">⚙️</button>`;
+    $('.prof',el).insertAdjacentHTML('beforeend','');
+    $('.stats',el).insertAdjacentHTML('afterend',`<div style="display:flex;gap:8px;margin:0 0 8px"><button class="btn ghost sm" data-href="#/saved">🔖 Закладки</button></div>`)}
+  else{bt.innerHTML=`<button class="btn sm" id="fb">${d.is_following?'Отписаться':'Подписаться'}</button><button class="btn ghost sm" data-href="#/c/${u.id}">Написать</button>`;
+    $('#fb',el).onclick=async()=>{try{const r=await post_('/follow',{user_id:u.id});$('#fb',el).textContent=r.following?'Отписаться':'Подписаться';$('#fc',el).textContent=r.followers}catch(e){toast(e.message,1)}}}
+  await loadPosts($('#fl',el),{user:u.id},{off:0,empty:'Постов пока нет'})}
+async function viewFollows(el,id,kind){const d=await api(`/user/list?id=${id}&kind=${kind}`);
+  el.innerHTML=`<div class="pad" style="display:flex;align-items:center;gap:10px"><button class="ib" onclick="history.back()">${IC.back}</button><b style="font-size:18px">${kind==='following'?'Подписки':'Подписчики'}</b></div>${d.users.length?d.users.map(u=>`<div class="row" data-href="#/u/${u.id}">${av(u)}<span class="t"><b>${esc(u.name)} ${tags(u.sb)}</b><small>${u.username?'@'+esc(u.username):''}</small></span></div>`).join(''):'<div class="empty">Пока никого</div>'}`}
+async function viewEditProfile(el){
+  const u=S.me;
+  el.innerHTML=`<div class="pad"><div style="display:flex;align-items:center;gap:10px"><button class="ib" onclick="history.back()">${IC.back}</button><b style="font-size:18px;flex:1">Профиль</b><button class="btn sm" id="sv">Сохранить</button></div>
+  <p style="color:var(--dim);font-size:13px">Профиль общий с ботом и мини-аппом KMBP EXCHANGE — изменения видны везде. Имя берётся из Telegram.</p>
+  <label class="lbl">О себе</label><textarea class="inp" id="bio" maxlength="300" style="min-height:90px">${esc(u.bio)}</textarea>
+  <label class="lbl">Аватар</label><input type="file" id="fa" accept="image/*" class="inp"><label class="lbl">Баннер</label><input type="file" id="fb" accept="image/*" class="inp"></div>`;
+  $('#sv',el).onclick=async()=>{const b=$('#sv',el);b.disabled=true;try{
+    for(const [id,path] of [['fa','/me/avatar'],['fb','/me/banner']]){const f=$('#'+id,el).files[0];if(f){const fd=new FormData();fd.append('file',await compress(f),'i.jpg');await api(path,{method:'POST',form:fd})}}
+    const r=await post_('/me/update',{bio:$('#bio',el).value});S.me=r.me;toast('Сохранено');location.hash='#/me'}catch(e){toast(e.message,1);b.disabled=false}}}
+
+/* ---------- уведомления ---------- */
+const NT={like_p:'оценил(а) ваш пост',like_c:'оценил(а) ваш комментарий',comment:'прокомментировал(а) ваш пост',reply:'ответил(а) на ваш комментарий',mention:'упомянул(а) вас',follow:'подписался(лась) на вас'};
+async function viewNotifs(el){
+  const d=await api('/notifs');
+  el.innerHTML=`<div class="pad" style="display:flex;align-items:center;gap:10px"><button class="ib" onclick="history.back()">${IC.back}</button><b style="font-size:18px">Уведомления</b></div>${d.items.length?d.items.map(n=>`<div class="row" style="${n.read?'':'background:var(--acc-soft)'}" data-href="${n.post_id?'#/p/'+n.post_id:'#/u/'+n.actor.id}">${av(n.actor)}<span class="t"><b>${esc(n.actor.name)}</b><small style="white-space:normal">${NT[n.kind]||''}${n.snippet?': «'+esc(n.snippet)+'»':''} · ${ago(n.ts)}</small></span></div>`).join(''):'<div class="empty"><div class="big">🔔</div>Пока тихо</div>'}`;
+  post_('/notifs/read').then(()=>{S.counts.notifs=0;chrome()}).catch(()=>{})}
+
+/* ---------- чаты ---------- */
+let chatT=null;
+async function viewChats(el){
+  const d=await api('/chats');
+  el.innerHTML=`<div class="sec">Сообщения</div>${d.chats.map(c=>`<div class="row" data-href="#/c/${c.user.id}">${av(c.user)}<span class="t"><b>${esc(c.user.name)} ${c.support?'<span class="tag">ПОДДЕРЖКА</span>':tags(c.user.sb)}</b><small>${c.mine?'Вы: ':''}${esc(c.last)}</small></span><span style="text-align:right"><small style="color:var(--dim)">${ago(c.ts)}</small>${c.unread?`<div class="unr" style="margin:4px 0 0 auto">${c.unread}</div>`:''}</span></div>`).join('')||'<div class="empty"><div class="big">✉️</div>Диалогов пока нет. Откройте чей-нибудь профиль и нажмите «Написать».</div>'}`}
+async function viewChat(el,peer){
+  let last=0,sup=null,typedAt=0;
+  el.innerHTML=`<div class="chat"><div class="chat-h"><button class="ib" onclick="history.back()">${IC.back}</button><div id="chH" style="flex:1;display:flex;align-items:center;gap:10px"></div></div><div id="supBar" class="supbar" hidden></div><div class="chat-log" id="log"></div><div class="cform"><textarea id="mTxt" rows="1" maxlength="3000" placeholder="Сообщение…"></textarea><button class="send" id="mSend" disabled>${IC.send}</button></div></div>`;
+  const log=$('#log',el),ta=$('#mTxt',el),sb=$('#mSend',el);
+  const draw=async(first)=>{const d=await api('/messages?peer='+peer);
+    $('#chH',el).innerHTML=`${av(d.peer,'s')}<div><b data-href="#/u/${d.peer.id}">${esc(d.peer.name)}</b><small style="display:block;color:var(--dim);font-size:12px">${d.typing?'печатает…':(d.peer.username?'@'+esc(d.peer.username):'')}</small></div>`;
+    if(d.blocked){$('.cform',el).style.display='none'}
+    if(d.support_mode!==undefined){const bar=$('#supBar',el);if(sup!==d.support_mode){sup=d.support_mode;bar.hidden=false;bar.innerHTML=sup==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="btn sm" id="opB">🙋 Позвать оператора</button>':sup==='waiting'?'<span>⏳ Оператор вызван — ответит здесь</span><button class="btn ghost sm" id="opC">Отменить</button>':'<span>👤 С вами на связи оператор</span>';
+      const o=$('#opB',bar);if(o)o.onclick=async()=>{o.disabled=true;try{await post_('/support/operator');draw()}catch(e){toast(e.message,1);o.disabled=false}};
+      const c=$('#opC',bar);if(c)c.onclick=async()=>{try{await post_('/support/cancel');draw()}catch(e){toast(e.message,1)}}}}
+    const lastId=d.messages.length?d.messages[d.messages.length-1].id:0;
+    if(first||lastId!==last){const near=log.scrollHeight-log.scrollTop-log.clientHeight<140;last=lastId;log.innerHTML=d.messages.map(m=>`<div class="msg ${m.mine?'me':''}">${fmt(m.body)}<small>${clock(m.ts)}${m.mine?(m.read?' ✓✓':' ✓'):''}</small></div>`).join('');if(first||near)log.scrollTop=log.scrollHeight}};
+  await draw(true);clearInterval(chatT);chatT=setInterval(()=>{if(!el.isConnected){clearInterval(chatT);return}if(!document.hidden)draw().catch(()=>{})},2500);
+  ta.oninput=()=>{sb.disabled=!ta.value.trim();ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';if(Date.now()-typedAt>3000){typedAt=Date.now();post_('/typing',{peer}).catch(()=>{})}};
+  sb.onclick=async()=>{const t=ta.value;if(!t.trim())return;sb.disabled=true;ta.value='';ta.style.height='auto';try{await post_('/messages',{peer,text:t});await draw(true)}catch(e){toast(e.message,1);ta.value=t}};
+  ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&window.innerWidth>700){e.preventDefault();sb.click()}}}
+
+/* ---------- поиск ---------- */
+async function viewSearch(el,q){
+  q=decodeURIComponent(q||'');
+  el.innerHTML=`<div class="pad" style="display:flex;gap:8px;align-items:center"><button class="ib" onclick="history.back()">${IC.back}</button><input class="inp" id="q" placeholder="Поиск постов и людей" value="${esc(q)}" autocomplete="off"></div><div id="res"></div>`;
+  const run=async()=>{const v=$('#q',el).value.trim();const r=$('#res',el);if(v.length<2){r.innerHTML='<div class="empty"><div class="big">🔍</div>Введите минимум 2 символа</div>';return}
+    try{const d=await api('/search?q='+encodeURIComponent(v));r.innerHTML=(d.users.length?`<div class="sec">Люди</div>${d.users.map(u=>`<div class="row" data-href="#/u/${u.id}">${av(u)}<span class="t"><b>${esc(u.name)} ${tags(u.sb)}</b><small>${u.username?'@'+esc(u.username):''}</small></span></div>`).join('')}`:'')+(d.posts.length?`<div class="sec">Посты</div>${d.posts.map(p=>postCard(p)).join('')}`:'')||'<div class="empty"><div class="big">🤷</div>Ничего не найдено</div>'}catch(e){toast(e.message,1)}};
+  let t;$('#q',el).oninput=()=>{clearTimeout(t);t=setTimeout(run,350)};run()}
+
+/* ---------- настройки ---------- */
+function viewSettings(el){
+  const th=ls.get('theme')||'dark',ac=ls.get('acc')||getComputedStyle(document.documentElement).getPropertyValue('--acc').trim();
+  el.innerHTML=`<div class="pad"><div style="display:flex;align-items:center;gap:10px"><button class="ib" onclick="history.back()">${IC.back}</button><b style="font-size:18px">Настройки</b></div>
+  <label class="lbl">Тема</label><div style="display:flex;gap:8px">${[['dark','Тёмная'],['amoled','AMOLED'],['light','Светлая']].map(([k,n])=>`<button class="tab ${th===k?'on':''}" data-th="${k}">${n}</button>`).join('')}</div>
+  <label class="lbl">Акцентный цвет</label><div class="pal">${PAL.map(c=>`<i style="background:${c}" class="${c.toLowerCase()===ac.toLowerCase()?'on':''}" data-ac="${c}"></i>`).join('')}</div>
+  <label class="lbl">Сервер</label><div style="color:var(--dim);font-size:13px;word-break:break-all">${esc(BASE)}</div>
+  <div style="margin-top:22px;display:flex;flex-direction:column;gap:10px"><button class="btn ghost" data-href="#/c/-777">💬 Поддержка</button><button class="btn bad" id="out">Выйти из аккаунта</button></div>
+  <p style="color:var(--dim);font-size:12px;margin-top:20px">KMBP FORUM · аккаунты, профили и личные сообщения общие с ботом KMBP EXCHANGE.</p></div>`;
+  $$('[data-th]',el).forEach(b=>b.onclick=()=>{ls.set('theme',b.dataset.th);applyTheme();viewSettings(el)});
+  $$('[data-ac]',el).forEach(b=>b.onclick=()=>{ls.set('acc',b.dataset.ac);applyTheme();viewSettings(el)});
+  $('#out',el).onclick=async()=>{if(await confirmBox('Выйти из аккаунта?'))logout()}}
+
+/* ---------- каркас и роутер ---------- */
+async function boot(){const b=await api('/boot');S.boards=b.boards;S.bot=b.bot;if(S.token){const m=await api('/me');S.me=m.me;await ping()}applyTheme()}
+async function ping(){try{S.counts=await api('/ping');chrome()}catch(e){}}
+function chrome(){const bn=$('#bellB'),mb=$('#msgB');if(bn){bn.hidden=!S.counts.notifs;bn.textContent=S.counts.notifs>99?'99+':S.counts.notifs}if(mb){mb.hidden=!S.counts.msgs;mb.textContent=S.counts.msgs>99?'99+':S.counts.msgs}}
+function shell(){const app=$('#app');if($('#hdr'))return;app.innerHTML=`<header class="top" id="hdr"><h1>KMBP <b>FORUM</b></h1><button class="ib" data-href="#/search/">${IC.search}</button><button class="ib" data-href="#/notif">${IC.bell}<span class="badge" id="bellB" hidden></span></button></header><div id="view"></div><nav class="bar" id="nav"><button data-n="feed" data-href="#/">${IC.home}Лента</button><button data-n="boards" data-href="#/boards">${IC.grid}Разделы</button><button class="plus" data-href="#/new">${IC.plus}</button><button data-n="chats" data-href="#/chats">${IC.chat}Чаты<span class="badge" id="msgB" hidden></span></button><button data-n="me" data-href="#/me">${IC.user}Профиль</button></nav>`}
+let rid=0;
+async function render(){
+  const my=++rid;clearInterval(chatT);
+  const h=(location.hash||'#/').replace(/^#\/?/,'');const [r,a,b]=h.split('/');
+  if(!S.token||r==='login'){if(S.token&&r==='login'){location.hash='#/';return}$('#app').innerHTML='<div id="view"></div>';await viewLogin($('#view'));return}
+  if(!S.me){try{await boot()}catch(e){$('#app').innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:var(--bad)">${esc(e.message)}</p><button class="btn" onclick="location.reload()">Повторить</button></div>`;return}}
+  shell();const v=$('#view');
+  const full=r==='c'; $('#hdr').style.display=full?'none':'';$('#nav').style.display=full?'none':'';
+  const nav=({'':'feed',p:'feed',boards:'boards',b:'boards',chats:'chats',c:'chats',me:'me',u:(a==S.me.id?'me':'')})[r];
+  $$('#nav button[data-n]').forEach(x=>x.classList.toggle('on',x.dataset.n===nav));
+  v.scrollTop=0;v.innerHTML='<div class="spin"></div>';
+  try{
+    const t=document.createElement('div');
+    let fn;
+    if(r===''||r==='feed')fn=()=>viewFeed(t);
+    else if(r==='boards')fn=()=>viewBoards(t);
+    else if(r==='b')fn=()=>viewBoard(t,a);
+    else if(r==='p'||r==='post')fn=()=>viewPost(t,a);
+    else if(r==='u')fn=()=>viewUser(t,a);
+    else if(r==='me')fn=()=>viewUser(t,S.me.id);
+    else if(r==='fl')fn=()=>viewFollows(t,a,b);
+    else if(r==='new')fn=()=>viewCompose(t,a);
+    else if(r==='edit')fn=()=>viewCompose(t,0,a);
+    else if(r==='edit-profile')fn=()=>viewEditProfile(t);
+    else if(r==='notif')fn=()=>viewNotifs(t);
+    else if(r==='chats')fn=()=>viewChats(t);
+    else if(r==='c')fn=()=>viewChat(t,+a);
+    else if(r==='search')fn=()=>viewSearch(t,a);
+    else if(r==='saved')fn=()=>viewSaved(t);
+    else if(r==='settings')fn=()=>viewSettings(t);
+    else fn=()=>viewFeed(t);
+    await fn();
+    if(my!==rid)return;
+    v.innerHTML='';v.appendChild(t);
+    if(r==='c'){v.style.overflow='hidden';t.style.height='100%';const lg=$('#log',t);if(lg)lg.scrollTop=lg.scrollHeight}else v.style.overflow='';
+  }catch(e){if(my===rid)v.innerHTML=`<div class="empty"><div class="big">⚠️</div>${esc(e.message)}<br><br><button class="btn ghost" onclick="render()">Повторить</button></div>`}
+}
+window.addEventListener('hashchange',render);
+setInterval(()=>{if(S.token&&!document.hidden)ping()},20000);
+(async()=>{applyTheme();if(!location.hash)location.hash=S.token?'#/':'#/login';
+  try{if(BASE)await boot()}catch(e){}render()})();
+</script>
+</body>
+</html>

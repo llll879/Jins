@@ -40,6 +40,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import forum  # KMBP FORUM: форум/соцсеть, синхронизированная с ботом (/forum, /forum/api/*)
 import support  # ИИ-поддержка + вызов оператора (первый чат у всех пользователей)
 import public_api  # публичный API v1 (ключи, вебхуки, документация) — см. API.md
 import group_watch  # v35: бот в группах — сбор объявлений на модерацию и предупреждения о скамерах
@@ -6852,6 +6853,7 @@ def build_web(bot: Bot):
     r.add_post("/api/admin/escrow_config", api_admin_escrow_config)
     public_api.install(app, sys.modules[__name__])  # /api/v1/*, /api/apikeys, /developers
     support.install(app, sys.modules[__name__])     # /api/support/*
+    forum.install(app, sys.modules[__name__])       # /forum, /forum/api/*
     return app
 
 
@@ -6875,6 +6877,7 @@ async def main():
     await init_db()
     await public_api.start(sys.modules[__name__])
     await support.start(sys.modules[__name__])
+    await forum.start(sys.modules[__name__])
     await group_watch.start(sys.modules[__name__])
     HTTP = ClientSession(timeout=ClientTimeout(total=30))
     _ai_sem = asyncio.Semaphore(3)
@@ -6917,6 +6920,8 @@ async def main():
     dp = Dispatcher()
     if public_api.router is not None:
         dp.include_router(public_api.router)
+    if forum.router is not None:
+        dp.include_router(forum.router)     # вход в форум: /start forum_КОД — раньше основного /start
     if support.router is not None:
         dp.include_router(support.router)   # ответы админов (Reply) на заявки поддержки — до основного router
     group_watch.install(dp, sys.modules[__name__])   # ДО основного router: смотрит сообщения групп, не перехватывая их

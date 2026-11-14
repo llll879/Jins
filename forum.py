@@ -1,0 +1,891 @@
+# -*- coding: utf-8 -*-
+"""
+KMBP FORUM — вторая часть проекта: форум / соцсеть, синхронизированная с ботом и мини-аппом.
+
+  • Работает в том же процессе и в той же базе, поэтому общие: аккаунты (users), аватар, баннер, описание, значки у ника,
+    личные сообщения (direct_messages — это те же чаты, что в мини-аппе, включая «Поддержку»), блокировки.
+  • Вход без паролей — через бота: приложение показывает код, пользователь нажимает «Войти через Telegram» (/start forum_КОД),
+    бот подтверждает, приложение получает токен.
+  • Клиент — один файл forum.html (без внешних библиотек). Отдаётся по /forum, скачивается с /forum/app.html?dl=1
+    (адрес сервера уже вписан) и собирается в APK любым конвертером «HTML to APK».
+  • API: /forum/api/* (JSON, заголовок Authorization: Bearer <token>, CORS открыт — нужен для APK).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import secrets
+import time
+
+from aiohttp import web
+
+try:
+    from aiogram import F, Router
+    from aiogram.types import Message
+    router = Router(name="forum")
+except Exception:  # pragma: no cover
+    router = None
+
+log = logging.getLogger("jins.forum")
+bm = None
+
+
+def P():
+    return bm.pool
+
+
+class FErr(Exception):
+    def __init__(self, status, code, msg=""):
+        self.status, self.code, self.msg = status, code, msg or code
+
+
+def J(data, status=200):
+    return web.json_response(data, status=status, dumps=lambda o: json.dumps(o, ensure_ascii=False, default=str))
+
+
+DDL = """
+CREATE TABLE IF NOT EXISTS forum_sessions(token TEXT PRIMARY KEY, user_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_used TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS forum_sessions_user_idx ON forum_sessions(user_id);
+CREATE TABLE IF NOT EXISTS forum_login(code TEXT PRIMARY KEY, user_id BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS forum_boards(id SERIAL PRIMARY KEY, name TEXT NOT NULL, emoji TEXT NOT NULL DEFAULT '💬', sort INT NOT NULL DEFAULT 0, admin_only BOOLEAN NOT NULL DEFAULT FALSE);
+CREATE TABLE IF NOT EXISTS forum_posts(
+    id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, board_id INT REFERENCES forum_boards(id) ON DELETE SET NULL,
+    title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), edited_at TIMESTAMPTZ,
+    pinned BOOLEAN NOT NULL DEFAULT FALSE, views INT NOT NULL DEFAULT 0, deleted BOOLEAN NOT NULL DEFAULT FALSE);
+CREATE INDEX IF NOT EXISTS forum_posts_feed_idx ON forum_posts(id DESC) WHERE NOT deleted;
+CREATE INDEX IF NOT EXISTS forum_posts_user_idx ON forum_posts(user_id);
+CREATE INDEX IF NOT EXISTS forum_posts_board_idx ON forum_posts(board_id);
+CREATE TABLE IF NOT EXISTS forum_images(id SERIAL PRIMARY KEY, post_id INT NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE, data BYTEA NOT NULL, mime TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS forum_images_post_idx ON forum_images(post_id);
+CREATE TABLE IF NOT EXISTS forum_comments(
+    id SERIAL PRIMARY KEY, post_id INT NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE, user_id BIGINT NOT NULL, parent_id INT,
+    body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), deleted BOOLEAN NOT NULL DEFAULT FALSE);
+CREATE INDEX IF NOT EXISTS forum_comments_post_idx ON forum_comments(post_id, id);
+CREATE TABLE IF NOT EXISTS forum_likes(user_id BIGINT NOT NULL, kind CHAR(1) NOT NULL, target_id INT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(user_id, kind, target_id));
+CREATE INDEX IF NOT EXISTS forum_likes_target_idx ON forum_likes(kind, target_id);
+CREATE TABLE IF NOT EXISTS forum_follows(follower_id BIGINT NOT NULL, followee_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(follower_id, followee_id));
+CREATE INDEX IF NOT EXISTS forum_follows_followee_idx ON forum_follows(followee_id);
+CREATE TABLE IF NOT EXISTS forum_bookmarks(user_id BIGINT NOT NULL, post_id INT NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(user_id, post_id));
+CREATE TABLE IF NOT EXISTS forum_notifs(
+    id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, kind TEXT NOT NULL, actor_id BIGINT NOT NULL, post_id INT, comment_id INT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), read BOOLEAN NOT NULL DEFAULT FALSE);
+CREATE INDEX IF NOT EXISTS forum_notifs_user_idx ON forum_notifs(user_id, id DESC);
+CREATE TABLE IF NOT EXISTS forum_reports(
+    id SERIAL PRIMARY KEY, reporter_id BIGINT NOT NULL, kind CHAR(1) NOT NULL, target_id INT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+"""
+
+SEED_BOARDS = [("Новости", "📰", 1, True), ("Общий", "💬", 2, False), ("Вопросы", "❓", 3, False), ("Пиар", "📣", 4, False),
+               ("Проекты", "🧩", 5, False), ("Флуд", "🎲", 6, False)]
+
+TITLE_MAX, BODY_MAX, COMMENT_MAX, BIO_MAX, IMG_MAX, IMG_COUNT = 120, 8000, 2000, 300, 4 * 1024 * 1024, 4
+IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+_seen_views = {}
+_seen_touch = {}
+
+
+# ============================================================================ CORS + авторизация
+@web.middleware
+async def cors_mw(request, handler):
+    if not request.path.startswith("/forum/api/"):
+        return await handler(request)
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+    else:
+        try:
+            resp = await handler(request)
+        except web.HTTPException as e:
+            resp = e
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Max-Age"] = "86400"
+    return resp
+
+
+def api(fn=None, *, auth=True):
+    """Обёртка эндпоинта: авторизация по Bearer-токену, единый формат ошибок."""
+    def deco(f):
+        async def wrapper(request):
+            try:
+                uid = await uid_of(request, auth)
+                request["fuid"] = uid
+                return await f(request)
+            except FErr as e:
+                return J({"error": e.code, "message": e.msg}, e.status)
+            except web.HTTPException:
+                raise
+            except Exception:
+                log.exception("forum api failed: %s", request.path)
+                return J({"error": "server", "message": "Ошибка сервера"}, 500)
+        return wrapper
+    return deco(fn) if fn else deco
+
+
+async def uid_of(request, required=True):
+    h = request.headers.get("Authorization") or ""
+    tok = h[7:].strip() if h.lower().startswith("bearer ") else ""
+    uid = 0
+    if tok:
+        uid = await P().fetchval("SELECT user_id FROM forum_sessions WHERE token=$1", tok) or 0
+    if not uid and required:
+        raise FErr(401, "auth", "Нужно войти")
+    if uid and time.monotonic() - _seen_touch.get(uid, 0) > 60:
+        _seen_touch[uid] = time.monotonic()
+        if len(_seen_touch) > 5000:
+            _seen_touch.clear()
+        await P().execute("UPDATE users SET last_seen=now() WHERE user_id=$1", uid)
+        await P().execute("UPDATE forum_sessions SET last_used=now() WHERE token=$1", tok)
+    return uid
+
+
+async def jbody(request):
+    try:
+        d = await request.json()
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def to_int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+async def is_staff(uid):
+    return await bm.role(uid) is not None
+
+
+# ============================================================================ пользователи
+async def users_map(ids):
+    ids = list({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = await P().fetch(
+        "SELECT user_id,username,first_name,last_name,bio,accent,created_at,(avatar_data IS NOT NULL OR tg_avatar_data IS NOT NULL OR photo_url IS NOT NULL) av,"
+        "(banner_data IS NOT NULL) bn FROM users WHERE user_id=ANY($1::bigint[])", ids)
+    sb = await bm.staff_badges(ids)
+    out = {}
+    for r in rows:
+        out[r["user_id"]] = {
+            "id": r["user_id"], "username": r["username"] or "",
+            "name": " ".join(x for x in [r["first_name"], r["last_name"]] if x) or r["username"] or "Пользователь",
+            "av": bool(r["av"]), "bn": bool(r["bn"]), "sb": sb.get(r["user_id"], ""), "bio": r["bio"] or "", "accent": r["accent"] or ""}
+    return out
+
+
+def ghost(uid):
+    return {"id": uid, "username": "", "name": "Пользователь", "av": False, "bn": False, "sb": "", "bio": "", "accent": ""}
+
+
+async def me_json(uid):
+    u = (await users_map([uid])).get(uid) or ghost(uid)
+    u = dict(u)
+    u["staff"] = await is_staff(uid)
+    u["main"] = await bm.is_main(uid)
+    return u
+
+
+# ============================================================================ вход через бота
+async def a_boot(request):
+    boards = [dict(r) for r in await P().fetch("SELECT id,name,emoji,admin_only FROM forum_boards ORDER BY sort,id")]
+    return J({"boards": boards, "bot": bm.BOT_USERNAME, "name": "KMBP FORUM"})
+
+
+async def a_auth_start(request):
+    await P().execute("DELETE FROM forum_login WHERE created_at < now() - interval '15 minutes'")
+    code = secrets.token_hex(4)
+    await P().execute("INSERT INTO forum_login(code) VALUES($1)", code)
+    bot = bm.BOT_USERNAME
+    return J({"code": code, "bot": bot, "link": f"https://t.me/{bot}?start=forum_{code}", "tg": f"tg://resolve?domain={bot}&start=forum_{code}"})
+
+
+async def a_auth_poll(request):
+    code = (request.query.get("code") or "").strip()
+    row = await P().fetchrow("SELECT user_id FROM forum_login WHERE code=$1 AND created_at > now() - interval '15 minutes'", code)
+    if not row:
+        return J({"status": "expired"})
+    if not row["user_id"]:
+        return J({"status": "wait"})
+    tok = secrets.token_urlsafe(32)
+    await P().execute("INSERT INTO forum_sessions(token,user_id) VALUES($1,$2)", tok, row["user_id"])
+    await P().execute("DELETE FROM forum_login WHERE code=$1", code)
+    return J({"status": "ok", "token": tok, "me": await me_json(row["user_id"])})
+
+
+@api
+async def a_logout(request):
+    h = request.headers.get("Authorization") or ""
+    await P().execute("DELETE FROM forum_sessions WHERE token=$1", h[7:].strip())
+    return J({"ok": True})
+
+
+@api
+async def a_me(request):
+    uid = request["fuid"]
+    return J({"me": await me_json(uid)})
+
+
+if router is not None:
+    @router.message(F.text.startswith("/start forum_"), F.chat.type == "private")
+    async def bot_forum_login(m: Message):
+        code = m.text.split("forum_", 1)[1].strip()[:8]
+        if not re.fullmatch(r"[0-9a-f]{8}", code):
+            await m.answer("Код входа некорректный. Вернитесь в приложение и нажмите «Войти через Telegram» ещё раз.")
+            return
+        await bm.register_user(m.from_user)
+        ok = await P().fetchval(
+            "UPDATE forum_login SET user_id=$2 WHERE code=$1 AND user_id IS NULL AND created_at > now() - interval '15 minutes' RETURNING code", code, m.from_user.id)
+        if ok:
+            await m.answer("✅ <b>Вход в KMBP FORUM подтверждён.</b>\nВозвращайтесь в приложение — оно откроется само.")
+        else:
+            await m.answer("Код входа устарел или уже использован. Вернитесь в приложение и нажмите «Войти через Telegram» ещё раз.")
+
+
+# ============================================================================ профиль
+@api
+async def a_me_update(request):
+    uid = request["fuid"]
+    d = await jbody(request)
+    if "bio" in d:
+        await P().execute("UPDATE users SET bio=$2 WHERE user_id=$1", uid, str(d.get("bio") or "").strip()[:BIO_MAX])
+    return J({"me": await me_json(uid)})
+
+
+async def _read_image(request, field):
+    form = await request.post()
+    f = form.get(field)
+    if f is None or not hasattr(f, "file"):
+        raise FErr(400, "no_file", "Файл не выбран")
+    data = f.file.read()
+    mime = getattr(f, "content_type", "") or ""
+    if not data or len(data) > IMG_MAX or mime not in IMG_MIMES:
+        raise FErr(400, "bad_image", "Нужна картинка до 4 МБ (JPEG, PNG, WebP)")
+    return data, mime
+
+
+@api
+async def a_me_avatar(request):
+    data, mime = await _read_image(request, "file")
+    await P().execute("UPDATE users SET avatar_data=$2,avatar_mime=$3 WHERE user_id=$1", request["fuid"], data, mime)
+    return J({"ok": True})
+
+
+@api
+async def a_me_banner(request):
+    data, mime = await _read_image(request, "file")
+    await P().execute("UPDATE users SET banner_data=$2,banner_mime=$3 WHERE user_id=$1", request["fuid"], data, mime)
+    return J({"ok": True})
+
+
+async def a_avatar(request):
+    uid = to_int(request.match_info.get("uid"))
+    r = await P().fetchrow("SELECT avatar_data,avatar_mime,tg_avatar_data,photo_url FROM users WHERE user_id=$1", uid)
+    hdr = {"Cache-Control": "public, max-age=300"}
+    if r and r["avatar_data"]:
+        return web.Response(body=bytes(r["avatar_data"]), content_type=r["avatar_mime"] or "image/jpeg", headers=hdr)
+    if r and r["tg_avatar_data"]:
+        return web.Response(body=bytes(r["tg_avatar_data"]), content_type="image/jpeg", headers=hdr)
+    if r and r["photo_url"]:
+        raise web.HTTPFound(r["photo_url"])
+    raise web.HTTPNotFound()
+
+
+async def a_banner(request):
+    uid = to_int(request.match_info.get("uid"))
+    r = await P().fetchrow("SELECT banner_data,banner_mime FROM users WHERE user_id=$1", uid)
+    if not r or not r["banner_data"]:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(r["banner_data"]), content_type=r["banner_mime"] or "image/jpeg", headers={"Cache-Control": "public, max-age=300"})
+
+
+async def a_img(request):
+    r = await P().fetchrow("SELECT data,mime FROM forum_images WHERE id=$1", to_int(request.match_info.get("iid")))
+    if not r:
+        raise web.HTTPNotFound()
+    return web.Response(body=bytes(r["data"]), content_type=r["mime"], headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@api
+async def a_user(request):
+    me = request["fuid"]
+    uid = to_int(request.query.get("id")) or me
+    u = (await users_map([uid])).get(uid)
+    if not u:
+        raise FErr(404, "not_found", "Пользователь не найден")
+    st = await P().fetchrow(
+        "SELECT (SELECT count(*) FROM forum_posts WHERE user_id=$1 AND NOT deleted)::int posts,"
+        "(SELECT count(*) FROM forum_follows WHERE followee_id=$1)::int followers,"
+        "(SELECT count(*) FROM forum_follows WHERE follower_id=$1)::int following,"
+        "EXISTS(SELECT 1 FROM forum_follows WHERE follower_id=$2 AND followee_id=$1) is_following,"
+        "(SELECT created_at FROM users WHERE user_id=$1) joined", uid, me)
+    return J({"user": dict(u), "posts": st["posts"], "followers": st["followers"], "following": st["following"],
+              "is_following": st["is_following"], "joined": st["joined"].timestamp() if st["joined"] else None, "me": uid == me})
+
+
+@api
+async def a_follow(request):
+    me = request["fuid"]
+    d = await jbody(request)
+    target = to_int(d.get("user_id"))
+    if not target or target == me or not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", target):
+        raise FErr(400, "bad_user")
+    ins = await P().fetchval("INSERT INTO forum_follows(follower_id,followee_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING 1", me, target)
+    if ins:
+        await notify(target, "follow", me)
+    else:
+        await P().execute("DELETE FROM forum_follows WHERE follower_id=$1 AND followee_id=$2", me, target)
+    n = await P().fetchval("SELECT count(*) FROM forum_follows WHERE followee_id=$1", target)
+    return J({"following": bool(ins), "followers": n})
+
+
+@api
+async def a_user_list(request):
+    uid = to_int(request.query.get("id"))
+    kind = request.query.get("kind")
+    if kind == "following":
+        rows = await P().fetch("SELECT followee_id u FROM forum_follows WHERE follower_id=$1 ORDER BY created_at DESC LIMIT 200", uid)
+    else:
+        rows = await P().fetch("SELECT follower_id u FROM forum_follows WHERE followee_id=$1 ORDER BY created_at DESC LIMIT 200", uid)
+    um = await users_map([r["u"] for r in rows])
+    return J({"users": [um[r["u"]] for r in rows if r["u"] in um]})
+
+
+# ============================================================================ уведомления
+async def notify(to, kind, actor, post_id=None, comment_id=None):
+    if not to or to == actor:
+        return
+    if kind in ("like_p", "like_c", "follow"):
+        dup = await P().fetchval(
+            "SELECT 1 FROM forum_notifs WHERE user_id=$1 AND kind=$2 AND actor_id=$3 AND post_id IS NOT DISTINCT FROM $4 AND comment_id IS NOT DISTINCT FROM $5",
+            to, kind, actor, post_id, comment_id)
+        if dup:
+            return
+    await P().execute("INSERT INTO forum_notifs(user_id,kind,actor_id,post_id,comment_id) VALUES($1,$2,$3,$4,$5)", to, kind, actor, post_id, comment_id)
+    if kind in ("comment", "reply", "mention") and bm._BOT and bm.WEBAPP_URL and bm.rate_ok(("forum_push", to), 120):
+        try:
+            who = await bm.user_name(actor)
+            what = {"comment": "прокомментировал(а) ваш пост", "reply": "ответил(а) на ваш комментарий", "mention": "упомянул(а) вас"}[kind]
+            await bm._BOT.send_message(to, f"💬 <b>KMBP FORUM</b>\n{bm.esc(who)} {what}.\n{bm.WEBAPP_URL}/forum#/post/{post_id}")
+        except Exception:
+            pass
+
+
+async def mentions(text, actor, post_id, comment_id=None):
+    names = list({m.lower() for m in re.findall(r"@([A-Za-z0-9_]{4,32})", text or "")})[:5]
+    if not names:
+        return set()
+    rows = await P().fetch("SELECT user_id FROM users WHERE lower(username)=ANY($1::text[])", names)
+    got = set()
+    for r in rows:
+        if r["user_id"] != actor:
+            got.add(r["user_id"])
+            await notify(r["user_id"], "mention", actor, post_id, comment_id)
+    return got
+
+
+@api
+async def a_notifs(request):
+    uid = request["fuid"]
+    rows = await P().fetch(
+        "SELECT n.id,n.kind,n.actor_id,n.post_id,n.comment_id,n.created_at,n.read,left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80) snippet "
+        "FROM forum_notifs n LEFT JOIN forum_posts p ON p.id=n.post_id WHERE n.user_id=$1 ORDER BY n.id DESC LIMIT 60", uid)
+    um = await users_map([r["actor_id"] for r in rows])
+    return J({"items": [{"id": r["id"], "kind": r["kind"], "actor": um.get(r["actor_id"]) or ghost(r["actor_id"]), "post_id": r["post_id"],
+                         "comment_id": r["comment_id"], "ts": r["created_at"].timestamp(), "read": r["read"], "snippet": r["snippet"] or ""} for r in rows]})
+
+
+@api
+async def a_notifs_read(request):
+    await P().execute("UPDATE forum_notifs SET read=TRUE WHERE user_id=$1 AND NOT read", request["fuid"])
+    return J({"ok": True})
+
+
+@api
+async def a_ping(request):
+    uid = request["fuid"]
+    n = await P().fetchval("SELECT count(*) FROM forum_notifs WHERE user_id=$1 AND NOT read", uid)
+    from support import ensure_chat
+    await ensure_chat(uid)
+    m = await P().fetchval(
+        "SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)", uid)
+    return J({"notifs": n, "msgs": m})
+
+
+# ============================================================================ посты
+POST_SQL = """SELECT p.id,p.user_id,p.board_id,p.title,p.body,p.created_at,p.edited_at,p.pinned,p.views,
+  (SELECT count(*) FROM forum_likes l WHERE l.kind='p' AND l.target_id=p.id)::int likes,
+  (SELECT count(*) FROM forum_comments c WHERE c.post_id=p.id AND NOT c.deleted)::int comments,
+  EXISTS(SELECT 1 FROM forum_likes l WHERE l.kind='p' AND l.target_id=p.id AND l.user_id=$1) liked,
+  EXISTS(SELECT 1 FROM forum_bookmarks b WHERE b.post_id=p.id AND b.user_id=$1) saved,
+  ARRAY(SELECT i.id FROM forum_images i WHERE i.post_id=p.id ORDER BY i.id) imgs
+  FROM forum_posts p"""
+
+
+async def posts_json(rows, viewer, staff=False):
+    um = await users_map([r["user_id"] for r in rows])
+    boards = {b["id"]: b for b in await P().fetch("SELECT id,name,emoji FROM forum_boards")}
+    out = []
+    for r in rows:
+        b = boards.get(r["board_id"])
+        out.append({"id": r["id"], "user": um.get(r["user_id"]) or ghost(r["user_id"]), "board": ({"id": b["id"], "name": b["name"], "emoji": b["emoji"]} if b else None),
+                    "title": r["title"], "body": r["body"], "ts": r["created_at"].timestamp(), "edited": r["edited_at"] is not None, "pinned": r["pinned"],
+                    "views": r["views"], "likes": r["likes"], "comments": r["comments"], "liked": r["liked"], "saved": r["saved"],
+                    "imgs": list(r["imgs"] or []), "mine": r["user_id"] == viewer, "can_edit": r["user_id"] == viewer or staff})
+    return out
+
+
+@api
+async def a_feed(request):
+    me = request["fuid"]
+    q = request.query
+    tab = q.get("tab") or "all"
+    board = to_int(q.get("board"))
+    user = to_int(q.get("user"))
+    off = max(0, to_int(q.get("offset")))
+    limit = 20
+    args = [me]
+    where = ["NOT p.deleted"]
+
+    def add(cond, val):
+        args.append(val)
+        where.append(cond.replace("?", f"${len(args)}"))
+    if board:
+        add("p.board_id=?", board)
+    if user:
+        add("p.user_id=?", user)
+    order = "p.pinned DESC, p.id DESC" if (board or tab == "all") and not user else "p.id DESC"
+    if tab == "follow":
+        where.append("p.user_id IN (SELECT followee_id FROM forum_follows WHERE follower_id=$1)")
+    elif tab == "saved":
+        where.append("EXISTS(SELECT 1 FROM forum_bookmarks b WHERE b.post_id=p.id AND b.user_id=$1)")
+        order = "p.id DESC"
+    elif tab == "top":
+        where.append("p.created_at > now() - interval '30 days'")
+        order = ("((SELECT count(*) FROM forum_likes l WHERE l.kind='p' AND l.target_id=p.id)*2 + (SELECT count(*) FROM forum_comments c WHERE c.post_id=p.id AND NOT c.deleted)*3 + p.views/25.0) DESC, p.id DESC")
+    sql = f"{POST_SQL} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT {limit} OFFSET {off}"
+    rows = await P().fetch(sql, *args)
+    return J({"posts": await posts_json(rows, me, await is_staff(me)), "more": len(rows) == limit})
+
+
+@api
+async def a_post_get(request):
+    me = request["fuid"]
+    pid = to_int(request.query.get("id"))
+    r = await P().fetchrow(f"{POST_SQL} WHERE p.id=$2 AND NOT p.deleted", me, pid)
+    if not r:
+        raise FErr(404, "not_found", "Пост не найден или удалён")
+    staff = await is_staff(me)
+    if r["user_id"] != me and (me, pid) not in _seen_views:
+        _seen_views[(me, pid)] = 1
+        if len(_seen_views) > 20000:
+            _seen_views.clear()
+        await P().execute("UPDATE forum_posts SET views=views+1 WHERE id=$1", pid)
+    post = (await posts_json([r], me, staff))[0]
+    crow = await P().fetch(
+        "SELECT c.id,c.user_id,c.parent_id,c.body,c.created_at,c.deleted,"
+        "(SELECT count(*) FROM forum_likes l WHERE l.kind='c' AND l.target_id=c.id)::int likes,"
+        "EXISTS(SELECT 1 FROM forum_likes l WHERE l.kind='c' AND l.target_id=c.id AND l.user_id=$2) liked "
+        "FROM forum_comments c WHERE c.post_id=$1 ORDER BY c.id LIMIT 600", pid, me)
+    um = await users_map([c["user_id"] for c in crow])
+    comments = [{"id": c["id"], "user": um.get(c["user_id"]) or ghost(c["user_id"]), "parent": c["parent_id"], "body": "" if c["deleted"] else c["body"],
+                 "deleted": c["deleted"], "ts": c["created_at"].timestamp(), "likes": c["likes"], "liked": c["liked"],
+                 "mine": c["user_id"] == me, "can_delete": c["user_id"] == me or staff} for c in crow]
+    return J({"post": post, "comments": comments})
+
+
+async def _images_from_form(form):
+    files = []
+    for f in form.getall("img", []):
+        if not hasattr(f, "file"):
+            continue
+        data = f.file.read()
+        mime = getattr(f, "content_type", "") or ""
+        if not data:
+            continue
+        if len(data) > IMG_MAX or mime not in IMG_MIMES:
+            raise FErr(400, "bad_image", "Картинки: JPEG/PNG/WebP/GIF до 4 МБ")
+        files.append((data, mime))
+    if len(files) > IMG_COUNT:
+        raise FErr(400, "too_many_images", f"Не больше {IMG_COUNT} картинок")
+    return files
+
+
+@api
+async def a_post_create(request):
+    me = request["fuid"]
+    if not bm.rate_ok(("fpost", me), 12):
+        raise FErr(429, "too_fast", "Не так быстро — подождите несколько секунд")
+    form = await request.post()
+    title = str(form.get("title") or "").strip()[:TITLE_MAX]
+    body = str(form.get("body") or "").strip()[:BODY_MAX]
+    board = to_int(form.get("board_id")) or None
+    files = await _images_from_form(form)
+    if not body and not files:
+        raise FErr(400, "empty", "Напишите текст или добавьте картинку")
+    if board:
+        b = await P().fetchrow("SELECT admin_only FROM forum_boards WHERE id=$1", board)
+        if not b:
+            raise FErr(400, "bad_board", "Раздел не найден")
+        if b["admin_only"] and not await is_staff(me):
+            raise FErr(403, "board_locked", "В этот раздел пишут только админы")
+    pid = await P().fetchval("INSERT INTO forum_posts(user_id,board_id,title,body) VALUES($1,$2,$3,$4) RETURNING id", me, board, title, body)
+    for data, mime in files:
+        await P().execute("INSERT INTO forum_images(post_id,data,mime) VALUES($1,$2,$3)", pid, data, mime)
+    await mentions(f"{title}\n{body}", me, pid)
+    return J({"ok": True, "id": pid})
+
+
+async def _own_post(me, pid):
+    r = await P().fetchrow("SELECT user_id FROM forum_posts WHERE id=$1 AND NOT deleted", pid)
+    if not r:
+        raise FErr(404, "not_found", "Пост не найден")
+    if r["user_id"] != me and not await is_staff(me):
+        raise FErr(403, "forbidden", "Нет прав")
+    return r
+
+
+@api
+async def a_post_edit(request):
+    me = request["fuid"]
+    d = await jbody(request)
+    pid = to_int(d.get("id"))
+    await _own_post(me, pid)
+    title = str(d.get("title") or "").strip()[:TITLE_MAX]
+    body = str(d.get("body") or "").strip()[:BODY_MAX]
+    if not body and not await P().fetchval("SELECT 1 FROM forum_images WHERE post_id=$1", pid):
+        raise FErr(400, "empty", "Пост не может быть пустым")
+    await P().execute("UPDATE forum_posts SET title=$2,body=$3,edited_at=now() WHERE id=$1", pid, title, body)
+    return J({"ok": True})
+
+
+@api
+async def a_post_delete(request):
+    me = request["fuid"]
+    pid = to_int((await jbody(request)).get("id"))
+    await _own_post(me, pid)
+    await P().execute("UPDATE forum_posts SET deleted=TRUE, pinned=FALSE WHERE id=$1", pid)
+    return J({"ok": True})
+
+
+@api
+async def a_post_pin(request):
+    me = request["fuid"]
+    if not await is_staff(me):
+        raise FErr(403, "forbidden", "Только для админов")
+    d = await jbody(request)
+    await P().execute("UPDATE forum_posts SET pinned=$2 WHERE id=$1", to_int(d.get("id")), bool(d.get("pin", True)))
+    return J({"ok": True})
+
+
+@api
+async def a_like(request):
+    me = request["fuid"]
+    d = await jbody(request)
+    kind, tid = ("c" if d.get("kind") == "c" else "p"), to_int(d.get("id"))
+    if kind == "p":
+        t = await P().fetchrow("SELECT user_id,id post_id FROM forum_posts WHERE id=$1 AND NOT deleted", tid)
+    else:
+        t = await P().fetchrow("SELECT user_id,post_id FROM forum_comments WHERE id=$1 AND NOT deleted", tid)
+    if not t:
+        raise FErr(404, "not_found")
+    ins = await P().fetchval("INSERT INTO forum_likes(user_id,kind,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING 1", me, kind, tid)
+    if ins:
+        await notify(t["user_id"], "like_" + kind, me, t["post_id"], tid if kind == "c" else None)
+    else:
+        await P().execute("DELETE FROM forum_likes WHERE user_id=$1 AND kind=$2 AND target_id=$3", me, kind, tid)
+    n = await P().fetchval("SELECT count(*) FROM forum_likes WHERE kind=$1 AND target_id=$2", kind, tid)
+    return J({"liked": bool(ins), "count": n})
+
+
+@api
+async def a_bookmark(request):
+    me = request["fuid"]
+    pid = to_int((await jbody(request)).get("post_id"))
+    if not await P().fetchval("SELECT 1 FROM forum_posts WHERE id=$1 AND NOT deleted", pid):
+        raise FErr(404, "not_found")
+    ins = await P().fetchval("INSERT INTO forum_bookmarks(user_id,post_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING 1", me, pid)
+    if not ins:
+        await P().execute("DELETE FROM forum_bookmarks WHERE user_id=$1 AND post_id=$2", me, pid)
+    return J({"saved": bool(ins)})
+
+
+@api
+async def a_comment(request):
+    me = request["fuid"]
+    if not bm.rate_ok(("fcom", me), 3):
+        raise FErr(429, "too_fast", "Не так быстро")
+    d = await jbody(request)
+    pid = to_int(d.get("post_id"))
+    body = str(d.get("body") or "").strip()[:COMMENT_MAX]
+    if not body:
+        raise FErr(400, "empty", "Пустой комментарий")
+    post = await P().fetchrow("SELECT user_id FROM forum_posts WHERE id=$1 AND NOT deleted", pid)
+    if not post:
+        raise FErr(404, "not_found", "Пост не найден")
+    parent = to_int(d.get("parent_id")) or None
+    par = None
+    if parent:
+        par = await P().fetchrow("SELECT user_id,parent_id FROM forum_comments WHERE id=$1 AND post_id=$2", parent, pid)
+        if not par:
+            parent = None
+        elif par["parent_id"]:
+            parent = par["parent_id"]    # глубже одного уровня не вкладываем — ответ уходит в ветку верхнего комментария
+    cid = await P().fetchval("INSERT INTO forum_comments(post_id,user_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id", pid, me, parent, body)
+    got = await mentions(body, me, pid, cid)
+    if par and par["user_id"] != me and par["user_id"] not in got:
+        await notify(par["user_id"], "reply", me, pid, cid)
+    if post["user_id"] != me and post["user_id"] not in got and not (par and par["user_id"] == post["user_id"]):
+        await notify(post["user_id"], "comment", me, pid, cid)
+    return J({"ok": True, "id": cid})
+
+
+@api
+async def a_comment_delete(request):
+    me = request["fuid"]
+    cid = to_int((await jbody(request)).get("id"))
+    r = await P().fetchrow("SELECT user_id FROM forum_comments WHERE id=$1", cid)
+    if not r:
+        raise FErr(404, "not_found")
+    if r["user_id"] != me and not await is_staff(me):
+        raise FErr(403, "forbidden")
+    await P().execute("UPDATE forum_comments SET deleted=TRUE WHERE id=$1", cid)
+    return J({"ok": True})
+
+
+@api
+async def a_report(request):
+    me = request["fuid"]
+    d = await jbody(request)
+    kind, tid = ("c" if d.get("kind") == "c" else "p"), to_int(d.get("id"))
+    reason = str(d.get("reason") or "").strip()[:300]
+    await P().execute("INSERT INTO forum_reports(reporter_id,kind,target_id,reason) VALUES($1,$2,$3,$4)", me, kind, tid, reason)
+    mod = await bm.get_setting("mod_chat")
+    if mod and bm._BOT:
+        try:
+            who = await bm.user_name(me)
+            link = f"{bm.WEBAPP_URL}/forum#/post/{tid}" if kind == "p" else ""
+            await bm._BOT.send_message(int(mod), f"🚩 <b>Жалоба на {'пост' if kind == 'p' else 'комментарий'} #{tid}</b> (KMBP FORUM)\nОт: {bm.esc(who)} (<code>{me}</code>)\n"
+                                                 f"Причина: {bm.esc(reason) or '—'}\n{link}")
+        except Exception:
+            log.warning("forum report notify failed")
+    return J({"ok": True})
+
+
+# ============================================================================ разделы (для админов)
+@api
+async def a_board_save(request):
+    me = request["fuid"]
+    if not await bm.is_main(me):
+        raise FErr(403, "forbidden", "Только главные админы")
+    d = await jbody(request)
+    name = str(d.get("name") or "").strip()[:40]
+    emoji = str(d.get("emoji") or "💬").strip()[:8] or "💬"
+    if not name:
+        raise FErr(400, "empty", "Название раздела")
+    bid = to_int(d.get("id"))
+    if bid:
+        await P().execute("UPDATE forum_boards SET name=$2,emoji=$3,admin_only=$4 WHERE id=$1", bid, name, emoji, bool(d.get("admin_only")))
+    else:
+        await P().execute("INSERT INTO forum_boards(name,emoji,sort,admin_only) VALUES($1,$2,(SELECT coalesce(max(sort),0)+1 FROM forum_boards),$3)", name, emoji, bool(d.get("admin_only")))
+    return J({"ok": True})
+
+
+@api
+async def a_board_delete(request):
+    if not await bm.is_main(request["fuid"]):
+        raise FErr(403, "forbidden", "Только главные админы")
+    await P().execute("DELETE FROM forum_boards WHERE id=$1", to_int((await jbody(request)).get("id")))
+    return J({"ok": True})
+
+
+# ============================================================================ поиск
+def _like(q):
+    return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+@api
+async def a_search(request):
+    me = request["fuid"]
+    q = (request.query.get("q") or "").strip()[:60]
+    if len(q) < 2:
+        return J({"posts": [], "users": []})
+    rows = await P().fetch(f"{POST_SQL} WHERE NOT p.deleted AND (p.title ILIKE $2 OR p.body ILIKE $2) ORDER BY p.id DESC LIMIT 30", me, _like(q))
+    ur = await P().fetch("SELECT user_id FROM users WHERE user_id>0 AND (username ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1) ORDER BY last_seen DESC NULLS LAST LIMIT 20", _like(q.lstrip("@")))
+    um = await users_map([r["user_id"] for r in ur])
+    return J({"posts": await posts_json(rows, me, await is_staff(me)), "users": [um[r["user_id"]] for r in ur if r["user_id"] in um]})
+
+
+# ============================================================================ личные сообщения (те же чаты, что в мини-аппе)
+@api
+async def a_chats(request):
+    me = request["fuid"]
+    from support import SUPPORT_ID, ensure_chat
+    await ensure_chat(me)
+    rows = await P().fetch(
+        """SELECT DISTINCT ON (peer) peer,body,created_at,sender_id,read_at,file_name FROM (
+            SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,body,created_at,id,sender_id,read_at,file_name
+            FROM direct_messages WHERE (sender_id=$1 OR recipient_id=$1)
+            AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)) x
+            ORDER BY peer,created_at DESC,id DESC LIMIT 150""", me)
+    unread = {r["sender_id"]: r["c"] for r in await P().fetch(
+        "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1", me)}
+    um = await users_map([r["peer"] for r in rows])
+    out = [{"user": um[r["peer"]], "last": (r["body"] or ("📎 " + (r["file_name"] or "Файл")))[:120], "ts": r["created_at"].timestamp(),
+            "mine": r["sender_id"] == me, "unread": unread.get(r["peer"], 0), "support": r["peer"] == SUPPORT_ID} for r in rows if r["peer"] in um]
+    out.sort(key=lambda x: (not x["support"], -x["ts"]))
+    return J({"chats": out})
+
+
+@api
+async def a_messages(request):
+    me = request["fuid"]
+    peer = to_int(request.query.get("peer"))
+    if not peer or peer == me:
+        raise FErr(400, "bad_peer")
+    await P().execute("UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2 AND read_at IS NULL", me, peer)
+    rows = await P().fetch(
+        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,(file_data IS NOT NULL) has_file FROM direct_messages
+            WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
+            AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
+            ORDER BY id DESC LIMIT 120) q ORDER BY id""", me, peer)
+    um = await users_map([peer])
+    by_me, by_peer = await bm.block_state(me, peer)
+    typing = time.monotonic() - bm._typing.get((peer, me, 0), 0) < 5
+    from support import SUPPORT_ID, mode_of
+    extra = {"support_mode": await mode_of(me)} if peer == SUPPORT_ID else {}
+    return J({"peer": um.get(peer) or ghost(peer), "typing": typing, "blocked": bool(by_me or by_peer), **extra,
+              "messages": [{"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or ("📎 " + (r["file_name"] or "Вложение") + " (откройте в мини-аппе)" if r["has_file"] else ""),
+                            "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None} for r in rows]})
+
+
+@api
+async def a_message_send(request):
+    me = request["fuid"]
+    d = await jbody(request)
+    peer = to_int(d.get("peer"))
+    text = str(d.get("text") or "").strip()[:3000]
+    if not peer or peer == me or not text:
+        raise FErr(400, "bad_message")
+    if not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", peer):
+        raise FErr(404, "not_found", "Пользователь не найден")
+    by_me, by_peer = await bm.block_state(me, peer)
+    if by_me or by_peer:
+        raise FErr(403, "blocked", "Сообщения недоступны (блокировка)")
+    if not bm.rate_ok(("fdm", me), 0.6):
+        raise FErr(429, "too_fast")
+    mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id", me, peer, text)
+    from support import SUPPORT_ID, on_user_message
+    if peer == SUPPORT_ID:
+        asyncio.create_task(on_user_message(me, text, mid))
+    else:
+        asyncio.create_task(bm.push_dm(me, peer, None, text, None, None))
+    return J({"ok": True, "id": mid})
+
+
+@api
+async def a_support_act(request):
+    """Кнопки поддержки в чате форума: вызвать оператора / отменить вызов (та же логика, что в мини-аппе)."""
+    me = request["fuid"]
+    import support
+    act = request.match_info.get("act")
+    if act == "operator":
+        if not await support.open_ticket(me):
+            await support.ensure_chat(me)
+            if not bm.rate_ok(("support_op", me), 20):
+                raise FErr(429, "too_fast", "Не так быстро")
+            await support.create_ticket(me, announce=True)
+    elif act == "cancel":
+        tk = await support.open_ticket(me)
+        if tk:
+            await P().execute("UPDATE support_tickets SET status='closed', closed_at=now() WHERE id=$1", tk["id"])
+            await support.say(me, "Вызов оператора отменён. Я снова на связи — задавайте вопрос.")
+    else:
+        raise FErr(404, "not_found")
+    return J({"ok": True, "mode": await support.mode_of(me)})
+
+
+@api
+async def a_typing(request):
+    peer = to_int((await jbody(request)).get("peer"))
+    if peer:
+        bm._typing[(request["fuid"], peer, 0)] = time.monotonic()
+    return J({"ok": True})
+
+
+# ============================================================================ сама страница
+def _page():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forum.html")
+    with open(p, encoding="utf-8") as f:
+        return f.read()
+
+
+async def page(request):
+    html = _page().replace("__BASE__", bm.WEBAPP_URL)
+    hdr = {"Cache-Control": "no-cache"}
+    if request.query.get("dl"):
+        hdr["Content-Disposition"] = 'attachment; filename="kmbp-forum.html"'
+    return web.Response(text=html, content_type="text/html", charset="utf-8", headers=hdr)
+
+
+def install(app, bot_module):
+    global bm
+    bm = bot_module
+    app.middlewares.append(cors_mw)
+    r = app.router
+    r.add_get("/forum", page)
+    r.add_get("/forum/", page)
+    r.add_get("/forum/app.html", page)
+    A = "/forum/api"
+    r.add_get(A + "/boot", a_boot)
+    r.add_post(A + "/auth/start", a_auth_start)
+    r.add_get(A + "/auth/poll", a_auth_poll)
+    r.add_post(A + "/auth/logout", a_logout)
+    r.add_get(A + "/me", a_me)
+    r.add_post(A + "/me/update", a_me_update)
+    r.add_post(A + "/me/avatar", a_me_avatar)
+    r.add_post(A + "/me/banner", a_me_banner)
+    r.add_get(A + "/avatar/{uid}", a_avatar)
+    r.add_get(A + "/banner/{uid}", a_banner)
+    r.add_get(A + "/img/{iid}", a_img)
+    r.add_get(A + "/user", a_user)
+    r.add_get(A + "/user/list", a_user_list)
+    r.add_post(A + "/follow", a_follow)
+    r.add_get(A + "/feed", a_feed)
+    r.add_get(A + "/post", a_post_get)
+    r.add_post(A + "/post", a_post_create)
+    r.add_post(A + "/post/edit", a_post_edit)
+    r.add_post(A + "/post/delete", a_post_delete)
+    r.add_post(A + "/post/pin", a_post_pin)
+    r.add_post(A + "/like", a_like)
+    r.add_post(A + "/bookmark", a_bookmark)
+    r.add_post(A + "/comment", a_comment)
+    r.add_post(A + "/comment/delete", a_comment_delete)
+    r.add_post(A + "/report", a_report)
+    r.add_post(A + "/board", a_board_save)
+    r.add_post(A + "/board/delete", a_board_delete)
+    r.add_get(A + "/notifs", a_notifs)
+    r.add_post(A + "/notifs/read", a_notifs_read)
+    r.add_get(A + "/ping", a_ping)
+    r.add_get(A + "/search", a_search)
+    r.add_get(A + "/chats", a_chats)
+    r.add_get(A + "/messages", a_messages)
+    r.add_post(A + "/messages", a_message_send)
+    r.add_post(A + "/typing", a_typing)
+    r.add_post(A + "/support/{act}", a_support_act)
+
+
+async def start(bot_module):
+    """Вызывается в main() после init_db() и support.start()."""
+    global bm
+    bm = bot_module
+    await bm.pool.execute(DDL)
+    if not await bm.pool.fetchval("SELECT 1 FROM forum_boards LIMIT 1"):
+        for name, emoji, sort, admin_only in SEED_BOARDS:
+            await bm.pool.execute("INSERT INTO forum_boards(name,emoji,sort,admin_only) VALUES($1,$2,$3,$4)", name, emoji, sort, admin_only)
+    log.info("forum ready")
