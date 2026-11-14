@@ -1245,6 +1245,13 @@ h2.page{font-weight:800;letter-spacing:-.2px}
 :root[data-palette="mono"] .cat.sel,:root[data-palette="mono"] .chip.sel{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.42);box-shadow:none}
 :root[data-palette="mono"] .hero-art,:root[data-palette="mono"] body::after{filter:grayscale(1)}
 .profile-hero.has-banner::before{background:var(--pbn) center/cover no-repeat}
+/* видео-баннер профиля: тот же «растворяющийся» вид, что и у картинки */
+.profile-hero>video.pbn-vid{position:absolute;left:0;top:0;width:100%;height:calc(100% + 70px);object-fit:cover;z-index:0;pointer-events:none;filter:brightness(.8);-webkit-mask-image:var(--ph-mask);mask-image:var(--ph-mask)}
+.profile-hero.has-vbanner::before{display:none}
+.pj-bn video.pj-bnv{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.bn video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.bn-th{overflow:hidden}
+.bn-th video{width:100%;height:100%;object-fit:cover;pointer-events:none}
 .profile-hero.has-banner::after{display:none}
 .profile-hero.has-banner .pbn-shade{display:block}
 .pbn-shade{display:none;position:absolute;left:0;right:0;top:70px;height:80px;z-index:0;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--bg) 70%,transparent))}
@@ -1600,7 +1607,7 @@ const ERR = {
   unauthorized: 'Откройте мини-апп из Telegram', forbidden: 'Нет доступа', slow: 'Не так быстро, подождите пару секунд',
   closed: 'Приём сейчас закрыт', exists: 'Анкета уже на рассмотрении', already_admin: 'Вы уже админ', empty: 'Заполните все поля',
   too_long: 'Слишком длинный текст', stale: 'Это уже неактуально', limit: 'Достигнут лимит', bad_id: 'Неверный ID',
-  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', too_many_photos: 'Можно приложить не больше 5 скриншотов', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
+  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', too_many_photos: 'Можно приложить не больше 5 скриншотов', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_video: 'Видео не подошло: нужен MP4 или WebM до 8 МБ', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
   project_not_found: 'Проект не найден', too_many_projects: 'Слишком много проектов (максимум 10)', bad_name: 'Название проекта — от 2 символов', bad_link: 'Некорректная ссылка на сайт', user_not_found: 'Пользователь не найден — он должен хотя бы раз открыть приложение', no_owner: 'Укажите владельца (ID или @username)'
 };
 let toastT;
@@ -2084,9 +2091,40 @@ function seenLabel(ts) {
 
 /* баннеры на главной */
 const BIMG = new Map();
+/* ===== видео-баннеры: MP4/WebM до 8 МБ, играют без звука по кругу ===== */
+const BTYPE = new Map(), BANNER_VIDEO_MAX = 8 * 1024 * 1024;
+const isVidType = t => /^video\//.test(t || '');
+const isVideoFile = f => !!f && (/^video\//.test(f.type || '') || /\.(mp4|webm|mov|m4v)$/i.test(f.name || ''));
+const VIO = ('IntersectionObserver' in window) ? new IntersectionObserver(es => es.forEach(e => { const v = e.target; if (!v.isConnected) { VIO.unobserve(v); return; } if (e.isIntersecting) { const p = v.play(); if (p && p.catch) p.catch(() => {}); } else v.pause(); }), { threshold: .3 }) : null;
+function bannerVideoEl(url, cls) {
+  const v = document.createElement('video');
+  v.muted = true; v.defaultMuted = true; v.loop = true; v.autoplay = true; v.playsInline = true; v.preload = 'auto';
+  ['muted', 'playsinline', 'webkit-playsinline', 'disablepictureinpicture'].forEach(a => v.setAttribute(a, ''));
+  v.setAttribute('aria-hidden', 'true'); v.tabIndex = -1;
+  if (cls) v.className = cls;
+  v.src = url;
+  if (VIO) VIO.observe(v); else { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+  return v;
+}
+function applyProfileBanner(h, b) {
+  if (!h || !b) return;
+  const u = URL.createObjectURL(b);
+  if (isVidType(b.type)) { $$('.pbn-vid', h).forEach(x => x.remove()); h.insertBefore(bannerVideoEl(u, 'pbn-vid'), h.firstChild); h.classList.add('has-banner', 'has-vbanner'); }
+  else { h.style.setProperty('--pbn', 'url(' + u + ')'); h.classList.add('has-banner'); }
+}
+async function bannerUpload(fd, f) {
+  if (isVideoFile(f)) {
+    if (f.size > BANNER_VIDEO_MAX) throw Object.assign(new Error('bad_video'), { code: 'bad_video' });
+    toast('Загружаю видео…'); fd.append('file', f, 'banner.mp4');
+  } else fd.append('file', await shrinkImage(f, 1600, .86), 'banner.jpg');
+}
+function setBannerMedia(im, u, type) {
+  if (isVidType(type)) { const v = bannerVideoEl(u); v.dataset.bimg = im.dataset.bimg || ''; im.replaceWith(v); }
+  else im.src = u;
+}
 function bannerImg(id, v) {
   const k = id + ':' + v;
-  if (!BIMG.has(k)) BIMG.set(k, fetch('/api/banner_img?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.ok ? r.blob() : null).then(b => b ? URL.createObjectURL(b) : null).catch(() => null));
+  if (!BIMG.has(k)) BIMG.set(k, fetch('/api/banner_img?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.ok ? r.blob() : null).then(b => { if (!b) return null; BTYPE.set(k, b.type); return URL.createObjectURL(b); }).catch(() => null));
   return BIMG.get(k);
 }
 const bannerOne = b => `<div class="bn${b.has_img ? ' has-img' : ''}" data-b="${b.id}"${b.color ? ` style="--bc:${esc(b.color)}"` : ''}>${b.has_img ? `<img alt="" data-bimg="${b.id}" data-v="${b.v || 0}">` : ''}${(b.title || b.text) ? `<div class="bt">${b.title ? `<b>${esc(b.title)}</b>` : ''}${b.text ? `<small>${esc(b.text)}</small>` : ''}</div>` : ''}</div>`;
@@ -2099,7 +2137,7 @@ function bannerGo(link) {
   if (link.startsWith('app:')) { const v = link.slice(4); if (views[v]) go(v, {}, { root: ['home', 'favorites', 'submit', 'chats', 'more'].includes(v) }); return; }
   openLink(link);
 }
-function bannerImgs(root) { $$('img[data-bimg]', root).forEach(async im => { const u = await bannerImg(im.dataset.bimg, im.dataset.v); if (u && im.isConnected) im.src = u; }); }
+function bannerImgs(root) { $$('img[data-bimg]', root).forEach(async im => { const u = await bannerImg(im.dataset.bimg, im.dataset.v); if (u && im.isConnected) setBannerMedia(im, u, BTYPE.get(im.dataset.bimg + ':' + im.dataset.v)); }); }
 function wireBanners(el) {
   const wrap = $('.bn-wrap', el); if (!wrap) return;
   const bs = S.me.banners || [], track = $('.bn-track', wrap), dots = $$('.bn-dots i', wrap);
@@ -2439,7 +2477,7 @@ views.more = async el => {
   if (me.has_photo) fetch('/api/photo', { headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.blob()).then(b => { const i = $('.welcome-img', el); if (i) i.src = URL.createObjectURL(b); }).catch(() => {});
   if (me.user) { const av=$('#meAvatar',el); if(av){const put=u=>{const a=$('#meAvatar',el),b=$('#accMeAv',el);if(a)a.innerHTML=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`;if(b)b.innerHTML=`<img src="${esc(u)}">`};
     if(me.user.has_avatar||!me.user.photo_url)avBlob(String(me.user.id)).then(u=>{if(u)put(u);else if(me.user.photo_url)put(me.user.photo_url)});else put(me.user.photo_url);} }
-  if (ownProfile && ownProfile.has_banner) fetch('/api/profile/banner?id='+me.user.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('#settingsProfileHero',el);if(b&&h){h.style.setProperty('--pbn','url('+URL.createObjectURL(b)+')');h.classList.add('has-banner')}}).catch(()=>{});
+  if (ownProfile && ownProfile.has_banner) fetch('/api/profile/banner?id='+me.user.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('#settingsProfileHero',el);if(b&&h)applyProfileBanner(h,b)}).catch(()=>{});
   $('#tourBtn', el).onclick = () => showTour();
   $$('.acc-row[data-acc]', el).forEach(r => r.onclick = () => {
     const id = +r.dataset.acc; if (id === actingId()) return;
@@ -2566,7 +2604,7 @@ views.profile = async (el, params={}) => {
   <div class="card glass ph-about"><div class="ph-h"><span class="ph-i">i</span><b>О себе</b></div><p class="rich" id="bioText">${esc(u.bio||'Пользователь пока ничего не рассказал о себе.')}</p>
   ${!own?`<div class="ph-acts"><button class="btn" id="openPeerChat">${xi('x_pencil')}Написать сообщение</button><button class="btn ghost ph-ic" id="peerMore" aria-label="Ещё">⋯</button></div>${u.blocked_by_me?'<small class="dim" style="display:block;margin-top:8px">Вы заблокировали этого пользователя</small>':''}`:''}
   ${own?`<label class="lbl">Описание профиля</label><textarea class="f" id="bioEdit" maxlength="500" placeholder="Расскажите о себе…">${esc(u.bio||'')}</textarea>
-  <div class="acts"><input type="file" id="avatarFile" accept="image/*" hidden><input type="file" id="bannerFile" accept="image/*" hidden><button class="btn small" id="changeAvatar">Изменить фото</button><button class="btn small" id="changeBanner">Свой баннер</button>${u.has_banner?'<button class="btn small ghost" id="delBanner">Убрать баннер</button>':''}${u.has_avatar?'<button class="btn small ghost" id="delAvatar">Удалить фото</button>':''}${u.can_badge?'<button class="btn small ghost" id="myBadges">Значки</button>':''}<button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
+  <div class="acts"><input type="file" id="avatarFile" accept="image/*" hidden><input type="file" id="bannerFile" accept="image/*,video/mp4,video/webm,video/quicktime" hidden><button class="btn small" id="changeAvatar">Изменить фото</button><button class="btn small" id="changeBanner">Свой баннер</button>${u.has_banner?'<button class="btn small ghost" id="delBanner">Убрать баннер</button>':''}${u.has_avatar?'<button class="btn small ghost" id="delAvatar">Удалить фото</button>':''}${u.can_badge?'<button class="btn small ghost" id="myBadges">Значки</button>':''}<button class="btn small" id="saveProfile">Сохранить профиль</button></div>`:''}</div>
   ${own?`<div class="card glass"><b>Тема вашего профиля</b><p class="sub" style="margin:5px 0 10px">В какой теме люди увидят ваш профиль — независимо от их настроек.</p><div class="theme-grid"><button class="theme-chip ${u.profile_theme?'':'active'}" data-ptheme-pick=""><span class="theme-dot" style="background:linear-gradient(135deg,#08040f 50%,#eceafc 50%)"></span>Как у зрителя</button>${Object.keys(PALS).map(k=>`<button class="theme-chip ${u.profile_theme===k?'active':''}" data-ptheme-pick="${k}"><span class="theme-dot" style="background:${PALS[k].acc}"></span>${PALS[k].n}</button>`).join('')}</div></div>`:''}
   ${own?`<div class="card glass"><b>Оформление профиля и чатов</b><p class="sub" style="margin:5px 0 10px">Выберите общую тему интерфейса.</p><div class="theme-grid">
   ${Object.keys(PALS).map(k=>[k,PALS[k].n,PALS[k].acc]).map(([k,n,c])=>`<button class="theme-chip ${(document.documentElement.dataset.palette||document.documentElement.dataset.theme)===k?'active':''}" data-theme-pick="${k}"><span class="theme-dot" style="background:${c}"></span>${n}</button>`).join('')}</div><label class="lbl">Акцентный цвет</label><input type="color" id="accentPick" value="${esc(u.accent&&OLD_ACC.indexOf(u.accent)<0?u.accent:(PALS[document.documentElement.dataset.palette]||PALS.violet).acc)}" style="width:100%;height:42px;border:0;background:transparent"></div>`:''}
@@ -2608,10 +2646,10 @@ views.profile = async (el, params={}) => {
     fi.onchange=()=>{file=fi.files[0]||null;drawShot();};
     btn.onclick=async()=>{if(!rating)return;btn.disabled=true;try{const fd=new FormData();fd.append('target_id',id);fd.append('rating',rating);fd.append('text',txt.value);if(file)fd.append('photo',await shrinkImage(file,1400,.85),'review.jpg');await api('/api/profile/reviews',fd);toast('Отзыв сохранён','good');go('profile',{id},{replace:true});}catch(er){btn.disabled=false;if(er.code==='review_after_deal_only')toast('Оставить отзыв можно после завершённой сделки','err');else fail(er)}};
   }
-  if(u.has_banner){ fetch('/api/profile/banner?id='+u.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('.profile-hero',el);if(b&&h){h.style.setProperty('--pbn','url('+URL.createObjectURL(b)+')');h.classList.add('has-banner')}}).catch(()=>{}); }
+  if(u.has_banner){ fetch('/api/profile/banner?id='+u.id+'&_='+Date.now(),{cache:'no-store',headers:{'X-Init-Data':(tg&&tg.initData)||''}}).then(r=>r.ok?r.blob():null).then(b=>{const h=$('.profile-hero',el);if(b&&h)applyProfileBanner(h,b)}).catch(()=>{}); }
   if(own){
     $('#changeBanner',el).onclick=()=>$('#bannerFile',el).click();
-    $('#bannerFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();fd.append('file',await shrinkImage(f,1600,.86),'banner.jpg');await api('/api/profile/banner',fd);toast('Баннер обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
+    $('#bannerFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();await bannerUpload(fd,f);await api('/api/profile/banner',fd);toast('Баннер обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
     const db=$('#delBanner',el);if(db)db.onclick=async()=>{try{await api('/api/profile/banner',undefined,'DELETE');toast('Баннер убран','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
     $('#changeAvatar',el).onclick=()=>$('#avatarFile',el).click();
     $('#avatarFile',el).onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const fd=new FormData();fd.append('file',await shrinkImage(f,900,.88),'avatar.jpg');await api('/api/profile/avatar',fd);AVC.clear();if(S.me.user)S.me.user.has_avatar=true;toast('Аватар обновлён','good');go('profile',{}, {replace:true});}catch(er){fail(er)}};
@@ -2888,7 +2926,7 @@ views.project = async (el, params = {}) => {
     <div class="li glass pj-owner" id="pOwner">${avHtml('sav', o.id, o.name, o.has_avatar, o.photo_url)}<span class="t"><b>${esc(o.name)}</b><small>Владелец${o.username ? ' · @' + esc(o.username) : ''}</small></span><span class="arr">›</span></div>
     <div class="pj-stats"><div class="glass">${xi('rc_mega')}<b>${d.posts.length}</b><small>Объявлений</small></div><div class="glass">${xi('x_review')}<b>${p.reviews || 0}</b><small>Отзывов</small></div><div class="glass">${xi('x_star')}<b>${rate}</b><small>Рейтинг</small></div></div>
     ${d.can_edit ? `<div class="pj-acts"><button class="btn ghost" id="pEdit">${xi('x_pencil')}Изменить</button>${d.mine && !p.mark && !p.mark_req ? `<button class="btn ghost" id="pReq">${xi('x_flag')}Верификация</button>` : ''}${d.staff ? `<button class="btn ghost" id="pMark">${xi('x_flag')}Галочка…</button>` : ''}<button class="btn bad" id="pDel">${xi('x_trash')}Удалить</button></div>
-    <div class="pj-acts"><input type="file" id="pBnFile" accept="image/*" hidden><button class="btn ghost" id="pBn">${xi('x_pencil')}Баннер проекта</button>${p.has_banner ? '<button class="btn ghost" id="pBnDel">Убрать баннер</button>' : ''}${d.mine ? `<button class="btn ghost ${actingId() === p.id ? 'on' : ''}" id="pAct">${actingId() === p.id ? '✓ Вы от проекта' : 'Действовать от проекта'}</button>` : ''}</div>` : ''}
+    <div class="pj-acts"><input type="file" id="pBnFile" accept="image/*,video/mp4,video/webm,video/quicktime" hidden><button class="btn ghost" id="pBn">${xi('x_pencil')}Баннер проекта</button>${p.has_banner ? '<button class="btn ghost" id="pBnDel">Убрать баннер</button>' : ''}${d.mine ? `<button class="btn ghost ${actingId() === p.id ? 'on' : ''}" id="pAct">${actingId() === p.id ? '✓ Вы от проекта' : 'Действовать от проекта'}</button>` : ''}</div>` : ''}
     ${p.description && p.description.length > tag.length ? `<div class="card glass"><div class="rich">${esc(p.description)}</div></div>` : ''}
     <div class="li glass" id="pjPostsRow">${xi('rc_mega')}<span class="t"><b>Объявления проекта</b><small>Смотрите актуальные новости и обновления!</small></span><span class="arr">›</span></div>
     <div id="pPosts"></div>
@@ -2897,12 +2935,12 @@ views.project = async (el, params = {}) => {
     ${!d.mine ? `<div class="rform"><h3>${mineR ? 'Изменить отзыв' : 'Оставить отзыв'}</h3><p class="rsub">Оценка для проекта «${esc(p.name)}».</p><div class="rstars" id="rStars">${[1, 2, 3, 4, 5].map(k => `<button type="button" data-v="${k}" aria-label="${k}">★</button>`).join('')}</div><div class="rlabel" id="rLabel">Нажмите на звезду</div><textarea id="reviewText" maxlength="1000" placeholder="Расскажите о своём опыте с проектом…"></textarea><div class="rcount"><span id="rCnt">0</span> / 1000</div><button class="btn block" id="saveReview" disabled>${mineR ? 'Сохранить изменения' : 'Отправить отзыв'}</button></div>` : ''}
     <div id="pjReviews">${rv.reviews.map(r => `<div class="rcard"><div class="rcard-h">${avHtml('rcard-av', r.author_id, r.author, r.author_has_avatar, r.author_photo)}<div><b>${esc(r.author)}${r.mine ? '<span class="mine-tag">ваш</span>' : ''}</b><small>${esc(r.created || '')}</small></div><span class="stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span></div>${r.text ? `<p>${esc(r.text)}</p>` : ''}${r.mine || d.staff ? `<button class="btn ghost small pj-rdel" data-rid="${r.id}" style="margin-top:10px">${xi('x_trash')}Удалить отзыв</button>` : ''}</div>`).join('')}</div>
   </div>`;
-  if (p.has_banner) fetch('/api/project/banner?id=' + p.id + '&_=' + Date.now(), { cache: 'no-store', headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.ok ? r.blob() : null).then(bl => { const h = $('#pjBn', el); if (bl && h) h.style.setProperty('--pjbn', 'url(' + URL.createObjectURL(bl) + ')'); }).catch(() => {});
+  if (p.has_banner) fetch('/api/project/banner?id=' + p.id + '&_=' + Date.now(), { cache: 'no-store', headers: { 'X-Init-Data': (tg && tg.initData) || '' } }).then(r => r.ok ? r.blob() : null).then(bl => { const h = $('#pjBn', el); if (bl && h) { const u = URL.createObjectURL(bl); if (isVidType(bl.type)) h.prepend(bannerVideoEl(u, 'pj-bnv')); else h.style.setProperty('--pjbn', 'url(' + u + ')'); } }).catch(() => {});
   $('#pjRate', el).onclick = () => $('#pjRv', el).scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('#pjPostsRow', el).onclick = () => $('#pPosts', el).scrollIntoView({ behavior: 'smooth', block: 'start' });
   { const bn = $('#pBn', el), bf = $('#pBnFile', el); if (bn) {
     bn.onclick = () => bf.click();
-    bf.onchange = async () => { const f = bf.files && bf.files[0]; if (!f) return; try { const fd = new FormData(); fd.append('id', p.id); fd.append('file', await shrinkImage(f, 1600, .86), 'banner.jpg'); await api('/api/project/banner', fd); toast('Баннер обновлён', 'good'); go('project', { id: p.id }, { replace: true }); } catch (e) { fail(e); } };
+    bf.onchange = async () => { const f = bf.files && bf.files[0]; if (!f) return; try { const fd = new FormData(); fd.append('id', p.id); await bannerUpload(fd, f); await api('/api/project/banner', fd); toast('Баннер обновлён', 'good'); go('project', { id: p.id }, { replace: true }); } catch (e) { fail(e); } };
     const bd = $('#pBnDel', el); if (bd) bd.onclick = async () => { try { await api('/api/project/banner_delete', { id: p.id }); toast('Баннер убран', 'good'); go('project', { id: p.id }, { replace: true }); } catch (e) { fail(e); } };
   } }
   { const stars = $$('#rStars button', el), btn = $('#saveReview', el), txt = $('#reviewText', el); if (btn) {
@@ -3196,7 +3234,7 @@ views.admin_banners = async el => {
       <button class="btn block" id="bnAdd">➕ Добавить баннер</button>
       <div class="stagger" data-ugc style="margin-top:14px">${list.length ? list.map((b, i) => `<div class="card glass" data-id="${b.id}"><div class="row"><div class="bn-th" ${b.has_img ? `data-th="${b.id}" data-v="${b.v}"` : ''}>${b.has_img ? '' : '🖼'}</div><div class="grow" style="min-width:0"><b>${esc(b.title || 'Без заголовка')}</b><small style="display:block;color:var(--dim)">${esc((b.text || '').slice(0, 80))}</small><small style="color:${b.active ? 'var(--ok)' : 'var(--dim)'}">${b.active ? '● Показывается' : '○ Скрыт'}</small></div></div><div class="row" style="margin-top:10px;gap:8px"><button class="btn small ed grow">✏️ Изменить</button><button class="btn ghost small up" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn ghost small dn" ${i === list.length - 1 ? 'disabled' : ''}>↓</button><button class="btn ghost small tg">${b.active ? 'Скрыть' : 'Показать'}</button><button class="btn bad small del">🗑</button></div></div>`).join('') : '<div class="sub">Баннеров пока нет.</div>'}</div>`;
     $('#bnAdd', el).onclick = () => go('admin_banner_edit', {});
-    $$('[data-th]', el).forEach(async t => { const u = await bannerImg(t.dataset.th, t.dataset.v); if (u) t.style.backgroundImage = `url(${u})`; });
+    $$('[data-th]', el).forEach(async t => { const u = await bannerImg(t.dataset.th, t.dataset.v); if (!u) return; if (isVidType(BTYPE.get(t.dataset.th + ':' + t.dataset.v))) t.appendChild(bannerVideoEl(u)); else t.style.backgroundImage = `url(${u})`; });
     $$('.card[data-id]', el).forEach((c, i) => {
       const b = list[i];
       $('.ed', c).onclick = () => go('admin_banner_edit', { id: b.id });
@@ -3216,13 +3254,13 @@ views.admin_banner_edit = async (el, p = {}) => {
   if (!isMain()) { el.innerHTML = empty('🔒', 'Нет доступа'); return; }
   let b = { id: 0, title: '', text: '', link: '', color: '', active: true, has_img: false, v: 0 };
   if (p.id) { const d = await api('/api/admin/ui'); b = (d.banners || []).find(x => x.id === +p.id) || b; }
-  let file = null, fileUrl = '', rmImg = false;
+  let file = null, fileUrl = '', rmImg = false, fileVid = false;
   el.innerHTML = `<h2 class="page">${b.id ? '🖼 Баннер' : '🖼 Новый баннер'}</h2>
     <span class="lbl">Так он выглядит</span><div class="bn-pv" id="bnPv" data-ugc style="margin-bottom:14px"></div>
     <div class="card glass">
-      <span class="lbl">Картинка (по желанию)</span>
-      <input type="file" id="bnFile" accept="image/*" hidden>
-      <div class="row" style="gap:8px;margin:6px 0 14px"><button class="btn small" id="bnPick">📷 Выбрать картинку</button><button class="btn ghost small" id="bnNoImg">Убрать</button></div>
+      <span class="lbl">Картинка или видео (по желанию)</span>
+      <input type="file" id="bnFile" accept="image/*,video/mp4,video/webm,video/quicktime" hidden>
+      <div class="row" style="gap:8px;margin:6px 0 14px"><button class="btn small" id="bnPick">📷 Картинка / видео</button><button class="btn ghost small" id="bnNoImg">Убрать</button></div>
       <span class="lbl">Заголовок</span><input class="f" id="bnT" maxlength="80" value="${esc(b.title)}">
       <span class="lbl" style="margin-top:12px">Текст</span><textarea class="f" id="bnX" maxlength="300" style="min-height:80px">${esc(b.text)}</textarea>
       <span class="lbl" style="margin-top:12px">Ссылка при нажатии (по желанию)</span><input class="f" id="bnL" maxlength="300" placeholder="https://… или https://t.me/… или app:search" value="${esc(b.link)}">
@@ -3235,12 +3273,12 @@ views.admin_banner_edit = async (el, p = {}) => {
   const drawPv = () => {
     const cur = { id: b.id, title: $('#bnT', el).value.trim() || 'Заголовок баннера', text: $('#bnX', el).value.trim(), color: $('#bnCOn', el).checked ? $('#bnC', el).value : '', has_img: !!fileUrl || (b.has_img && !rmImg), v: b.v };
     const pv = $('#bnPv', el); pv.innerHTML = bannerOne(cur);
-    const im = $('img', pv); if (im) { if (fileUrl) im.src = fileUrl; else bannerImg(b.id, b.v).then(u => { if (u && im.isConnected) im.src = u; }); }
+    const im = $('img', pv); if (im) { if (fileUrl) setBannerMedia(im, fileUrl, fileVid ? 'video/mp4' : 'image/jpeg'); else bannerImg(b.id, b.v).then(u => { if (u && im.isConnected) setBannerMedia(im, u, BTYPE.get(b.id + ':' + b.v)); }); }
   };
   ['#bnT', '#bnX', '#bnC', '#bnCOn'].forEach(s => { $(s, el).oninput = drawPv; $(s, el).onchange = drawPv; });
   $('#bnPick', el).onclick = () => $('#bnFile', el).click();
-  $('#bnFile', el).onchange = async e => { const f = e.target.files[0]; if (!f) return; try { file = await shrinkImage(f, 1400, .86); if (fileUrl) URL.revokeObjectURL(fileUrl); fileUrl = URL.createObjectURL(file); rmImg = false; drawPv(); } catch (er) { toast('Не удалось открыть картинку', 'err'); } };
-  $('#bnNoImg', el).onclick = () => { file = null; if (fileUrl) URL.revokeObjectURL(fileUrl); fileUrl = ''; rmImg = true; drawPv(); };
+  $('#bnFile', el).onchange = async e => { const f = e.target.files[0]; if (!f) return; try { fileVid = isVideoFile(f); if (fileVid && f.size > BANNER_VIDEO_MAX) { fileVid = false; return toast('Видео слишком большое — до 8 МБ', 'err'); } file = fileVid ? f : await shrinkImage(f, 1400, .86); if (fileUrl) URL.revokeObjectURL(fileUrl); fileUrl = URL.createObjectURL(file); rmImg = false; drawPv(); } catch (er) { toast('Не удалось открыть файл', 'err'); } };
+  $('#bnNoImg', el).onclick = () => { file = null; fileVid = false; if (fileUrl) URL.revokeObjectURL(fileUrl); fileUrl = ''; rmImg = true; drawPv(); };
   drawPv();
   $('#bnSave', el).onclick = async e => {
     const link = $('#bnL', el).value.trim();
@@ -3250,7 +3288,7 @@ views.admin_banner_edit = async (el, p = {}) => {
     const btn = e.currentTarget; btn.disabled = true;
     const fd = new FormData(); fd.append('id', b.id || 0); fd.append('title', title); fd.append('text', text); fd.append('link', link);
     fd.append('color', $('#bnCOn', el).checked ? $('#bnC', el).value : ''); fd.append('active', $('#bnA', el).checked ? '1' : '0');
-    if (file) fd.append('file', file, 'banner.jpg'); if (rmImg) fd.append('remove_img', '1');
+    if (file) fd.append('file', file, fileVid ? 'banner.mp4' : 'banner.jpg'); if (rmImg) fd.append('remove_img', '1');
     try { await api('/api/admin/banner_save', fd); await loadMe(); toast('Баннер сохранён ✅', 'good'); go('admin_banners', {}, { replace: true }); }
     catch (er) { btn.disabled = false; fail(er); }
   };

@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS forum_notifs(
     id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, kind TEXT NOT NULL, actor_id BIGINT NOT NULL, post_id INT, comment_id INT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), read BOOLEAN NOT NULL DEFAULT FALSE);
 CREATE INDEX IF NOT EXISTS forum_notifs_user_idx ON forum_notifs(user_id, id DESC);
+CREATE TABLE IF NOT EXISTS forum_notif_prefs(
+    user_id BIGINT PRIMARY KEY, likes BOOLEAN NOT NULL DEFAULT TRUE, comments BOOLEAN NOT NULL DEFAULT TRUE, mentions BOOLEAN NOT NULL DEFAULT TRUE,
+    follows BOOLEAN NOT NULL DEFAULT TRUE, dms BOOLEAN NOT NULL DEFAULT TRUE, tg BOOLEAN NOT NULL DEFAULT TRUE);
 CREATE TABLE IF NOT EXISTS forum_reports(
     id SERIAL PRIMARY KEY, reporter_id BIGINT NOT NULL, kind CHAR(1) NOT NULL, target_id INT NOT NULL, reason TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now());
@@ -81,7 +84,7 @@ CREATE TABLE IF NOT EXISTS forum_reports(
 SEED_BOARDS = [("Новости", "📰", 1, True), ("Общий", "💬", 2, False), ("Вопросы", "❓", 3, False), ("Пиар", "📣", 4, False),
                ("Проекты", "🧩", 5, False), ("Флуд", "🎲", 6, False)]
 
-TITLE_MAX, BODY_MAX, COMMENT_MAX, BIO_MAX, IMG_MAX, IMG_COUNT = 120, 8000, 2000, 300, 4 * 1024 * 1024, 4
+TITLE_MAX, BODY_MAX, COMMENT_MAX, BIO_MAX, IMG_MAX, IMG_COUNT = 120, 8000, 2000, 500, 4 * 1024 * 1024, 4
 IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 _seen_views = {}
 _seen_touch = {}
@@ -168,19 +171,19 @@ async def users_map(ids):
         return {}
     rows = await P().fetch(
         "SELECT user_id,username,first_name,last_name,bio,accent,created_at,(avatar_data IS NOT NULL OR tg_avatar_data IS NOT NULL OR photo_url IS NOT NULL) av,"
-        "(banner_data IS NOT NULL) bn FROM users WHERE user_id=ANY($1::bigint[])", ids)
+        "(banner_data IS NOT NULL) bn,(banner_mime LIKE 'video/%') bnv FROM users WHERE user_id=ANY($1::bigint[])", ids)
     sb = await bm.staff_badges(ids)
     out = {}
     for r in rows:
         out[r["user_id"]] = {
             "id": r["user_id"], "username": r["username"] or "",
             "name": " ".join(x for x in [r["first_name"], r["last_name"]] if x) or r["username"] or "Пользователь",
-            "av": bool(r["av"]), "bn": bool(r["bn"]), "sb": sb.get(r["user_id"], ""), "bio": r["bio"] or "", "accent": r["accent"] or ""}
+            "av": bool(r["av"]), "bn": bool(r["bn"]), "bnv": bool(r["bnv"]), "sb": sb.get(r["user_id"], ""), "bio": r["bio"] or "", "accent": r["accent"] or ""}
     return out
 
 
 def ghost(uid):
-    return {"id": uid, "username": "", "name": "Пользователь", "av": False, "bn": False, "sb": "", "bio": "", "accent": ""}
+    return {"id": uid, "username": "", "name": "Пользователь", "av": False, "bn": False, "bnv": False, "sb": "", "bio": "", "accent": ""}
 
 
 async def me_json(uid):
@@ -278,7 +281,14 @@ async def a_me_avatar(request):
 
 @api
 async def a_me_banner(request):
-    data, mime = await _read_image(request, "file")
+    form = await request.post()
+    f = form.get("file")
+    if f is None or not hasattr(f, "file"):
+        raise FErr(400, "no_file", "Файл не выбран")
+    try:   # картинка (до 4 МБ) или видео MP4/WebM (до 8 МБ) — тип определяется по содержимому
+        data, mime = bm.banner_media(f.file.read(), getattr(f, "content_type", "") or "", img_max=IMG_MAX)
+    except bm.ApiError:
+        raise FErr(400, "bad_image", "Нужна картинка до 4 МБ (JPEG, PNG, WebP) или видео MP4/WebM до 8 МБ")
     await P().execute("UPDATE users SET banner_data=$2,banner_mime=$3 WHERE user_id=$1", request["fuid"], data, mime)
     return J({"ok": True})
 
@@ -296,12 +306,27 @@ async def a_avatar(request):
     raise web.HTTPNotFound()
 
 
+def _ranged(request, data, mime, headers):
+    """Ответ с поддержкой Range — без него Safari/iOS не проигрывают <video>."""
+    h = dict(headers, **{"Accept-Ranges": "bytes", "X-Content-Type-Options": "nosniff"})
+    size = len(data)
+    m = re.match(r"bytes=(\d*)-(\d*)$", (request.headers.get("Range") or "").strip()) if mime.startswith("video/") else None
+    if m and (m.group(1) or m.group(2)):
+        a, b = m.groups()
+        start, end = (max(size - int(b), 0), size - 1) if not a else (int(a), min(int(b), size - 1) if b else size - 1)
+        if start > end or start >= size:
+            return web.Response(status=416, headers={"Content-Range": "bytes */%d" % size})
+        h["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+        return web.Response(status=206, body=data[start:end + 1], content_type=mime, headers=h)
+    return web.Response(body=data, content_type=mime, headers=h)
+
+
 async def a_banner(request):
     uid = to_int(request.match_info.get("uid"))
     r = await P().fetchrow("SELECT banner_data,banner_mime FROM users WHERE user_id=$1", uid)
     if not r or not r["banner_data"]:
         raise web.HTTPNotFound()
-    return web.Response(body=bytes(r["banner_data"]), content_type=r["banner_mime"] or "image/jpeg", headers={"Cache-Control": "public, max-age=300"})
+    return _ranged(request, bytes(r["banner_data"]), r["banner_mime"] or "image/jpeg", {"Cache-Control": "public, max-age=300"})
 
 
 async def a_img(request):
@@ -357,9 +382,22 @@ async def a_user_list(request):
 
 
 # ============================================================================ уведомления
+NGROUP = {"like_p": "likes", "like_c": "likes", "comment": "comments", "reply": "comments", "mention": "mentions", "follow": "follows"}
+PREF_KEYS = ("likes", "comments", "mentions", "follows", "dms", "tg")
+
+
+async def get_prefs(uid):
+    """Настройки уведомлений пользователя (по умолчанию всё включено)."""
+    r = await P().fetchrow("SELECT likes,comments,mentions,follows,dms,tg FROM forum_notif_prefs WHERE user_id=$1", uid)
+    return {k: (bool(r[k]) if r else True) for k in PREF_KEYS}
+
+
 async def notify(to, kind, actor, post_id=None, comment_id=None):
     if not to or to == actor:
         return
+    pr = await get_prefs(to)
+    if not pr.get(NGROUP.get(kind, ""), True):
+        return                                   # этот тип уведомлений пользователь отключил
     if kind in ("like_p", "like_c", "follow"):
         dup = await P().fetchval(
             "SELECT 1 FROM forum_notifs WHERE user_id=$1 AND kind=$2 AND actor_id=$3 AND post_id IS NOT DISTINCT FROM $4 AND comment_id IS NOT DISTINCT FROM $5",
@@ -367,11 +405,14 @@ async def notify(to, kind, actor, post_id=None, comment_id=None):
         if dup:
             return
     await P().execute("INSERT INTO forum_notifs(user_id,kind,actor_id,post_id,comment_id) VALUES($1,$2,$3,$4,$5)", to, kind, actor, post_id, comment_id)
-    if kind in ("comment", "reply", "mention") and bm._BOT and bm.WEBAPP_URL and bm.rate_ok(("forum_push", to), 120):
+    # дублирование в Telegram: работает и когда приложение закрыто (лайки в Telegram не шлём — слишком шумно)
+    if kind in ("comment", "reply", "mention", "follow") and pr["tg"] and bm._BOT and bm.WEBAPP_URL and bm.rate_ok(("forum_push", to, kind), 120):
         try:
             who = await bm.user_name(actor)
-            what = {"comment": "прокомментировал(а) ваш пост", "reply": "ответил(а) на ваш комментарий", "mention": "упомянул(а) вас"}[kind]
-            await bm._BOT.send_message(to, f"💬 <b>KMBP FORUM</b>\n{bm.esc(who)} {what}.\n{bm.WEBAPP_URL}/forum#/post/{post_id}")
+            what = {"comment": "прокомментировал(а) ваш пост", "reply": "ответил(а) на ваш комментарий", "mention": "упомянул(а) вас",
+                    "follow": "подписался(лась) на вас"}[kind]
+            link = f"{bm.WEBAPP_URL}/forum#/p/{post_id}" if post_id else f"{bm.WEBAPP_URL}/forum#/u/{actor}"
+            await bm._BOT.send_message(to, f"💬 <b>KMBP FORUM</b>\n{bm.esc(who)} {what}.\n{link}")
         except Exception:
             pass
 
@@ -407,6 +448,25 @@ async def a_notifs_read(request):
 
 
 @api
+async def a_notif_prefs(request):
+    return J(await get_prefs(request["fuid"]))
+
+
+@api
+async def a_notif_prefs_set(request):
+    uid = request["fuid"]
+    d = await jbody(request)
+    cur = await get_prefs(uid)
+    for k in PREF_KEYS:
+        if k in d:
+            cur[k] = bool(d[k])
+    await P().execute(
+        "INSERT INTO forum_notif_prefs(user_id,likes,comments,mentions,follows,dms,tg) VALUES($1,$2,$3,$4,$5,$6,$7) "
+        "ON CONFLICT (user_id) DO UPDATE SET likes=$2,comments=$3,mentions=$4,follows=$5,dms=$6,tg=$7", uid, *[cur[k] for k in PREF_KEYS])
+    return J(cur)
+
+
+@api
 async def a_ping(request):
     uid = request["fuid"]
     n = await P().fetchval("SELECT count(*) FROM forum_notifs WHERE user_id=$1 AND NOT read", uid)
@@ -414,7 +474,21 @@ async def a_ping(request):
     await ensure_chat(uid)
     m = await P().fetchval(
         "SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)", uid)
-    return J({"notifs": n, "msgs": m})
+    out = {"notifs": n, "msgs": m, "last": await P().fetchval("SELECT COALESCE(max(id),0) FROM forum_notifs WHERE user_id=$1", uid), "new": [], "dm": None}
+    after = request.query.get("after")
+    if after is not None and after.lstrip("-").isdigit():     # новые непрочитанные с момента прошлой проверки — для баннера/звука на устройстве
+        rows = await P().fetch(
+            "SELECT n.id,n.kind,n.actor_id,n.post_id,left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80) snippet "
+            "FROM forum_notifs n LEFT JOIN forum_posts p ON p.id=n.post_id WHERE n.user_id=$1 AND NOT n.read AND n.id>$2 ORDER BY n.id DESC LIMIT 5", uid, int(after))
+        um = await users_map([r["actor_id"] for r in rows])
+        out["new"] = [{"id": r["id"], "kind": r["kind"], "actor": (um.get(r["actor_id"]) or ghost(r["actor_id"]))["name"], "actor_id": r["actor_id"],
+                       "post_id": r["post_id"], "snippet": r["snippet"] or ""} for r in rows]
+    if m and (await get_prefs(uid))["dms"]:
+        sid = await P().fetchval("SELECT sender_id FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL ORDER BY id DESC LIMIT 1", uid)
+        if sid:
+            sm = (await users_map([sid])).get(sid) or ghost(sid)
+            out["dm"] = {"id": sid, "name": sm["name"]}
+    return J(out)
 
 
 # ============================================================================ посты
@@ -833,6 +907,43 @@ async def page(request):
     return web.Response(text=html, content_type="text/html", charset="utf-8", headers=hdr)
 
 
+# ============================================================================ профиль как в мини-аппе
+# Те же обработчики, что у мини-аппа (bot.py): рейтинг, отзывы, сделки, достижения, проекты, жалобы, блокировки,
+# выдача значков. Подменяем только способ авторизации: вместо Telegram initData — токен форума.
+ERR_RU = {
+    "review_after_deal_only": "Оставить отзыв можно после завершённой сделки",
+    "bad_image": "Нужна картинка до 5 МБ (JPEG, PNG, WebP)", "too_many_photos": "Не больше 5 скриншотов",
+    "slow": "Слишком часто — подождите немного", "forbidden": "Недостаточно прав", "user_not_found": "Пользователь не найден",
+    "review_not_found": "Отзыв не найден", "bad_review": "Нельзя оценить себя или оценка неверная", "bad_input": "Неверные данные",
+    "bad_theme": "Неизвестная тема", "bad_accent": "Неверный цвет", "blocked_peer": "Вы заблокировали этого пользователя",
+}
+
+
+def bridge(name):
+    """Эндпоинт форума, вызывающий обработчик мини-аппа bm.<name> от имени пользователя форума."""
+    @api
+    async def handler(request):
+        request["u"] = {"id": request["fuid"]}
+        try:
+            return await getattr(bm, name)(request)
+        except bm.ApiError as e:
+            raise FErr(e.status, e.msg, ERR_RU.get(e.msg, e.msg))
+    return handler
+
+
+@api
+async def a_x_avatar_delete(request):
+    await P().execute("UPDATE users SET avatar_data=NULL,avatar_mime=NULL,tg_avatar_at=NULL WHERE user_id=$1", request["fuid"])
+    return J({"ok": True})
+
+
+@api
+async def a_x_banner_delete(request):
+    await P().execute("UPDATE users SET banner_data=NULL,banner_mime=NULL WHERE user_id=$1", request["fuid"])
+    return J({"ok": True})
+
+
+
 def install(app, bot_module):
     global bm
     bm = bot_module
@@ -871,6 +982,8 @@ def install(app, bot_module):
     r.add_post(A + "/board/delete", a_board_delete)
     r.add_get(A + "/notifs", a_notifs)
     r.add_post(A + "/notifs/read", a_notifs_read)
+    r.add_get(A + "/notifs/prefs", a_notif_prefs)
+    r.add_post(A + "/notifs/prefs", a_notif_prefs_set)
     r.add_get(A + "/ping", a_ping)
     r.add_get(A + "/search", a_search)
     r.add_get(A + "/chats", a_chats)
@@ -878,6 +991,19 @@ def install(app, bot_module):
     r.add_post(A + "/messages", a_message_send)
     r.add_post(A + "/typing", a_typing)
     r.add_post(A + "/support/{act}", a_support_act)
+    X = A + "/x"
+    r.add_get(X + "/profile", bridge("api_profile"))
+    r.add_post(X + "/profile", bridge("api_profile_update"))
+    r.add_get(X + "/reviews", bridge("api_profile_reviews"))
+    r.add_post(X + "/review", bridge("api_profile_review_save"))
+    r.add_get(X + "/blocks", bridge("api_blocks"))
+    r.add_post(X + "/block", bridge("api_block"))
+    r.add_post(X + "/report_user", bridge("api_report_user"))
+    r.add_post(X + "/report_any", bridge("api_report_any"))
+    r.add_post(X + "/user_flag", bridge("api_admin_user_flag"))
+    r.add_post(X + "/user_badge", bridge("api_admin_user_badge"))
+    r.add_post(X + "/avatar/delete", a_x_avatar_delete)
+    r.add_post(X + "/banner/delete", a_x_banner_delete)
 
 
 async def start(bot_module):

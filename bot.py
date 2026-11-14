@@ -4505,7 +4505,7 @@ async def api_apply(request):
 async def api_profile(request):
     uid = int(request.query.get("id") or request["u"]["id"])
     row = await pool.fetchrow("""SELECT u.user_id,u.username,u.first_name,u.last_name,u.bio,u.theme,u.accent,u.profile_theme,u.photo_url,
-        (u.avatar_data IS NOT NULL) has_avatar, (u.banner_data IS NOT NULL) has_banner, u.created_at, u.last_seen,
+        (u.avatar_data IS NOT NULL) has_avatar, (u.banner_data IS NOT NULL) has_banner, (u.banner_mime LIKE 'video/%') banner_video, u.created_at, u.last_seen,
         COALESCE(avg(r.rating),0)::float rating, count(r.id)::int reviews
         FROM users u LEFT JOIN user_reviews r ON r.target_id=u.user_id
         WHERE u.user_id=$1 GROUP BY u.user_id""", uid)
@@ -4536,7 +4536,7 @@ async def api_profile(request):
     return jr({"id": row["user_id"], "username": row["username"],
         "name": " ".join(x for x in [row["first_name"],row["last_name"]] if x) or row["username"] or "Пользователь",
         "bio": row["bio"], "theme": row["theme"], "accent": row["accent"], "profile_theme": row["profile_theme"] or "",
-        "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "has_banner": row["has_banner"], "created": fmt_dt(row["created_at"]),
+        "photo_url": row["photo_url"], "has_avatar": row["has_avatar"], "has_banner": row["has_banner"], "has_banner_video": bool(row["banner_video"]), "created": fmt_dt(row["created_at"]),
         "rating": (bc["score"] if bc else round(row["rating"],1)), "reviews": row["reviews"], "completed_deals": deals, "history": history,
         "badges": badges, "base": base_sum, "blocked_by_me": by_me, "blocked_me": by_peer, "flags": flags,
         "projects": [project_json(x) for x in await pool.fetch(PROJECT_SELECT + " WHERE p.owner_id=$1 ORDER BY p.id", uid)],
@@ -4623,6 +4623,28 @@ async def api_profile_avatar_upload(request):
     return jr({"ok":True})
 
 
+BANNER_VIDEO_MAX = 8 * 1024 * 1024
+_VIDEO_BAD_BRANDS = (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif", b"avis")
+
+
+def banner_media(data, mime=None, img_max=6 * 1024 * 1024):
+    """Баннер: картинка (JPEG/PNG/WebP) или короткое видео (MP4/WebM до 8 МБ).
+    Тип определяем по содержимому файла, а не по заголовку от клиента. Возвращает (data, mime)."""
+    if not data:
+        raise ApiError(400, "bad_image")
+    if data[4:8] == b"ftyp" and data[8:12] not in _VIDEO_BAD_BRANDS:      # MP4 / MOV (H.264)
+        if len(data) > BANNER_VIDEO_MAX:
+            raise ApiError(400, "bad_video")
+        return data, "video/mp4"
+    if data[:4] == b"\x1a\x45\xdf\xa3":                                  # WebM / Matroska
+        if len(data) > BANNER_VIDEO_MAX:
+            raise ApiError(400, "bad_video")
+        return data, "video/webm"
+    if len(data) > img_max or mime not in ("image/jpeg", "image/png", "image/webp"):
+        raise ApiError(400, "bad_image")
+    return data, mime
+
+
 async def api_profile_banner(request):
     target=int(request.query.get("id") or request["u"]["id"])
     row=await pool.fetchrow("SELECT banner_data,banner_mime FROM users WHERE user_id=$1",target)
@@ -4636,10 +4658,7 @@ async def api_profile_banner_upload(request):
     uid=request["u"]["id"]; form=await request.post(); f=form.get("file")
     if f is None or not hasattr(f,"file"):
         raise ApiError(400,"no_file")
-    data=f.file.read()
-    mime=getattr(f,"content_type",None) or "image/jpeg"
-    if not data or len(data)>6*1024*1024 or mime not in ("image/jpeg","image/png","image/webp"):
-        raise ApiError(400,"bad_image")
+    data,mime=banner_media(f.file.read(),getattr(f,"content_type",None) or "image/jpeg")
     await pool.execute("UPDATE users SET banner_data=$2,banner_mime=$3 WHERE user_id=$1",uid,data,mime)
     return jr({"ok":True})
 
@@ -5190,10 +5209,7 @@ async def api_project_banner_upload(request):
     f = form.get("file")
     if f is None or not hasattr(f, "file"):
         raise ApiError(400, "no_file")
-    data = f.file.read()
-    mime = getattr(f, "content_type", None) or "image/jpeg"
-    if not data or len(data) > 6 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
-        raise ApiError(400, "bad_image")
+    data, mime = banner_media(f.file.read(), getattr(f, "content_type", None) or "image/jpeg")
     await pool.execute("UPDATE projects SET banner_data=$2,banner_mime=$3 WHERE id=$1", pid, data, mime)
     await support.sync_if_support(pid)
     return jr({"ok": True})
@@ -6220,10 +6236,7 @@ async def api_admin_banner_save(request):
     f = form.get("file")
     data = mime = None
     if f is not None and hasattr(f, "file"):
-        data = f.file.read()
-        mime = getattr(f, "content_type", None) or "image/jpeg"
-        if not data or len(data) > 4 * 1024 * 1024 or mime not in ("image/jpeg", "image/png", "image/webp"):
-            raise ApiError(400, "bad_image")
+        data, mime = banner_media(f.file.read(), getattr(f, "content_type", None) or "image/jpeg", img_max=4 * 1024 * 1024)
     remove_img = str(form.get("remove_img") or "") == "1"
     if not _banner_link_ok(link):
         raise ApiError(400, "bad_link")
