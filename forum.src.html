@@ -1542,7 +1542,7 @@ function lpFill(log){
 
 /* ---------- создание / редактирование ---------- */
 (function(){const kick=v=>{v.muted=true;const p=v.play&&v.play();if(p&&p.catch)p.catch(()=>{})};new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType!==1)return;if(n.tagName==='VIDEO')kick(n);else if(n.querySelectorAll)n.querySelectorAll('video[autoplay]').forEach(kick)}))).observe(document.documentElement,{childList:true,subtree:true})})();
-function compress(file){return new Promise(res=>{if(file.type==='image/gif'||file.size<350000){res(file);return}const im=new Image(),u=URL.createObjectURL(file);im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);c.toBlob(b=>{URL.revokeObjectURL(u);res(b?new File([b],'p.jpg',{type:'image/jpeg'}):file)},'image/jpeg',.82)};im.onerror=()=>res(file);im.src=u})}
+function compress(file){return new Promise(res=>{if(file.type==='image/gif'||file.size<350000){res(file);return}const im=new Image(),u=URL.createObjectURL(file);im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);const al=/^image\/(png|webp)$/i.test(file.type);c.toBlob(b=>{URL.revokeObjectURL(u);res(b?new File([b],al?'p.webp':'p.jpg',{type:b.type||'image/jpeg'}):file)},al?'image/webp':'image/jpeg',al?.88:.82)};im.onerror=()=>res(file);im.src=u})}
 const EMOS=['😀','😂','😍','🥰','😎','🤔','😢','😡','👍','👎','🔥','❤️','✨','🎉','🙏','👀'];
 async function viewCompose(el,boardId,editId){
   let ed=null;if(editId){ed=(await api('/post?id='+editId)).post}
@@ -1741,7 +1741,7 @@ async function viewEditProfile(el){
   $('#bio',el).oninput=e=>{$('#bc',el).textContent=e.target.value.length};
   const getNm=bindName(el,'user',S.me.id,u.own_name?u.username:'');
   const upload=async(path,file,msg)=>{try{const isV=/^video\//.test(file.type)||/\.(mp4|webm|mov|m4v)$/i.test(file.name||'');if(isV&&file.size>8*1024*1024)throw new Error('Видео слишком большое — до 8 МБ');if(isV)toast('Загружаю видео…');const fd=new FormData();if(isV)fd.append('file',file,'banner.mp4');else fd.append('file',await compress(file),'i.jpg');await api(path,{method:'POST',form:fd});S.avv=Date.now();toast(msg);await refreshMe();viewEditProfile(el)}catch(e){toast(e.message,1)}};
-  $('#chA',el).onclick=()=>$('#fa',el).click();$('#chB',el).onclick=()=>$('#fb',el).click();
+  $('#chA',el).onclick=()=>pickImg(fs=>upload('/me/avatar',fs[0],'Аватар обновлён'),'image/*');$('#chB',el).onclick=()=>$('#fb',el).click();
   $('#fa',el).onchange=e=>{const f=e.target.files[0];if(f)upload('/me/avatar',f,'Аватар обновлён')};
   $('#fb',el).onchange=e=>{const f=e.target.files[0];if(f)upload('/me/banner',f,'Баннер обновлён')};
   const da=$('#delA',el);if(da)da.onclick=async()=>{if(!await confirmBox('Удалить фото профиля? Вернётся фото из Telegram.'))return;try{await post_('/x/avatar/delete');S.avv=Date.now();toast('Фото удалено');await refreshMe();viewEditProfile(el)}catch(e){toast(e.message,1)}};
@@ -1771,6 +1771,15 @@ function kindOf(f){const t=(f.type||'').toLowerCase(),n=(f.name||'').toLowerCase
   if(/^image\/(jpeg|png|webp|gif)$/.test(t)||(!t&&/\.(jpe?g|png|webp|gif)$/.test(n)))return 'image';
   if(/^video\/(mp4|webm|quicktime|x-m4v)$/.test(t)||(!t&&/\.(mp4|m4v|webm|mov)$/.test(n)))return 'video';return 'file'}
 /* accept: 'image/*' откроет галерею фото, 'video/*' — галерею видео, без accept — файловый менеджер */
+/* Галерея Android часто отдаёт PNG/WebP уже с белым фоном вместо прозрачности — это происходит до приложения.
+   «Из файлов» открывает системный проводник и отдаёт файл как есть. */
+async function fixType(f){if(f.type&&/^(image|video)\//.test(f.type))return f;
+  try{const b=new Uint8Array(await f.slice(0,12).arrayBuffer()),s=(o,n)=>String.fromCharCode.apply(null,b.subarray(o,o+n));
+    const t=s(0,4)==='GIF8'?'image/gif':b[0]===0x89&&s(1,3)==='PNG'?'image/png':b[0]===0xff&&b[1]===0xd8?'image/jpeg':s(0,4)==='RIFF'&&s(8,4)==='WEBP'?'image/webp':b[0]===0x1a&&b[1]===0x45?'video/webm':'';
+    return t?new File([f],f.name||'f',{type:t}):null}catch(e){return null}}
+async function pickImg(cb,accept){
+  const c=await sheet([{ic:'img',t:'Из галереи',k:'g'},{ic:'file',t:'Из файлов (прозрачность сохранится)',k:'f'}],'Откуда взять картинку?');if(!c)return;
+  pickFiles(c.k==='f'?'':accept,async fs=>{const ok=(await Promise.all([...fs].map(fixType))).filter(Boolean);if(!ok.length){toast('Нужна картинка (PNG, WebP, GIF, JPEG)',1);return}cb(ok)})}
 function pickFiles(accept,cb){const i=document.createElement('input');i.type='file';i.multiple=true;if(accept)i.accept=accept;i.style.display='none';document.body.appendChild(i);
   i.addEventListener('change',()=>{const fs=[...i.files];i.remove();if(fs.length)cb(fs)});i.addEventListener('cancel',()=>i.remove());i.click()}
 function attachMenu(onFiles){
@@ -1957,9 +1966,9 @@ async function viewChat(el,peer,G){
     const sub=$('#chSub',el);if(sub){const t=subLine(d);if(sub.textContent!==t)sub.textContent=t;sub.classList.toggle('typing',!!((G?(d.typing||[]).length:d.typing)||d.recording))}
     $('.cform',el).style.display=(d.blocked||(G&&!grp.can_post))?'none':'';if(d.blocked||(G&&!grp.can_post))clearBar();if(G)gBarSync();
     isSup=d.support_mode!==undefined;
-    if(d.support_mode!==undefined){const bar=$('#supBar',el);if(sup!==d.support_mode){sup=d.support_mode;bar.hidden=false;bar.innerHTML=sup==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="btn sm" id="opB">Позвать оператора</button>':sup==='waiting'?'<span>Оператор вызван — ответит здесь</span><button class="btn ghost sm" id="opC">Отменить</button>':'<span>С вами на связи оператор</span>';
+    if(d.support_mode!==undefined){const bar=$('#supBar',el);if(sup!==d.support_mode){sup=d.support_mode;bar.hidden=false;bar.innerHTML=sup==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="btn sm" id="opB">Позвать оператора</button>':sup==='waiting'?'<span>Оператор вызван — ответит здесь</span><button class="btn ghost sm" id="opC">Отменить</button>':'<span>С вами на связи оператор</span><button class="btn ghost sm" id="opC">Вернуться к ИИ</button>';
       const o=$('#opB',bar);if(o)o.onclick=async()=>{o.disabled=true;try{await post_('/support/operator');draw()}catch(e){toast(e.message,1);o.disabled=false}};
-      const c=$('#opC',bar);if(c)c.onclick=async()=>{try{await post_('/support/cancel');draw()}catch(e){toast(e.message,1)}}}}
+      const c=$('#opC',bar);if(c)c.onclick=async()=>{if(sup==='operator'&&!await confirmBox('Завершить разговор с оператором и продолжить с ИИ?'))return;try{await post_('/support/cancel');draw(true)}catch(e){toast(e.message,1)}}}}
     drawPins();renderLog(d.messages,force)};
   const draw=force=>api(X.list(lim)).then(d=>apply(d,force));
   await draw(true);

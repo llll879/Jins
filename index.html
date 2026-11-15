@@ -3179,7 +3179,7 @@ views.chat = async (el,params={}) => {
         const m=n.support_mode||'ai';const key=m;
         if(sb.dataset.m!==key){
           sb.dataset.m=key;sb.hidden=false;
-          sb.innerHTML=m==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="sup-btn" id="supOp">🙋 Позвать оператора</button>':m==='waiting'?'<span>⏳ Оператор вызван — ответит здесь</span><button class="sup-btn ghost" id="supCancel">Отменить</button>':'<span>👤 С вами на связи оператор</span>';
+          sb.innerHTML=m==='ai'?'<span>Отвечает ИИ. Нужен человек?</span><button class="sup-btn" id="supOp">🙋 Позвать оператора</button>':m==='waiting'?'<span>⏳ Оператор вызван — ответит здесь</span><button class="sup-btn ghost" id="supCancel">Отменить</button>':'<span>👤 С вами на связи оператор</span><button class="sup-btn ghost" id="supCancel">Вернуться к ИИ</button>';
           const op=$('#supOp',sb);if(op)op.onclick=async()=>{op.disabled=true;try{await api('/api/support/operator',{});buzz('light');await refresh();}catch(e){op.disabled=false;fail(e)}};
           const cn=$('#supCancel',sb);if(cn)cn.onclick=async()=>{cn.disabled=true;try{await api('/api/support/cancel',{});await refresh();}catch(e){cn.disabled=false;fail(e)}};
         }

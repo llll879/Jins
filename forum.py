@@ -1570,10 +1570,7 @@ async def a_support_act(request):
                 raise FErr(429, "too_fast", "Не так быстро")
             await support.create_ticket(me, announce=True)
     elif act == "cancel":
-        tk = await support.open_ticket(me)
-        if tk:
-            await P().execute("UPDATE support_tickets SET status='closed', closed_at=now() WHERE id=$1", tk["id"])
-            await support.say(me, "Вызов оператора отменён. Я снова на связи — задавайте вопрос.")
+        await support.user_cancel(me)          # ожидание → отмена; разговор с оператором → завершён, дальше ИИ
     else:
         raise FErr(404, "not_found")
     return J({"ok": True, "mode": await support.mode_of(me)})

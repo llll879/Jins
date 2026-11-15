@@ -470,6 +470,39 @@ async def close_ticket(tid, by=None, silent=False):
     return tk
 
 
+END_CMDS = ("/end", "/close", "/done", "/stop", "/конец", "/закрыть", "/завершить", "/готово")
+
+
+def is_end_cmd(text):
+    """Оператор отвечает на заявку командой — диалог закрывается и дальше отвечает ИИ."""
+    t = (text or "").strip().lower().split("@")[0]
+    return t in END_CMDS
+
+
+async def user_cancel(uid):
+    """Пользователь сам завершает вызов. Ожидание оператора → «вызов отменён»; идёт разговор с оператором → «разговор завершён».
+    Дальше пишет ИИ (заявка закрыта). Оператору в админ-группе уходит пометка. Возвращает заявку или None."""
+    tk = await open_ticket(uid)
+    if not tk:
+        return None
+    was_active = tk["status"] == "active"
+    tk = await P().fetchrow(
+        "UPDATE support_tickets SET status='closed', closed_at=now() WHERE id=$1 AND status IN ('waiting','active') RETURNING *", tk["id"])
+    if not tk:
+        return None
+    await say(uid, "✅ Вы завершили разговор с оператором. Я снова на связи — задавайте вопрос." if was_active
+              else "Вызов оператора отменён. Я снова на связи — задавайте вопрос.")
+    try:
+        bot = bm._BOT
+        note = (f"ℹ️ Пользователь завершил разговор #{tk['id']} — дальше отвечает ИИ." if was_active
+                else f"ℹ️ Пользователь отменил вызов #{tk['id']}.")
+        for r in await P().fetch("SELECT chat_id,msg_id FROM support_msgs WHERE ticket_id=$1 AND root", tk["id"]):
+            await bot.send_message(r["chat_id"], note, reply_parameters=ReplyParameters(message_id=r["msg_id"], allow_sending_without_reply=True))
+    except Exception:
+        pass
+    return tk
+
+
 async def _is_staff(uid):
     return await bm.role(uid) is not None
 
@@ -528,6 +561,15 @@ if router is not None:
             await m.reply("Эта заявка уже закрыта.")
             return
         adm = m.from_user.full_name
+        if is_end_cmd(m.text):          # «/end» ответом на заявку: оператор закончил — пользователь возвращается к ИИ
+            if tk["status"] == "active" and tk["admin_id"] != m.from_user.id and not await bm.is_main(m.from_user.id):
+                await m.reply(f"Эту заявку ведёт {tk['admin_name']}.")
+                return
+            if await close_ticket(tk["id"]):
+                await m.reply(f"✅ Заявка #{tk['id']} закрыта. Пользователю отвечает ИИ.")
+            else:
+                await m.reply("Эта заявка уже закрыта.")
+            return
         if tk["status"] == "waiting":
             tk = await P().fetchrow(
                 "UPDATE support_tickets SET status='active', admin_id=$2, admin_name=$3, taken_at=now() WHERE id=$1 RETURNING *",
@@ -608,18 +650,7 @@ async def api_operator(request):
 
 
 async def api_cancel(request):
-    uid = request["u"]["id"]
-    tk = await open_ticket(uid)
-    if tk:
-        await P().execute("UPDATE support_tickets SET status='closed', closed_at=now() WHERE id=$1", tk["id"])
-        await say(uid, "Вызов оператора отменён. Я снова на связи — задавайте вопрос.")
-        try:
-            bot = bm._BOT
-            for r in await P().fetch("SELECT chat_id,msg_id FROM support_msgs WHERE ticket_id=$1 AND root", tk["id"]):
-                await bot.send_message(r["chat_id"], f"ℹ️ Пользователь отменил вызов #{tk['id']}.",
-                                       reply_parameters=ReplyParameters(message_id=r["msg_id"], allow_sending_without_reply=True))
-        except Exception:
-            pass
+    await user_cancel(request["u"]["id"])
     return bm.jr({"ok": True, "mode": "ai"})
 
 
