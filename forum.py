@@ -412,7 +412,10 @@ async def notify(to, kind, actor, post_id=None, comment_id=None):
             what = {"comment": "прокомментировал(а) ваш пост", "reply": "ответил(а) на ваш комментарий", "mention": "упомянул(а) вас",
                     "follow": "подписался(лась) на вас"}[kind]
             link = f"{bm.WEBAPP_URL}/forum#/p/{post_id}" if post_id else f"{bm.WEBAPP_URL}/forum#/u/{actor}"
-            await bm._BOT.send_message(to, f"💬 <b>KMBP FORUM</b>\n{bm.esc(who)} {what}.\n{link}")
+            # адрес сервера не пишем в тексте — только кнопка «Открыть»
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Открыть", web_app=WebAppInfo(url=link))]]) if link.startswith("https://") else None
+            await bm._BOT.send_message(to, f"💬 <b>KMBP FORUM</b>\n{bm.esc(who)} {what}.", reply_markup=kb)
         except Exception:
             pass
 
@@ -796,6 +799,40 @@ async def a_search(request):
 
 
 # ============================================================================ личные сообщения (те же чаты, что в мини-аппе)
+# ---- вложения в личных сообщениях: фото / видео / файлы ----
+ATTACH_MAX = 20 * 1024 * 1024
+VIDEO_MIMES = ("video/mp4", "video/webm", "video/quicktime")
+_EXT_MIME = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif",
+             "mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "mov": "video/quicktime"}
+
+
+def attach_info(fname, mime):
+    """(вид, mime): вид — image / video / file. Тип берём из mime, а если браузер прислал пустой — из расширения."""
+    m = str(mime or "").split(";")[0].strip().lower()
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+    if m in ("", "application/octet-stream") and ext in _EXT_MIME:
+        m = _EXT_MIME[ext]
+    if m == "video/x-m4v":
+        m = "video/mp4"
+    if m in bm.IMG_MIMES:
+        return "image", m
+    if m in VIDEO_MIMES:
+        return "video", m
+    return "file", "application/octet-stream"
+
+
+def last_preview(r):
+    """Подпись последнего сообщения в списке чатов."""
+    if r["body"]:
+        return r["body"]
+    if r["voice_dur"]:
+        return "📹 Видеосообщение" if bm.note_mime(r["file_mime"]) else "🎤 Голосовое сообщение"
+    if r["file_name"] or r["file_mime"]:
+        k, _ = attach_info(r["file_name"] or "", r["file_mime"])
+        return "📷 Фото" if k == "image" else "🎬 Видео" if k == "video" else "📎 " + (r["file_name"] or "Файл")
+    return ""
+
+
 @api
 async def a_chats(request):
     me = request["fuid"]
@@ -810,7 +847,7 @@ async def a_chats(request):
     unread = {r["sender_id"]: r["c"] for r in await P().fetch(
         "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1", me)}
     um = await users_map([r["peer"] for r in rows])
-    out = [{"user": um[r["peer"]], "last": (r["body"] or (("📹 Видеосообщение" if bm.note_mime(r["file_mime"]) else "🎤 Голосовое сообщение") if r["voice_dur"] else "📎 " + (r["file_name"] or "Файл")))[:120], "ts": r["created_at"].timestamp(),
+    out = [{"user": um[r["peer"]], "last": last_preview(r)[:120], "ts": r["created_at"].timestamp(),
             "mine": r["sender_id"] == me, "unread": unread.get(r["peer"], 0), "support": r["peer"] == SUPPORT_ID} for r in rows if r["peer"] in um]
     out.sort(key=lambda x: (not x["support"], -x["ts"]))
     return J({"chats": out})
@@ -824,7 +861,7 @@ async def a_messages(request):
         raise FErr(400, "bad_peer")
     await P().execute("UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2 AND read_at IS NULL", me, peer)
     rows = await P().fetch(
-        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,voice_dur,voice_wave,voice_heard,(file_data IS NOT NULL) has_file FROM direct_messages
+        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,voice_dur,voice_wave,voice_heard,(file_data IS NOT NULL) has_file FROM direct_messages
             WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
             AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
             ORDER BY id DESC LIMIT 120) q ORDER BY id""", me, peer)
@@ -843,8 +880,13 @@ async def a_messages(request):
             else:
                 voice = {"url": bm.img_url("dm", r["id"]), "dur": r["voice_dur"], "wave": r["voice_wave"] or "",
                          "heard": r["voice_heard"] is not None}
-        body = r["body"] or ("" if voice or note else ("📎 " + (r["file_name"] or "Вложение") + " (откройте в мини-аппе)" if r["has_file"] else ""))
-        m = {"id": r["id"], "mine": r["sender_id"] == me, "body": body, "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None}
+        att = None
+        if r["has_file"] and not voice and not note:
+            kind, _ = attach_info(r["file_name"] or "", r["file_mime"])
+            att = {"url": bm.img_url("dm", r["id"]), "name": r["file_name"] or "Файл", "size": r["file_size"] or 0, "kind": kind}
+        m = {"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or "", "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None}
+        if att:
+            m["file"] = att
         if voice:
             m["voice"] = voice
         if note:
@@ -857,7 +899,7 @@ async def a_messages(request):
 @api
 async def a_message_send(request):
     me = request["fuid"]
-    fdata = fmime = None
+    fdata = fmime = fname = None
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
         d = {k: form.get(k) for k in ("peer", "text", "voice_dur", "voice_wave", "note_dur")}
@@ -865,8 +907,10 @@ async def a_message_send(request):
         if f is not None and hasattr(f, "file"):
             fdata = f.file.read() or None
             fmime = str(getattr(f, "content_type", "") or "")[:100]
-            if fdata and len(fdata) > bm.MAX_FILE:
-                raise FErr(400, "bad_size", "Запись слишком большая")
+            fname = (os.path.basename(str(getattr(f, "filename", "") or "")) or "file")[:120]
+            is_rec = bool(d.get("voice_dur") or d.get("note_dur"))
+            if fdata and len(fdata) > (bm.MAX_FILE if is_rec else ATTACH_MAX):
+                raise FErr(400, "bad_size", "Запись слишком большая" if is_rec else "Файл слишком большой (до %d МБ)" % (ATTACH_MAX // 1048576))
     else:
         d = await jbody(request)
     peer = to_int(d.get("peer"))
@@ -876,9 +920,17 @@ async def a_message_send(request):
         note = None if voice else bm.parse_note(d, fdata, fmime)
     except bm.ApiError:
         raise FErr(400, "bad_voice", "Не удалось отправить запись")
+    attach = None
     if voice or note:
         text = ""
-    if not peer or peer == me or (not text and not voice and not note):
+    elif fdata:
+        if fname.rsplit(".", 1)[-1].lower() in bm.BAD_EXT and "." in fname:
+            raise FErr(400, "bad_file", "Такие файлы отправлять нельзя")
+        if fname.lower().startswith(("voice.", "circle.")):
+            fname = "file_" + fname
+        akind, amime = attach_info(fname, fmime)
+        attach = (amime, fname)
+    if not peer or peer == me or (not text and not voice and not note and not attach):
         raise FErr(400, "bad_message")
     if not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", peer):
         raise FErr(404, "not_found", "Пользователь не найден")
@@ -886,9 +938,9 @@ async def a_message_send(request):
     if by_me or by_peer:
         raise FErr(403, "blocked", "Сообщения недоступны (блокировка)")
     if not bm.rate_ok(("fdm", me), 0.6):
-        raise FErr(429, "too_fast")
+        raise FErr(429, "too_fast", "Не так быстро")
     from support import SUPPORT_ID, on_user_message
-    if (voice or note) and peer == SUPPORT_ID:
+    if (voice or note or attach) and peer == SUPPORT_ID:
         raise FErr(400, "voice_to_support", "Поддержка принимает только текст")
     if voice or note:
         vmime, vname, vdur = (voice or note)[:3] if voice else note
@@ -897,6 +949,12 @@ async def a_message_send(request):
             """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,voice_dur,voice_wave)
                VALUES($1,$2,'',$3,$4,$5,$6,$7,$8) RETURNING id""", me, peer, fdata, vmime, vname, len(fdata), vdur, vwave)
         asyncio.create_task(bm.push_dm(me, peer, None, "", vname, vmime))
+        return J({"ok": True, "id": mid})
+    if attach:
+        mid = await P().fetchval(
+            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size)
+               VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id""", me, peer, text, fdata, attach[0], attach[1], len(fdata))
+        asyncio.create_task(bm.push_dm(me, peer, None, text, attach[1], attach[0]))
         return J({"ok": True, "id": mid})
     mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id", me, peer, text)
     if peer == SUPPORT_ID:

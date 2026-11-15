@@ -3764,6 +3764,8 @@ async def api_img(request):
             return ranged_audio(request, bytes(row["file_data"]), note_mime(row["file_mime"]), hdr)
         if row["file_mime"] in IMG_MIMES:
             ctype = row["file_mime"]
+        elif row["file_mime"] in ("video/mp4", "video/webm", "video/quicktime"):
+            return ranged_audio(request, bytes(row["file_data"]), row["file_mime"], hdr)   # видео из галереи: играет в чате и открывается в просмотрщике
         else:
             ctype = "application/octet-stream"
             hdr["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(row["file_name"] or "file")
@@ -4170,7 +4172,11 @@ def dm_preview(body, fname, fmime):
             return "🎤 Голосовое сообщение"
         if fname.startswith("circle.") and note_mime(fmime):
             return "📹 Видеосообщение"
-        return "📷 Фото" if fmime in IMG_MIMES else "📎 " + fname
+        if fmime in IMG_MIMES:
+            return "📷 Фото"
+        if fmime in ("video/mp4", "video/webm", "video/quicktime"):
+            return "🎬 Видео"
+        return "📎 " + fname
     return ""
 
 
@@ -6834,7 +6840,7 @@ async def api_receipts_seen(request):
 
 
 def build_web(bot: Bot):
-    app = web.Application(middlewares=[api_mw], client_max_size=12 * 1024 * 1024)
+    app = web.Application(middlewares=[api_mw], client_max_size=22 * 1024 * 1024)
     app["bot"] = bot
     r = app.router
     r.add_get("/", health)

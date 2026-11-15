@@ -274,6 +274,116 @@ textarea.inp{resize:none;min-height:130px;height:auto}
 .msg{max-width:80%;padding:9px 14px;border-radius:20px 20px 20px 6px;background:var(--glass);border:1px solid var(--line);align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
 .msg.me{align-self:flex-end;background:linear-gradient(180deg,#7d74c2,#5d559c);border-color:rgba(255,255,255,.2);color:#fff;border-radius:20px 20px 6px 20px}
 .msg small{display:block;font-size:10.5px;opacity:.65;text-align:right;margin-top:2px}
+/* вложения в чате: меню, пузыри, просмотрщик */
+.attb{flex:none;width:44px;height:50px;border:0;background:transparent;color:var(--dim);display:grid;place-items:center;cursor:pointer;margin-right:-6px;border-radius:50%;transition:color .2s,transform .25s var(--spring)}
+.attb:active{transform:scale(.88);color:var(--acc)}
+.attb svg{width:24px;height:24px}
+.cform.kv-recording .attb{visibility:hidden}
+.am-row{display:flex;align-items:center;gap:14px;width:100%;border:0;background:transparent;color:var(--txt);font:inherit;font-weight:600;padding:12px 14px;border-radius:16px;cursor:pointer;text-align:left}
+.am-row:active{background:var(--card2)}
+.am-row .am-i{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:#fff}
+.am-row .am-i svg{width:23px;height:23px}
+.am-row small{display:block;font-weight:400;color:var(--dim);font-size:12.5px;margin-top:1px}
+.am-i.p{background:linear-gradient(180deg,#58c4a4,#2f9d80)}.am-i.v{background:linear-gradient(180deg,#ee8c6b,#d0623f)}.am-i.f{background:linear-gradient(180deg,#8b82cf,#5d559c)}
+.msg.mm{padding:4px;max-width:min(310px,80%);white-space:normal}
+.msg.mm .mi{position:relative;display:block;border-radius:17px 17px 17px 5px;overflow:hidden;cursor:pointer;background:#0c0a14;line-height:0;min-width:150px}
+.msg.me.mm .mi{border-radius:17px 17px 5px 17px}
+.msg.mm .mi img,.msg.mm .mi video{display:block;width:100%;max-height:340px;min-height:110px;object-fit:cover;background:#0c0a14}
+.msg.mm .mplay{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;display:grid;place-items:center;color:#fff;background:rgba(0,0,0,.5);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);pointer-events:none}
+.msg.mm .mplay svg{width:24px;height:24px;margin-left:2px}
+.msg.mm .mc{padding:7px 9px 0;white-space:pre-wrap;line-height:1.35}
+.msg.mm small{padding:0 8px 2px}
+.msg.mf-b{padding:10px 12px 7px;min-width:210px;white-space:normal}
+.mf{display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none}
+.mf .mf-i{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(180deg,#9f95e4,#6d64b6);color:#fff;box-shadow:0 5px 14px -5px rgba(0,0,0,.5)}
+.msg.me .mf .mf-i{background:#fff;color:#5d559c}
+.mf .mf-i svg{width:22px;height:22px}
+.mf .mf-t{min-width:0;display:flex;flex-direction:column;gap:2px}
+.mf .mf-t b{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+.mf .mf-t span{font-size:12px;opacity:.7}
+.msg.mf-b .mc{padding-top:7px;white-space:pre-wrap}
+.sx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:8px;margin:0 4px 12px}
+.sx-it{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;background:var(--card2);border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:6px;text-align:center;font-size:11px;color:var(--dim);line-height:1.25}
+.sx-it img,.sx-it video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.sx-it .sx-n{position:relative;word-break:break-all;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.sx-it .sx-ic{position:relative;color:var(--acc)}.sx-it .sx-ic svg{width:26px;height:26px}
+.sx-it .sx-vb{position:absolute;left:6px;bottom:6px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center}.sx-vb svg{width:12px;height:12px}
+.sx-it .sx-x{position:absolute;right:4px;top:4px;width:24px;height:24px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;display:grid;place-items:center;padding:0;cursor:pointer;z-index:2}.sx-x svg{width:13px;height:13px}
+.sx-it.ed{cursor:pointer}
+.sx-pe{position:absolute;right:6px;bottom:6px;min-width:24px;height:24px;padding:0 6px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;display:grid;place-items:center;font-style:normal;font-size:11px;font-weight:700}.sx-pe svg{width:13px;height:13px}
+.sx-pe.big{background:var(--bad)}
+.sx-h{margin:-4px 6px 12px;font-size:12.5px;color:var(--dim);text-align:center}.sx-h[hidden]{display:none}
+button.mf{border:0;background:none;padding:0;font:inherit;text-align:left;width:100%;cursor:pointer}
+.msg.mm .mi video:not([src]){height:190px;min-height:0}
+.msg.mm .mvs{position:absolute;left:8px;bottom:8px;padding:3px 8px;border-radius:10px;background:rgba(0,0,0,.55);color:#fff;font-size:11.5px;line-height:1.2}
+.gal-ld{width:34px;height:34px;border-width:4px}
+.gal{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.96);display:flex;flex-direction:column;animation:fadeIn .22s ease both;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+.gal-top{flex:none;display:flex;align-items:center;gap:6px;padding:calc(8px + var(--safe-t)) 10px 8px;color:#fff;z-index:2}
+.gal-top .ib{color:#fff}.gal-n{font-weight:600;padding-left:8px;font-variant-numeric:tabular-nums}.gal-sp{flex:1}
+.gal-st{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.gal-st img,.gal-st video{max-width:100%;max-height:100%;object-fit:contain;animation:lbIn .3s var(--ease) both;-webkit-user-drag:none}
+.gal-st video{width:100%;height:100%;background:#000}
+.gal-p,.gal-nx{position:absolute;top:50%;margin-top:-23px;width:46px;height:46px;border-radius:50%;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;cursor:pointer;z-index:3;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.gal-p{left:10px}.gal-nx{right:10px}.gal-p[hidden],.gal-nx[hidden]{display:none}
+@media (hover:none){.gal-p,.gal-nx{display:none}}
+
+/* редактор фото/видео перед отправкой */
+.ke{position:fixed;inset:0;z-index:120;background:#0b0c10;display:flex;flex-direction:column;color:#fff;animation:fadeIn .2s ease both;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+.ke-top{display:flex;align-items:center;gap:8px;padding:calc(10px + var(--safe-t,0px)) 12px 6px}
+.ke-sp{flex:1}.ke-sp2{width:8px}
+.ke-b{width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;padding:0;cursor:pointer}
+.ke-b.ok{background:var(--acc,#8b7cff);width:48px}.ke-b:disabled{opacity:.5}
+.ke-st{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:4px 8px;position:relative}
+.ke-box{position:relative;overflow:hidden;background:#000;border-radius:10px;min-width:40px;min-height:40px;line-height:0}
+.ke-box .ke-cv{touch-action:none;cursor:crosshair}
+.ke-vid{display:block;background:#000;pointer-events:none}
+.ke-ld{position:absolute;inset:0;display:grid;place-items:center}
+.ke-spin{display:inline-block;width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;animation:keSpin .8s linear infinite}
+@keyframes keSpin{to{transform:rotate(360deg)}}
+.ke-pn{padding:4px 10px 2px;min-height:96px}
+.ke-row{display:flex;gap:8px;align-items:center;justify-content:center;padding:6px 0;flex-wrap:wrap}
+.ke-t{width:42px;height:42px;border-radius:13px;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;padding:0;cursor:pointer}
+.ke-t.on{background:var(--acc,#8b7cff)}
+.ke-c{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.35);padding:0;cursor:pointer;transition:transform .15s}
+.ke-c.on{border-color:#fff;transform:scale(1.22)}
+.ke-rg{width:min(320px,80%);accent-color:var(--acc,#8b7cff)}
+.ke-r,.ke-rs{height:36px;padding:0 14px;border-radius:18px;border:0;background:rgba(255,255,255,.12);color:#fff;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.ke-r.on{background:var(--acc,#8b7cff)}
+.ke-tabs{display:flex;border-top:1px solid rgba(255,255,255,.1);padding:4px 8px calc(6px + var(--safe-b,0px))}
+.ke-tabs button{flex:1;border:0;background:transparent;color:rgba(255,255,255,.6);display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;font:inherit;font-size:12px;font-weight:600;cursor:pointer;border-radius:12px}
+.ke-tabs button.on{color:#fff;background:rgba(255,255,255,.1)}
+.ke-txt{position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;background:rgba(20,22,28,.96);padding:8px;border-radius:14px;z-index:5}
+.ke-txt input{flex:1;min-width:0;height:40px;border-radius:10px;border:0;background:rgba(255,255,255,.12);color:#fff;padding:0 12px;font-size:16px;outline:none}
+.ke-txt button{border:0;border-radius:10px;background:var(--acc,#8b7cff);color:#fff;padding:0 16px;font-weight:700;cursor:pointer}
+/* рамка обрезки */
+.ke-crop{position:absolute;inset:0;touch-action:none;z-index:3}
+.ke-cf{position:absolute;box-shadow:0 0 0 9999px rgba(0,0,0,.6);border:2px solid #fff;cursor:move;box-sizing:border-box}
+.ke-cf b{position:absolute;pointer-events:none;background:rgba(255,255,255,.35)}
+.ke-cf b:nth-of-type(1){left:33.33%;right:33.33%;top:0;bottom:0;background:none;border-left:1px solid rgba(255,255,255,.35);border-right:1px solid rgba(255,255,255,.35)}
+.ke-cf b:nth-of-type(2){top:33.33%;bottom:33.33%;left:0;right:0;background:none;border-top:1px solid rgba(255,255,255,.35);border-bottom:1px solid rgba(255,255,255,.35)}
+.ke-cf i{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;display:block}
+.ke-cf i::after{content:"";position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;background:#fff;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.ke-cf i[data-h=n],.ke-cf i[data-h=s]{left:50%}.ke-cf i[data-h=w],.ke-cf i[data-h=e]{top:50%}
+.ke-cf i[data-h=nw]{left:0;top:0}.ke-cf i[data-h=ne]{left:100%;top:0}.ke-cf i[data-h=sw]{left:0;top:100%}.ke-cf i[data-h=se]{left:100%;top:100%}
+.ke-cf i[data-h=n]{top:0}.ke-cf i[data-h=s]{top:100%}.ke-cf i[data-h=w]{left:0}.ke-cf i[data-h=e]{left:100%}
+/* длина видео */
+.ke-tlw{padding:10px 14px 4px}
+.ke-tl{position:relative;height:54px;border-radius:10px;touch-action:none}
+.ke-ts{position:absolute;inset:0;display:flex;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.08)}
+.ke-ts canvas{flex:1;min-width:0;height:100%;object-fit:cover}
+.ke-sel{position:absolute;top:-3px;bottom:-3px;border:3px solid var(--acc,#8b7cff);border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.55);pointer-events:none}
+.ke-hl{position:absolute;top:-3px;bottom:-3px;left:-3px;width:22px;margin-left:-8px;pointer-events:auto;cursor:ew-resize}
+.ke-hl::after{content:"";position:absolute;left:8px;top:50%;width:6px;height:26px;margin-top:-13px;background:#fff;border-radius:3px}
+.ke-hl.r{left:auto;right:-3px;margin-left:0;margin-right:-8px}.ke-hl.r::after{left:8px}
+.ke-ph{position:absolute;top:-6px;bottom:-6px;width:3px;margin-left:-1px;background:#fff;border-radius:2px;pointer-events:none;box-shadow:0 0 4px rgba(0,0,0,.6)}
+.ke-trow{display:flex;align-items:center;gap:12px;padding:8px 14px}
+.ke-pl{width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;padding:0;cursor:pointer}
+.ke-tt{font-variant-numeric:tabular-nums;font-size:14px;opacity:.9}
+.ke-prog{position:absolute;inset:0;z-index:20;background:rgba(0,0,0,.78);display:grid;place-items:center;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.ke-pc{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
+.ke-pc b{font-size:17px}.ke-pc span{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}.ke-pc small{opacity:.65}
+.ke-pcx{margin-top:6px;height:40px;padding:0 24px;border-radius:20px;border:0;background:rgba(255,255,255,.16);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+@media (max-height:560px){.ke-pn{min-height:70px}}
 .supbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13px;color:var(--dim)}
 
 /* ---------- новый пост ---------- */
@@ -696,6 +806,19 @@ nav.bar .plus.on{transform:rotate(135deg)}
 .kv-circ .fg{stroke:#ff4d5e;stroke-dasharray:301.6;stroke-dashoffset:301.6}
 .kv-mic.kv-swap svg{animation:kvSwap .4s cubic-bezier(.34,1.56,.64,1)}
 @keyframes kvSwap{from{transform:scale(.35) rotate(-70deg);opacity:0}to{transform:none;opacity:1}}
+/* подсказка у кнопки записи (как в Telegram) */
+.kv-tip{position:absolute;z-index:8;bottom:calc(100% + 10px);max-width:calc(100% - 16px);padding:10px 14px;border-radius:14px;pointer-events:none;
+  display:flex;flex-direction:column;gap:2px;text-align:left;font-size:13px;line-height:1.3;color:#f4f2fb;
+  background:rgba(28,25,42,.96);border:1px solid rgba(255,255,255,.14);box-shadow:0 14px 34px -10px rgba(0,0,0,.7);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);opacity:0;transform:translateY(6px) scale(.96);transform-origin:calc(100% - var(--ax,24px)) 100%;
+  transition:opacity .22s,transform .3s cubic-bezier(.34,1.56,.64,1)}
+.kv-tip.in{opacity:1;transform:none}
+.kv-tip[hidden]{display:none}
+.kv-tip b{font-weight:650;font-size:13.5px;white-space:nowrap}
+.kv-tip span{opacity:.72;white-space:nowrap}
+.kv-tip::after{content:"";position:absolute;right:calc(var(--ax,24px) - 6px);bottom:-6px;width:12px;height:12px;background:inherit;border:inherit;border-width:0 1px 1px 0;border-radius:0 0 4px 0;transform:rotate(45deg)}
+[data-theme=light] .kv-tip{background:rgba(32,28,44,.95)}
+@media (prefers-reduced-motion:reduce){.kv-tip{transition:opacity .15s;transform:none}}
 /*KV-CSS:END*/
 </style>
 </head>
@@ -779,9 +902,11 @@ function begin(el,r){
   if(cur&&cur.el!==el)reset(cur.el);
   cur={id:el.dataset.id,el,dur:durOf(el)};
   const seek=(r||0)*cur.dur/1000;
-  A.src=el.dataset.url;A.defaultPlaybackRate=speed;
-  if(seek>0.05)A.addEventListener('loadedmetadata',()=>{try{A.currentTime=seek}catch(e){}},{once:true});
-  const p=A.play();if(p&&p.catch)p.catch(()=>{cfg.toast('Не удалось воспроизвести запись',1);if(cur&&cur.el===el){paint(el,false);cur=null}});
+  const fail=()=>{cfg.toast('Не удалось воспроизвести запись',1);if(cur&&cur.el===el){paint(el,false);cur=null}};
+  const go=u=>{if(!cur||cur.el!==el)return;A.src=u;A.defaultPlaybackRate=speed;
+    if(seek>0.05)A.addEventListener('loadedmetadata',()=>{try{A.currentTime=seek}catch(e){}},{once:true});
+    const p=A.play();if(p&&p.catch)p.catch(fail)};
+  if(cfg.res)cfg.res(el.dataset.url).then(go).catch(fail);else go(el.dataset.url); // cfg.res: форум отдаёт blob, адрес сервера не светится
   markHeard(el)}
 function markHeard(el){if(el.dataset.mine!=='1'&&el.dataset.heard==='0'){el.dataset.heard='1';try{cfg.heard(el.dataset.id)}catch(e){}}}
 function toggle(el){
@@ -815,7 +940,7 @@ function listen(root){
     w.addEventListener('pointermove',mv);w.addEventListener('pointerup',up);w.addEventListener('pointercancel',cn)})}
 
 /* ---------- кружки: разметка и плеер ---------- */
-function knInner(v){return `<div class="kn-c"><video class="kn-v" playsinline webkit-playsinline muted preload="metadata" disablepictureinpicture${v.url?` src="${esc(v.url)}#t=0.1"`:''}${v.poster?` poster="${esc(v.poster)}"`:''}></video><svg class="kn-r" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg><span class="kn-t">${fmtT(v.dur)}</span><span class="kn-pl">${IC_PLAY}</span>${v.meta?`<span class="kn-tm">${v.meta}</span>`:''}</div>`}
+function knInner(v){return `<div class="kn-c"><video class="kn-v" playsinline webkit-playsinline muted preload="metadata" disablepictureinpicture${v.url?(cfg.res?` data-bsrc="${esc(v.url)}"`:` src="${esc(v.url)}#t=0.1"`):''}${v.poster?` poster="${esc(v.poster)}"`:''}></video><svg class="kn-r" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg><span class="kn-t">${fmtT(v.dur)}</span><span class="kn-pl">${IC_PLAY}</span>${v.meta?`<span class="kn-tm">${v.meta}</span>`:''}</div>`}
 function knBubble(cls,v){return `<div class="${esc(cls)} kn" data-id="${esc(v.id)}" data-url="${esc(v.url||'')}" data-dur="${v.dur|0}" data-heard="${v.heard?1:0}" data-mine="${v.mine?1:0}"${v.pending?' data-pending="1"':''}>${knInner(v)}</div>`}
 let curN=null,rafN=0;
 const nP=(el,p)=>{const c=el.querySelector('.kn-c');if(c)c.style.setProperty('--p',p)};
@@ -826,6 +951,7 @@ function stopAll(){stop();nStop()}
 function nToggle(el){
   if(!el||el.dataset.pending||!el.dataset.url)return;
   const v=el.querySelector('.kn-v');if(!v)return;
+  if(cfg.res&&!v.getAttribute('src')){cfg.res(el.dataset.url).then(u=>{v.src=u;nToggle(el)}).catch(()=>cfg.toast('Не удалось воспроизвести видео',1));return}
   if(curN&&curN.el===el){if(v.paused){const p=v.play();if(p&&p.catch)p.catch(()=>{})}else v.pause();return}
   stop();nStop();
   curN={id:el.dataset.id,el,v,dur:durOf(el)};
@@ -859,14 +985,32 @@ function attach(o){
   const mic=sb.cloneNode(false);['id','disabled','data-busy','title'].forEach(a=>mic.removeAttribute(a));
   let mode='voice',recMode='voice';try{if(localStorage.getItem('kv_mode')==='video')mode='video'}catch(e){}
   const modeIcon=()=>mode==='video'?IC_CAM:IC_MIC,modeLbl=()=>mode==='video'?'Записать видеосообщение (кружок)':'Записать голосовое сообщение';
-  mic.type='button';mic.classList.add('kv-mic');mic.classList.remove('kv-sb');mic.innerHTML=modeIcon();mic.dataset.mode=mode;mic.setAttribute('aria-label',modeLbl());
+  mic.type='button';mic.classList.add('kv-mic');mic.classList.remove('kv-sb');mic.innerHTML=modeIcon();mic.dataset.mode=mode;mic.setAttribute('aria-label',modeLbl());mic.title=mode==='video'?'Удерживайте — кружок, нажмите — голосовое':'Удерживайте — голосовое, нажмите — кружок';
   sb.after(mic);
+  // первые разы показываем подсказку сами, потом — по тапу
+  try{const n=+localStorage.getItem('kv_tip')||0;if(n<3){localStorage.setItem('kv_tip',String(n+1));setTimeout(()=>{if(form.isConnected)showTip(5200)},900)}}catch(e){}
   const ov=document.createElement('div');ov.className='kv-rec';ov.hidden=true;
   ov.innerHTML=`<button class="kv-x" type="button" aria-label="Удалить запись">${IC_TRASH}</button><i class="kv-dot"></i><b class="kv-t">0:00,0</b><canvas class="kv-cv"></canvas><span class="kv-hint">‹ Влево — отмена</span>`;
   const lock=document.createElement('div');lock.className='kv-lock';lock.hidden=true;lock.innerHTML=IC_LOCK;
   const circ=document.createElement('div');circ.className='kv-circ';circ.hidden=true;
   circ.innerHTML='<video muted playsinline></video><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="48"/><circle class="fg" cx="50" cy="50" r="48"/></svg>';
-  form.appendChild(ov);form.appendChild(lock);form.appendChild(circ);
+  const tip=document.createElement('div');tip.className='kv-tip';tip.hidden=true;tip.setAttribute('role','status');
+  form.appendChild(ov);form.appendChild(lock);form.appendChild(circ);form.appendChild(tip);
+  let tipT=0;
+  /* подсказка у кнопки, как в Telegram: что делает тап и что — удержание */
+  function tipText(){return mode==='video'
+    ?'<b>Удерживайте — запись кружка</b><span>Нажмите — переключить на голосовое</span>'
+    :'<b>Удерживайте — голосовое</b><span>Нажмите — переключить на кружок</span>'}
+  function showTip(ms){
+    if(state!=='idle'||form.classList.contains('kv-txt'))return;
+    const f=form.getBoundingClientRect(),m=mic.getBoundingClientRect();if(!m.width)return;
+    tip.innerHTML=tipText();tip.hidden=false;tip.classList.remove('in');
+    const w=Math.min(tip.offsetWidth||230,f.width-16);
+    tip.style.right=(f.right-m.right)+'px';
+    // стрелка — ровно над центром кнопки
+    tip.style.setProperty('--ax',Math.max(14,Math.min(w-14,m.width/2))+'px');
+    void tip.offsetWidth;tip.classList.add('in');clearTimeout(tipT);tipT=setTimeout(hideTip,ms||3800)}
+  function hideTip(){clearTimeout(tipT);tip.classList.remove('in');tip.hidden=true}
   const cvid=circ.querySelector('video'),ringFg=circ.querySelector('.fg');
   const $x=ov.querySelector('.kv-x'),$t=ov.querySelector('.kv-t'),cv=ov.querySelector('.kv-cv'),hint=ov.querySelector('.kv-hint');
 
@@ -948,7 +1092,7 @@ function attach(o){
   function toggleMode(){
     mode=mode==='video'?'voice':'video';try{localStorage.setItem('kv_mode',mode)}catch(e){}
     mic.dataset.mode=mode;mic.innerHTML=modeIcon();mic.setAttribute('aria-label',modeLbl());mic.classList.remove('kv-swap');void mic.offsetWidth;mic.classList.add('kv-swap');vib(8);
-    cfg.toast(mode==='video'?'Удерживайте, чтобы записать видеосообщение':'Удерживайте, чтобы записать голосовое сообщение')}
+    mic.title=mode==='video'?'Удерживайте — кружок, нажмите — голосовое':'Удерживайте — голосовое, нажмите — кружок';showTip(3800)}
   mic.addEventListener('pointerdown',e=>{
     if(state!=='idle')return;
     e.preventDefault();state='pending';holding=true;gesture=true;pid=e.pointerId;downAt=performance.now();sx=e.clientX;sy=e.clientY;
@@ -956,7 +1100,7 @@ function attach(o){
     holdT=setTimeout(()=>{if(state==='pending')begin()},HOLD_MS)});
   async function begin(){
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||typeof MediaRecorder==='undefined'){state='idle';holding=false;cfg.toast('Запись здесь недоступна. Откройте в браузере или в Telegram',1);return}
-    state='starting';stopAll();
+    state='starting';hideTip();stopAll();
     {
     try{
       const ok=await start();if(!ok)return;
@@ -1044,6 +1188,12 @@ const IC={
  users:I('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14a5 5 0 0 1 4.5 5"/>'),
  smile:I('<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01"/>'),
  at:I('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'),
+ clip:I('<path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.8 1.8 0 0 1-2.6-2.6l8.2-8.1"/>'),
+ video:I('<rect x="3" y="6.5" width="13" height="11" rx="3"/><path d="m16 11 5-3v8l-5-3z"/>'),
+ file:I('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
+ close:I('<path d="M6 6l12 12M18 6 6 18"/>'),
+ download:I('<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/>'),
+ play:'<svg class="i" viewBox="0 0 24 24"><path fill="currentColor" d="M8.2 5.3v13.4a1 1 0 0 0 1.5.86l10.6-6.7a1 1 0 0 0 0-1.72L9.7 4.44a1 1 0 0 0-1.5.86z"/></svg>',
  camera:I('<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>'),
  compose:I('<path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8 8 16l1.2-4z"/>'),
  bookmark:I('<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>'),
@@ -1070,14 +1220,26 @@ const BADGE={
  a:'<svg class="bi adm" viewBox="0 0 24 24" aria-label="Админ"><title>Админ</title><path d="M7 3.5h10l4 5.2-9 12-9-12z" fill="currentColor"/><path d="M3 8.7h18M9.5 8.7 12 20.7l2.5-12M7 3.5l2.5 5.2L12 3.5l2.5 5.2L17 3.5" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1" stroke-linejoin="round"/></svg>'
 };
 function tags(sb){return (sb||'').split('').map(c=>BADGE[c]||({b:'<span class="tag bad">BAD REP</span>',s:'<span class="tag bad">SCAM</span>'}[c]||'')).join('')}
-function av(u,cls=''){const l=esc((u.name||'?').trim().charAt(0).toUpperCase());return `<span class="av ${cls}" data-href="#/u/${u.id}">${l}${u.av?`<img loading="lazy" src="${BASE}/forum/api/avatar/${u.id}${S.avv?'?v='+S.avv:''}" onerror="this.remove()" alt="">`:''}</span>`}
+function av(u,cls=''){const l=esc((u.name||'?').trim().charAt(0).toUpperCase());return `<span class="av ${cls}" data-href="#/u/${u.id}">${l}${u.av?`<img data-bsrc="/forum/api/avatar/${u.id}${S.avv?'?v='+S.avv:''}" onerror="this.remove()" alt="">`:''}</span>`}
 async function api(path,o={}){const h={};if(S.token)h.Authorization='Bearer '+S.token;const opt={method:o.method||'GET',headers:h};if(o.form)opt.body=o.form;else if(o.body){h['Content-Type']='application/json';opt.body=JSON.stringify(o.body)}
   let r;try{r=await fetch(BASE+'/forum/api'+path,opt)}catch(e){throw new Error('Нет соединения. Проверьте интернет')}
   let d={};try{d=await r.json()}catch(e){}
   if(r.status===401&&S.token){logout(true);throw new Error('Нужно войти заново')}
-  if(!r.ok)throw new Error(d.message||d.error||('Ошибка '+r.status));return d}
+  if(!r.ok){const er=new Error(d.message||d.error||('Ошибка '+r.status));er.code=d.error;throw er}return d}
 const post_=(p,b)=>api(p,{method:'POST',body:b||{}});
-KV.init({heard:id=>post_('/messages/heard',{id}).catch(()=>{}),toast:(t,e)=>toast(t,e)});
+/* Медиа грузим через fetch и показываем как blob: — адрес сервера не попадает в разметку (src, href, фон) */
+const BLOBS=new Map();
+function blobOf(path){let p=BLOBS.get(path);
+  if(!p){p=fetch(BASE+path).then(r=>{if(!r.ok)throw new Error('http');return r.blob()}).then(b=>URL.createObjectURL(b));BLOBS.set(path,p);p.catch(()=>BLOBS.delete(path));
+    if(BLOBS.size>250)BLOBS.delete(BLOBS.keys().next().value)}
+  return p}
+function hyd1(n){const s=n.dataset.bsrc,g=n.dataset.bbg;
+  if(s&&n.dataset.bdone!==s){n.dataset.bdone=s;blobOf(s).then(u=>{n.src=u+(n.tagName==='VIDEO'?'#t=0.1':'')}).catch(()=>n.dispatchEvent(new Event('error')))}
+  if(g&&n.dataset.bdoneg!==g){n.dataset.bdoneg=g;blobOf(g).then(u=>{n.style.backgroundImage='url('+u+')'}).catch(()=>{})}}
+function hydrate(root){if(root.matches&&root.matches('[data-bsrc],[data-bbg]'))hyd1(root);if(root.querySelectorAll)root.querySelectorAll('[data-bsrc],[data-bbg]').forEach(hyd1)}
+new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1)hydrate(n)}))).observe(document.documentElement,{childList:true,subtree:true});
+function saveBlob(path,name){toast('Загрузка…');blobOf(path).then(u=>{const a=document.createElement('a');a.href=u;a.download=name||'file';a.style.display='none';document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),500)}).catch(()=>toast('Не удалось скачать файл',1))}
+KV.init({heard:id=>post_('/messages/heard',{id}).catch(()=>{}),toast:(t,e)=>toast(t,e),res:p=>blobOf(p)});
 function sheet(items){return new Promise(res=>{const bg=document.createElement('div');bg.className='sheet-bg';bg.innerHTML=`<div class="sheet">${items.map((x,i)=>`<div class="row ${x.bad?'bad':''}" data-i="${i}"><span class="t"><b>${x.t}</b></span></div>`).join('')}</div>`;bg.onclick=e=>{const r=e.target.closest('[data-i]');bg.remove();res(r?items[+r.dataset.i]:null)};document.body.appendChild(bg)})}
 function confirmBox(t){return sheet([{t:t,k:'y',bad:true},{t:'Отмена',k:'n'}]).then(x=>x&&x.k==='y')}
 const head=(title,right='',back='history.back()')=>`<div class="ph2"><button class="ib round" onclick="${back}">${IC.back}</button><h2>${title}</h2><span class="sp"></span>${right}</div>`;
@@ -1103,12 +1265,12 @@ async function viewLogin(el){
 function postCard(p,full){
   const body=p.body?`<div class="pb ${!full&&p.body.length>380?'clamp':''}">${fmt(p.body)}</div>${!full&&p.body.length>380?'<span class="more">Читать далее</span>':''}`:'';
   const n=p.imgs.length;
-  const imgs=n?`<div class="imgs n${Math.min(n,4)}">${p.imgs.map(i=>`<img loading="lazy" data-lb="${BASE}/forum/api/img/${i}" src="${BASE}/forum/api/img/${i}" alt="">`).join('')}</div>`:'';
+  const imgs=n?`<div class="imgs n${Math.min(n,4)}">${p.imgs.map(i=>`<img data-lb="/forum/api/img/${i}" data-bsrc="/forum/api/img/${i}" alt="">`).join('')}</div>`:'';
   return `<article class="post ${full?'full':''}" data-id="${p.id}">
     <div class="ph">${full?`<button class="ib" onclick="history.back()" style="margin-left:-8px">${IC.back}</button>`:''}${av(p.user,full?'s':'m')}<div class="pn"><b data-href="#/u/${p.user.id}">${esc(p.user.name)}${tags(p.user.sb)}</b><small>${ago(p.ts)}${p.edited?' · изменено':''}${p.board?` · <a href="#/b/${p.board.id}">${esc(p.board.name)}</a>`:''}</small></div>${p.pinned?'<span class="tag pin">ЗАКРЕП</span>':''}${full&&!p.mine?'<span id="fbtn"></span>':''}<button class="ib" data-act="menu" style="width:36px;height:36px;color:#aaa5c4">${IC.more}</button></div>
     ${p.title?`<div class="pt" data-href="#/p/${p.id}">${esc(p.title)}</div>`:''}
     <div ${full?'':`data-href="#/p/${p.id}"`}>${body}</div>${imgs}
-    <div class="acts"><button class="act ${p.liked?'on':''}" data-act="like">${IC.heart}<span>${num(p.likes)}</span></button><button class="act" data-href="#/p/${p.id}">${IC.comment}<span>${num(p.comments)}</span></button><button class="act" data-act="share">${IC.share}</button><span class="sp"></span><button class="act sv ${p.saved?'on':''}" data-act="save">${IC.mark}</button></div></article>`}
+    <div class="acts"><button class="act ${p.liked?'on':''}" data-act="like">${IC.heart}<span>${num(p.likes)}</span></button><button class="act" data-href="#/p/${p.id}">${IC.comment}<span>${num(p.comments)}</span></button><span class="sp"></span><button class="act sv ${p.saved?'on':''}" data-act="save">${IC.mark}</button></div></article>`}
 
 /* ---------- шапка со статуей ---------- */
 function mast(big){return `<div class="mast ${big?'':'sm'}"><div class="st"></div><div class="mh"><div class="brand">${big?IC.star:''}<h1>KMBP<b>FORUM</b></h1></div><button class="ib" data-href="#/search/">${IC.search}</button><button class="ib" data-href="#/notif">${IC.bell}<span class="badge bellB" hidden></span></button>${big?'<span class="av" id="hdrAv2"></span>':''}</div></div>`}
@@ -1122,8 +1284,8 @@ async function loadPosts(box,params,state){
   $$('.more-btn',box).forEach(x=>x.remove());state.off+=d.posts.length;
   if(d.more)box.insertAdjacentHTML('beforeend','<div class="pad" style="text-align:center"><button class="btn ghost more-btn">Показать ещё</button></div>');
   const mb=$('.more-btn',box);if(mb)mb.onclick=()=>loadPosts(box,params,state).catch(e=>toast(e.message,1))}
-function tcard(p,i){const img=p.imgs[0]?`${BASE}/forum/api/img/${p.imgs[0]}`:'';const cat=p.board?p.board.name:'Пост';
-  return `<div class="tcard" data-href="#/p/${p.id}"><div class="bg ${img?'':'f'+(i%4)}" style="${img?`background-image:url(${img})`:''}"></div><div class="tp">${av(p.user,'xs')}<span class="cat">${esc(cat)}</span></div><div class="tt">${esc(p.title||p.body.slice(0,60))}</div><div class="st"><span>${sm('heart',15)}${p.likes}</span><span>${sm('comment',15)}${p.comments}</span></div></div>`}
+function tcard(p,i){const img=p.imgs[0]?`/forum/api/img/${p.imgs[0]}`:'';const cat=p.board?p.board.name:'Пост';
+  return `<div class="tcard" data-href="#/p/${p.id}"><div class="bg ${img?'':'f'+(i%4)}"${img?` data-bbg="${img}"`:''}></div><div class="tp">${av(p.user,'xs')}<span class="cat">${esc(cat)}</span></div><div class="tt">${esc(p.title||p.body.slice(0,60))}</div><div class="st"><span>${sm('heart',15)}${p.likes}</span><span>${sm('comment',15)}${p.comments}</span></div></div>`}
 async function viewFeed(el,p){
   const tab=ls.get('tab')||'all';
   el.innerHTML=`${mast(true)}
@@ -1171,15 +1333,14 @@ async function viewPost(el,id){
 
 /* ---------- действия над постами (делегирование) ---------- */
 document.addEventListener('click',async e=>{
-  const lb=e.target.closest('[data-lb]');if(lb){const d=document.createElement('div');d.className='lb';d.innerHTML=`<img src="${lb.dataset.lb}">`;d.onclick=()=>d.remove();document.body.appendChild(d);return}
+  const lb=e.target.closest('[data-lb]');if(lb){const d=document.createElement('div');d.className='lb';const im=document.createElement('img');im.alt='';d.appendChild(im);blobOf(lb.dataset.lb).then(u=>{im.src=u}).catch(()=>{d.remove();toast('Не удалось открыть',1)});d.onclick=()=>d.remove();document.body.appendChild(d);return}
   const hr=e.target.closest('[data-href]');
   const act=e.target.closest('[data-act]');
   const card=e.target.closest('.post');
-  if(act&&card&&['like','save','menu','share'].includes(act.dataset.act)){e.stopPropagation();const id=+card.dataset.id;
+  if(act&&card&&['like','save','menu'].includes(act.dataset.act)){e.stopPropagation();const id=+card.dataset.id;
     try{
       if(act.dataset.act==='like'){const r=await post_('/like',{kind:'p',id});act.classList.toggle('on',r.liked);if(r.liked)pop(act);act.lastElementChild.textContent=num(r.count)}
       else if(act.dataset.act==='save'){const r=await post_('/bookmark',{post_id:id});act.classList.toggle('on',r.saved);if(r.saved)pop(act);toast(r.saved?'Сохранено в закладки':'Убрано из закладок')}
-      else if(act.dataset.act==='share'){const url=(BASE||location.origin)+'/forum#/p/'+id;if(navigator.share){navigator.share({url}).catch(()=>{})}else{try{await navigator.clipboard.writeText(url);toast('Ссылка скопирована')}catch(x){prompt('Ссылка',url)}}}
       else if(act.dataset.act==='menu'){const pd=await api('/post?id='+id);const p=pd.post;const items=[];
         if(p.can_edit)items.push({t:'Редактировать',k:'edit'});
         if(S.me.staff)items.push({t:p.pinned?'Открепить':'Закрепить',k:'pin'});
@@ -1234,7 +1395,6 @@ const PMARK={green:'✅ Хороший проект',yellow:'🟡 Средний
 const REP_REASONS=['Мошенничество','Спам или реклама','Оскорбления','Запрещённый контент','Другое'];
 const USER_CATS=['Скам / обман','Не выполнил условия','Выдаёт себя за другого','Спам / реклама','Оскорбления','Другое'];
 const plural=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;return n>10&&n<20?c:m>1&&m<5?b:m===1?a:c};
-const profLink=id=>(BASE||location.origin)+'/forum#/u/'+id;
 async function copyText(t,msg){try{await navigator.clipboard.writeText(t);toast(msg||'Скопировано')}catch(e){prompt('Скопируйте',t)}}
 function profileTheme(pt){const p=PALS[LEGACY[pt]||pt];if(!p)return;const r=document.documentElement;r.style.setProperty('--acc',p.acc);const m=p.acc.match(/\w\w/g).map(x=>parseInt(x,16));r.style.setProperty('--acc-soft',`rgba(${m[0]},${m[1]},${m[2]},.16)`);const t=ls.get('theme')||'dark';r.dataset.theme=p.light?'light':(t==='light'?'dark':t)}
 async function refreshMe(){try{S.me=(await api('/me')).me}catch(e){}}
@@ -1267,12 +1427,12 @@ async function viewUser(el,id){
   const base=x&&x.base?(()=>{const b=x.base,rated=b.minus||b.stars>0;return `<div class="bchip t-${esc(b.tier)}">📖 ${rated?(b.minus?esc(b.status):`★ ${b.score} · ${esc(b.label)}`):'VETRIXBASE: пока без оценки'}</div>`})():'';
   const online=x?x.online:own;
   const since=d.joined?new Date(d.joined*1000).toLocaleDateString('ru-RU',{month:'long',year:'numeric'}):'';
-  el.innerHTML=`<div class="pcover ${u.bn?'own':''}" style="${u.bn&&!u.bnv?`background-image:url(${BASE}/forum/api/banner/${u.id}?v=${S.avv||0})`:''}">${u.bn&&u.bnv?`<video src="${BASE}/forum/api/banner/${u.id}?v=${S.avv||0}" autoplay muted loop playsinline preload="auto" disablepictureinpicture></video>`:''}</div>
+  el.innerHTML=`<div class="pcover ${u.bn?'own':''}"${u.bn&&!u.bnv?` data-bbg="/forum/api/banner/${u.id}?v=${S.avv||0}"`:''}>${u.bn&&u.bnv?`<video data-bsrc="/forum/api/banner/${u.id}?v=${S.avv||0}" autoplay muted loop playsinline preload="auto" disablepictureinpicture></video>`:''}</div>
   <div class="pwrap"><div class="ptop"><button class="ib round" onclick="history.back()">${IC.back}</button><button class="ib round" id="pMore">${IC.more}</button></div>
   <div class="pmain"><div class="pavrow"><span class="avw ${online?'on':''}">${av(u,'xl')}</span><div style="display:flex;gap:8px;padding-bottom:6px" id="pbt"></div></div>
   <div class="pname">${esc(u.name)}${tags(u.sb)}</div><div class="puser">${u.username?'@'+esc(u.username):'ID '+u.id}</div>
   <div class="pstat">${online?'<i></i>В сети':'Не в сети'}${since?` · В сообществе с ${since}`:''}</div>
-  <div class="chips-row"><button class="chip" id="pLink">${IC.link}Ссылка на профиль</button></div>
+  <div class="chips-row"></div>
   ${ach}${base}
   <p class="pbio">${u.bio?fmt(u.bio):'<span style="color:var(--dim)">Пользователь пока ничего не рассказал о себе.</span>'}</p>
   ${x&&x.blocked_by_me?'<div class="blk-note">Вы заблокировали этого пользователя</div>':''}
@@ -1280,18 +1440,16 @@ async function viewUser(el,id){
   ${x?`<div class="stats3 alt"><div data-go="reviews"><b>${x.rating||'—'}</b><small>Рейтинг ★</small></div><div data-go="reviews"><b>${x.reviews}</b><small>Отзывов</small></div><div data-go="deals"><b>${x.completed_deals}</b><small>Сделок</small></div></div>`:''}</div>
   <div id="prow">${roles.map(r=>`<div class="grow glass"><span class="gi role">${r[0]}</span><span class="t"><b>${r[1]}</b><small>${r[2]}</small></span></div>`).join('')}${own?`<div class="grow glass" data-href="#/saved"><span class="gi">${IC.bookmark}</span><span class="t"><b>Закладки</b><small>Сохранённые посты</small></span>${IC.chev}</div><div class="grow glass" data-href="#/blocks"><span class="gi">${IC.ban}</span><span class="t"><b>Чёрный список</b><small>Заблокированные пользователи</small></span>${IC.chev}</div><div class="grow glass" data-href="#/settings"><span class="gi">${IC.gear}</span><span class="t"><b>Настройки</b><small>Тема, акцентный цвет, выход</small></span>${IC.chev}</div>`:''}</div>
   <div class="ptabs" id="ptabs"><button class="tab on" data-t="posts">Посты</button>${x?`<button class="tab" data-t="reviews">Отзывы · ${x.reviews}</button><button class="tab" data-t="deals">Сделки</button>`:''}${x&&x.projects&&x.projects.length?`<button class="tab" data-t="projects">Проекты · ${x.projects.length}</button>`:''}</div><div id="ptab" style="margin-top:8px"></div></div>`;
-  const avEl=$('.av.xl',el);if(avEl&&u.av){avEl.removeAttribute('data-href');avEl.dataset.lb=`${BASE}/forum/api/avatar/${u.id}?v=${S.avv||0}`}
+  const avEl=$('.av.xl',el);if(avEl&&u.av){avEl.removeAttribute('data-href');avEl.dataset.lb=`/forum/api/avatar/${u.id}?v=${S.avv||0}`}
   const bt=$('#pbt',el);
   if(own){bt.innerHTML=`<button class="btn ghost sm" data-href="#/edit-profile">${sm('pencil',17)}Изменить</button>`}
   else{bt.innerHTML=`<button class="btn sm" id="fb">${d.is_following?'Отписаться':'Подписаться'}</button><button class="btn ghost sm" data-href="#/c/${u.id}">Написать</button>`;
     $('#fb',el).onclick=async()=>{try{const r=await post_('/follow',{user_id:u.id});$('#fb',el).textContent=r.following?'Отписаться':'Подписаться';$('#fc',el).textContent=num(r.followers)}catch(e){toast(e.message,1)}}}
-  $('#pLink',el).onclick=()=>copyText(profLink(u.id),'Ссылка на профиль скопирована');
   /* меню «⋯» */
   const badgeRows=()=>x&&x.can_badge?[['dev','Разработчик'],['adm','Админ'],['bad','Bad rep'],['scam','Scam']].map(([k,n])=>{const on=!!(x.badge_flags&&x.badge_flags[k]);return {t:(on?'Снять значок «':'Выдать значок «')+n+'»',bad:on,fn:async()=>{await post_('/x/user_badge',{user_id:id,badge:k,on:!on});toast('Готово');if(own)await refreshMe();render()}}}):[];
   $('#pMore',el).onclick=async()=>{const rows=[];
-    if(own){rows.push({t:'Изменить профиль',fn:()=>{location.hash='#/edit-profile'}},{t:'Скопировать ссылку на профиль',fn:()=>copyText(profLink(u.id),'Ссылка на профиль скопирована')},{t:'Чёрный список',fn:()=>{location.hash='#/blocks'}},{t:'Настройки',fn:()=>{location.hash='#/settings'}})}
-    else{rows.push({t:'Скопировать ссылку на профиль',fn:()=>copyText(profLink(u.id),'Ссылка на профиль скопирована')},
-      {t:'Поделиться профилем',fn:()=>{const url=profLink(u.id);if(navigator.share)navigator.share({title:u.name,url}).catch(()=>{});else copyText(url,'Ссылка скопирована')}},
+    if(own){rows.push({t:'Изменить профиль',fn:()=>{location.hash='#/edit-profile'}},{t:'Чёрный список',fn:()=>{location.hash='#/blocks'}},{t:'Настройки',fn:()=>{location.hash='#/settings'}})}
+    else{rows.push(
       {t:'Пожаловаться',fn:()=>reportSheet('Жалоба на '+u.name,USER_CATS,async(cat,txt,blobs)=>{const fd=new FormData();fd.append('user_id',u.id);if(cat)fd.append('category',cat);fd.append('reason',(cat?cat+(txt?': ':''):'')+txt||'Жалоба на пользователя');blobs.forEach((b,i)=>fd.append('photo',b,'proof'+i+'.jpg'));await api('/x/report_user',{method:'POST',form:fd})},true)},
       {t:x&&x.blocked_by_me?'Разблокировать':'Заблокировать',bad:!(x&&x.blocked_by_me),fn:async()=>{const by=!!(x&&x.blocked_by_me);if(!by&&!await confirmBox('Заблокировать пользователя? Он не сможет писать вам.'))return;await post_('/x/block',{user_id:id,block:!by});toast(by?'Разблокирован':'Пользователь заблокирован');render()}})}
     if(x&&x.flags&&S.me.main){const fl=async f=>{await post_('/x/user_flag',{user_id:id,flag:f});toast('Готово');render()};rows.push({t:'✅ Метка «Проверенный»',fn:()=>fl('verified')},{t:'🚫 Метка «Мошенник»',bad:true,fn:()=>fl('scam')},{t:'Снять метки',fn:()=>fl('clear')})}
@@ -1321,7 +1479,7 @@ async function profReviews(box,u,x,own){
     <textarea class="inp" id="rvT" maxlength="1000" placeholder="Расскажите, как прошла сделка…"></textarea><div class="rcount"><span id="rCnt">0</span> / 1000</div>
     <input type="file" id="rvF" accept="image/*" hidden><div class="rshot" id="rShot"></div>
     <button class="btn" id="rvS" disabled style="width:100%;margin-top:12px">${mine?'Сохранить изменения':'Опубликовать отзыв'}</button></div>`;
-  box.innerHTML=`${sum}${form}<div id="rvl">${n?list.map(r=>`<div class="rcard" data-rid="${r.id}"><div class="rcard-h">${av({id:r.author_id,name:r.author.replace('@',''),av:r.author_has_avatar||!!r.author_photo},'s')}<div><b data-href="#/u/${r.author_id}">${esc(r.author)}${tags(r.author_sb)}${r.mine?'<span class="mine-tag">ваш</span>':''}</b><small>${esc(r.created||'')}</small></div><span class="stars">${stars(r.rating)}</span></div>${r.text?`<p>${esc(r.text)}</p>`:''}${r.photo?`<img class="rv-photo" loading="lazy" data-lb="${BASE}${esc(r.photo)}" src="${BASE}${esc(r.photo)}" alt="Скриншот">`:''}${r.mine?'':`<button class="chip rpb" data-reprv="${r.id}">${IC.flag}Жалоба</button>`}</div>`).join(''):emptyBox('comment','Отзывов пока нет')}</div>`;
+  box.innerHTML=`${sum}${form}<div id="rvl">${n?list.map(r=>`<div class="rcard" data-rid="${r.id}"><div class="rcard-h">${av({id:r.author_id,name:r.author.replace('@',''),av:r.author_has_avatar||!!r.author_photo},'s')}<div><b data-href="#/u/${r.author_id}">${esc(r.author)}${tags(r.author_sb)}${r.mine?'<span class="mine-tag">ваш</span>':''}</b><small>${esc(r.created||'')}</small></div><span class="stars">${stars(r.rating)}</span></div>${r.text?`<p>${esc(r.text)}</p>`:''}${r.photo?`<img class="rv-photo" loading="lazy" data-lb="${esc(r.photo)}" data-bsrc="${esc(r.photo)}" alt="Скриншот">`:''}${r.mine?'':`<button class="chip rpb" data-reprv="${r.id}">${IC.flag}Жалоба</button>`}</div>`).join(''):emptyBox('comment','Отзывов пока нет')}</div>`;
   $$('[data-reprv]',box).forEach(b=>b.onclick=()=>reportSheet('Жалоба на отзыв',REP_REASONS,(cat,txt)=>post_('/x/report_any',{kind:'review',id:+b.dataset.reprv,reason:(cat?cat+(txt?': ':''):'')+txt||'Жалоба на отзыв'})));
   if(own)return;
   const LAB=['','Ужасно','Плохо','Нормально','Хорошо','Отлично'];let rate=mine?mine.rating:0,file=null;
@@ -1344,7 +1502,7 @@ async function viewEditProfile(el){
   el.innerHTML=`${head('Профиль','<button class="btn sm" id="sv">Сохранить</button>')}<div style="padding:0 16px">
   <p style="color:var(--dim);font-size:13.5px;margin-top:0">Профиль общий с ботом и мини-аппом KMBP EXCHANGE — изменения видны везде. Имя берётся из Telegram.</p>
   <div class="ed-card glass"><div class="ed-av">${av(u,'l')}<div class="ed-btns"><button class="btn sm" id="chA">Изменить фото</button>${x.has_avatar?'<button class="btn ghost sm" id="delA">Удалить фото</button>':''}</div></div>
-  <div class="ed-ban ${x.has_banner?'has':''}" id="banPrev" style="${x.has_banner&&!x.has_banner_video?`background-image:url(${BASE}/forum/api/banner/${u.id}?v=${S.avv||0})`:''}">${x.has_banner&&x.has_banner_video?`<video src="${BASE}/forum/api/banner/${u.id}?v=${S.avv||0}" autoplay muted loop playsinline preload="auto" disablepictureinpicture></video>`:''}<span>${IC.img}Баннер профиля</span></div>
+  <div class="ed-ban ${x.has_banner?'has':''}" id="banPrev"${x.has_banner&&!x.has_banner_video?` data-bbg="/forum/api/banner/${u.id}?v=${S.avv||0}"`:''}>${x.has_banner&&x.has_banner_video?`<video data-bsrc="/forum/api/banner/${u.id}?v=${S.avv||0}" autoplay muted loop playsinline preload="auto" disablepictureinpicture></video>`:''}<span>${IC.img}Баннер профиля</span></div>
   <div class="ed-btns" style="margin-top:10px"><button class="btn sm" id="chB">Свой баннер</button>${x.has_banner?'<button class="btn ghost sm" id="delB">Убрать баннер</button>':''}</div>
    <p style="color:var(--dim);font-size:12.5px;margin:8px 2px 0">Фото или короткое видео (MP4/WebM до 8 МБ) — видео играет без звука по кругу.</p>
   <input type="file" id="fa" accept="image/*" hidden><input type="file" id="fb" accept="image/*,video/mp4,video/webm,video/quicktime" hidden></div>
@@ -1382,6 +1540,355 @@ async function viewNotifs(el){
   el.innerHTML=`${head('Уведомления',`<button class="ib" data-href="#/notif-set">${IC.gear}</button>`)}${d.items.length?d.items.map(n=>`<div class="crow" style="${n.read?'':'background:var(--acc-soft)'}" data-href="${n.post_id?'#/p/'+n.post_id:'#/u/'+n.actor.id}">${av(n.actor,'m')}<span class="t"><b>${esc(n.actor.name)}</b><small style="white-space:normal">${NT[n.kind]||''}${n.snippet?': «'+esc(n.snippet)+'»':''} · ${ago(n.ts)}</small></span></div>`).join(''):emptyBox('bellbig','Пока тихо')}`;
   post_('/notifs/read').then(()=>{S.counts.notifs=0;chrome()}).catch(()=>{})}
 
+const KE=(()=>{
+'use strict';
+/* Редактор вложений: фото — рисование, обрезка, поворот; видео — рисование, обрезка кадра, обрезка длины.
+   KE.edit(file,{limit}) -> Promise<{file,changed}|null>. Всё делается на устройстве, на сервер уходит готовый файл. */
+const COLORS=['#ff3b30','#ffcc00','#34c759','#0a84ff','#ffffff','#000000'];
+const RATIOS=[['free','Свободно',0],['1:1','1:1',1],['4:3','4:3',4/3],['3:4','3:4',3/4],['16:9','16:9',16/9],['9:16','9:16',9/16]];
+const MAXIMG=2048,MAXVID=1280;
+const E=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ic=(b,w)=>`<svg viewBox="0 0 24 24" width="${w||22}" height="${w||22}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${b}</svg>`;
+const I={
+ x:ic('<path d="M6 6l12 12M18 6 6 18"/>'),ok:ic('<path d="m5 12.5 4.5 4.5L19 7.5"/>',24),undo:ic('<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
+ rot:ic('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>'),
+ pen:ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
+ mark:ic('<path d="m9 11-5 5v4h4l5-5"/><path d="m9 11 6-6 4 4-6 6z"/>'),
+ arrow:ic('<path d="M5 19 19 5M9 5h10v10"/>'),rect:ic('<rect x="4" y="5" width="16" height="14" rx="2"/>'),
+ text:ic('<path d="M5 6V4h14v2M12 4v16M9 20h6"/>'),
+ draw:ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',20),
+ crop:ic('<path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/>',20),
+ trim:ic('<path d="M7 4v16M17 4v16M7 12h10"/>',20),
+ play:'<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M8.2 5.3v13.4a1 1 0 0 0 1.5.86l10.6-6.7a1 1 0 0 0 0-1.72L9.7 4.44a1 1 0 0 0-1.5.86z"/></svg>',
+ pause:'<svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4.2" height="14" rx="1.4" fill="currentColor"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.4" fill="currentColor"/></svg>'};
+const fmtT=s=>{s=Math.max(0,s);const m=Math.floor(s/60),r=s-m*60;return m+':'+(r<10?'0':'')+r.toFixed(1)};
+const once=(el,ev)=>new Promise((res,rej)=>{const ok=()=>{el.removeEventListener('error',er);res()},er=()=>{el.removeEventListener(ev,ok);rej(new Error('media'))};el.addEventListener(ev,ok,{once:true});el.addEventListener('error',er,{once:true})});
+const toast=m=>{try{(KE.toast||(()=>{}))(m,1)}catch(e){}};
+
+/* ---------- рисование (как в мини-аппе) ---------- */
+function drawItem(cx,it){
+  cx.save();cx.lineCap='round';cx.lineJoin='round';cx.strokeStyle=cx.fillStyle=it.c;cx.lineWidth=it.w;const p=it.pts;
+  if(it.t==='pen'||it.t==='marker'){if(it.t==='marker')cx.globalAlpha=.4;cx.beginPath();cx.moveTo(p[0].x,p[0].y);if(p.length===1)cx.lineTo(p[0].x+.01,p[0].y);else for(let i=1;i<p.length;i++)cx.lineTo(p[i].x,p[i].y);cx.stroke()}
+  else if(it.t==='rect'&&p.length>1)cx.strokeRect(p[0].x,p[0].y,p[1].x-p[0].x,p[1].y-p[0].y);
+  else if(it.t==='arrow'&&p.length>1){const a=Math.atan2(p[1].y-p[0].y,p[1].x-p[0].x),hl=it.w*4.5;
+    cx.beginPath();cx.moveTo(p[0].x,p[0].y);cx.lineTo(p[1].x-Math.cos(a)*hl*.6,p[1].y-Math.sin(a)*hl*.6);cx.stroke();
+    cx.beginPath();cx.moveTo(p[1].x,p[1].y);cx.lineTo(p[1].x-hl*Math.cos(a-.45),p[1].y-hl*Math.sin(a-.45));cx.lineTo(p[1].x-hl*Math.cos(a+.45),p[1].y-hl*Math.sin(a+.45));cx.closePath();cx.fill()}
+  else if(it.t==='text'){const fs=it.w*5;cx.font=`700 ${fs}px -apple-system,Segoe UI,Roboto,sans-serif`;cx.textAlign='center';cx.textBaseline='middle';
+    cx.lineWidth=fs/6;cx.strokeStyle=it.c==='#000000'?'#fff':'#000';cx.globalAlpha=.85;
+    const ls=it.s.split('\n');ls.forEach((l,i)=>cx.strokeText(l,p[0].x,p[0].y+(i-(ls.length-1)/2)*fs*1.15));cx.globalAlpha=1;
+    ls.forEach((l,i)=>cx.fillText(l,p[0].x,p[0].y+(i-(ls.length-1)/2)*fs*1.15))}
+  cx.restore()}
+
+/* ---------- общая оболочка ---------- */
+function edit(file,opt){
+  opt=opt||{};
+  const isVid=/^video\//.test(file.type)||(!file.type&&/\.(mp4|m4v|webm|mov)$/i.test(file.name||''));
+  return new Promise(async resolve=>{
+    const root=document.createElement('div');root.className='ke';
+    root.innerHTML=`<div class="ke-top"><button class="ke-b" data-a="x" type="button" aria-label="Закрыть">${I.x}</button><span class="ke-sp"></span><button class="ke-b" data-a="undo" type="button" aria-label="Отменить">${I.undo}</button>${isVid?'':`<button class="ke-b" data-a="rot" type="button" aria-label="Повернуть">${I.rot}</button>`}<button class="ke-b ok" data-a="ok" type="button" aria-label="Готово">${I.ok}</button></div>
+    <div class="ke-st"><div class="ke-box"><div class="ke-ld"><i class="ke-spin"></i></div></div></div>
+    <div class="ke-pn" id="kePn"></div>
+    <div class="ke-tabs"><button data-m="draw" class="on" type="button">${I.draw}<span>Рисовать</span></button><button data-m="crop" type="button">${I.crop}<span>Обрезать</span></button>${isVid?`<button data-m="trim" type="button">${I.trim}<span>Длина</span></button>`:''}</div>`;
+    document.body.appendChild(root);
+    const $=s=>root.querySelector(s),st=$('.ke-st'),box=$('.ke-box'),pn=$('#kePn');
+    let W=0,H=0,media=null,vid=null,url='',closed=false;
+    let mode='draw',tool='pen',color=COLORS[0],size=6,items=[],cur=null;
+    let crop=null,ratio=0,rotated=false,dirty=false;
+    let t0=0,t1=0,dur=0,playing=false;
+    const cv=document.createElement('canvas');cv.className='ke-cv';let cx=cv.getContext('2d');
+    const done=v=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey);window.removeEventListener('resize',layout);try{vid&&(vid.pause(),vid.removeAttribute('src'),vid.load())}catch(e){}if(url)URL.revokeObjectURL(url);root.remove();resolve(v)};
+    const onKey=e=>{if(e.key==='Escape'&&!root.querySelector('.ke-txt')&&!root.querySelector('.ke-prog'))done(null)};
+    document.addEventListener('keydown',onKey);
+
+    /* --- загрузка --- */
+    try{
+      if(!isVid){
+        let bmp;
+        try{bmp=await createImageBitmap(file,{imageOrientation:'from-image'})}
+        catch(e){bmp=await new Promise((res,rej)=>{const u=URL.createObjectURL(file),im=new Image();im.onload=()=>{URL.revokeObjectURL(u);res(im)};im.onerror=()=>{URL.revokeObjectURL(u);rej(new Error('bad'))};im.src=u})}
+        const bw=bmp.width||bmp.naturalWidth,bh=bmp.height||bmp.naturalHeight,k=Math.min(1,MAXIMG/Math.max(bw,bh));
+        W=Math.round(bw*k);H=Math.round(bh*k);
+        media=document.createElement('canvas');media.width=W;media.height=H;const c=media.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,W,H);c.drawImage(bmp,0,0,W,H);
+        try{bmp.close&&bmp.close()}catch(e){}
+      }else{
+        url=URL.createObjectURL(file);vid=document.createElement('video');vid.className='ke-vid';vid.playsInline=true;vid.setAttribute('playsinline','');vid.preload='auto';vid.src=url;
+        await once(vid,'loadedmetadata');
+        if(!isFinite(vid.duration)||!vid.videoWidth)throw new Error('bad');
+        W=vid.videoWidth;H=vid.videoHeight;dur=vid.duration;t0=0;t1=dur;media=vid;
+        vid.currentTime=0.01;
+      }
+    }catch(e){toast(isVid?'Не удалось открыть видео в редакторе':'Не удалось открыть фото');done(null);return}
+    crop={x:0,y:0,w:W,h:H};
+    $('.ke-ld').remove();if(isVid){vid.style.cssText='position:absolute;max-width:none;max-height:none';box.appendChild(vid)}box.appendChild(cv);
+
+    /* --- раскладка: видимая область = рамка обрезки (или весь кадр в режиме обрезки) --- */
+    const region=()=>mode==='crop'?{x:0,y:0,w:W,h:H}:crop;
+    let sc=1;
+    function layout(){
+      const r=region(),aw=st.clientWidth-16,ah=st.clientHeight-8;if(aw<=0||ah<=0)return;
+      sc=Math.min(aw/r.w,ah/r.h);box.style.width=Math.round(r.w*sc)+'px';box.style.height=Math.round(r.h*sc)+'px';
+      if(!isVid){cv.width=r.w;cv.height=r.h;cv.style.cssText='position:absolute;inset:0;width:100%;height:100%';}
+      else{vid.style.width=Math.round(W*sc)+'px';vid.style.height=Math.round(H*sc)+'px';vid.style.left=Math.round(-r.x*sc)+'px';vid.style.top=Math.round(-r.y*sc)+'px';
+        const k=Math.min(1,1600/Math.max(r.w,r.h));cv.width=Math.round(r.w*k);cv.height=Math.round(r.h*k);cv.style.cssText='position:absolute;inset:0;width:100%;height:100%';}
+      render();if(mode==='crop')cropUI()}
+    function render(){
+      const r=region();cx.setTransform(1,0,0,1,0,0);cx.clearRect(0,0,cv.width,cv.height);
+      const k=cv.width/r.w;cx.setTransform(k,0,0,k,-r.x*k,-r.y*k);
+      if(!isVid)cx.drawImage(media,0,0);
+      items.forEach(it=>drawItem(cx,it));if(cur)drawItem(cx,cur);cx.setTransform(1,0,0,1,0,0)}
+    window.addEventListener('resize',layout);
+
+    /* --- рисование --- */
+    const M=Math.max(W,H),lw=()=>size*M/900*(tool==='marker'?3.5:1);
+    const pt=e=>{const r=cv.getBoundingClientRect(),g=region();return{x:g.x+(e.clientX-r.left)*g.w/r.width,y:g.y+(e.clientY-r.top)*g.h/r.height}};
+    function askText(p){
+      const b=document.createElement('div');b.className='ke-txt';b.innerHTML='<input maxlength="80" placeholder="Текст"><button type="button">OK</button>';st.appendChild(b);const inp=b.querySelector('input');inp.focus();
+      const fin=ok=>{const v=inp.value.trim();b.remove();if(ok&&v){items.push({t:'text',c:color,w:size*M/900,pts:[p],s:v});dirty=true;render()}};
+      b.querySelector('button').onclick=()=>fin(true);inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();fin(true)}else if(e.key==='Escape'){e.stopPropagation();fin(false)}}}
+    cv.addEventListener('pointerdown',e=>{if(mode!=='draw'||e.button>0)return;e.preventDefault();const p=pt(e);
+      if(tool==='text'){if(!root.querySelector('.ke-txt'))askText(p);return}
+      try{cv.setPointerCapture(e.pointerId)}catch(x){}cur={t:tool,c:color,w:lw(),pts:[p]};render()});
+    cv.addEventListener('pointermove',e=>{if(!cur)return;const p=pt(e);if(cur.t==='pen'||cur.t==='marker')cur.pts.push(p);else cur.pts[1]=p;render()});
+    const up=()=>{if(!cur)return;const p=cur.pts;if(!((cur.t==='rect'||cur.t==='arrow')&&(p.length<2||Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)<6))){items.push(cur);dirty=true}cur=null;render()};
+    cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+
+    /* --- обрезка кадра --- */
+    let cropEl=null;
+    function cropUI(){
+      if(!cropEl){cropEl=document.createElement('div');cropEl.className='ke-crop';
+        cropEl.innerHTML='<div class="ke-cf"><i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="w"></i><i data-h="e"></i><i data-h="sw"></i><i data-h="s"></i><i data-h="se"></i><b></b><b></b></div>';box.appendChild(cropEl);
+        let drag=null;
+        cropEl.addEventListener('pointerdown',e=>{const h=e.target.dataset&&e.target.dataset.h||(e.target.closest('.ke-cf')?'m':null);if(!h)return;e.preventDefault();
+          try{cropEl.setPointerCapture(e.pointerId)}catch(x){}drag={h,x:e.clientX,y:e.clientY,r:{...crop}}});
+        cropEl.addEventListener('pointermove',e=>{if(!drag)return;const dx=(e.clientX-drag.x)/sc,dy=(e.clientY-drag.y)/sc;crop=resize(drag.r,drag.h,dx,dy);dirty=true;place()});
+        const end=()=>{drag=null};cropEl.addEventListener('pointerup',end);cropEl.addEventListener('pointercancel',end)}
+      place()}
+    function place(){const f=cropEl&&cropEl.firstChild;if(!f)return;f.style.left=crop.x/W*100+'%';f.style.top=crop.y/H*100+'%';f.style.width=crop.w/W*100+'%';f.style.height=crop.h/H*100+'%'}
+    const MINC=48;
+    function resize(r,h,dx,dy){
+      let x0=r.x,y0=r.y,x1=r.x+r.w,y1=r.y+r.h;
+      if(h==='m'){let nx=r.x+dx,ny=r.y+dy;nx=Math.max(0,Math.min(W-r.w,nx));ny=Math.max(0,Math.min(H-r.h,ny));return{x:nx,y:ny,w:r.w,h:r.h}}
+      if(h.includes('w'))x0=Math.min(x1-MINC,Math.max(0,r.x+dx));
+      if(h.includes('e'))x1=Math.max(x0+MINC,Math.min(W,x1+dx));
+      if(h.includes('n'))y0=Math.min(y1-MINC,Math.max(0,r.y+dy));
+      if(h.includes('s'))y1=Math.max(y0+MINC,Math.min(H,y1+dy));
+      if(ratio){
+        let w=x1-x0,hh=y1-y0;
+        const horiz=h==='e'||h==='w',vert=h==='n'||h==='s';
+        if(vert)w=hh*ratio;else hh=w/ratio;
+        const maxW=h.includes('w')?r.x+r.w:h.includes('e')?W-r.x:Math.min(r.x+r.w/2,W-r.x-r.w/2)*2;
+        const maxH=h.includes('n')?r.y+r.h:h.includes('s')?H-r.y:Math.min(r.y+r.h/2,H-r.y-r.h/2)*2;
+        const k=Math.min(1,maxW/w,maxH/hh);w*=k;hh*=k;
+        if(w<MINC){hh=MINC/ratio;w=MINC}if(hh<MINC){w=MINC*ratio;hh=MINC}
+        const cxm=r.x+r.w/2,cym=r.y+r.h/2;
+        if(h.includes('w'))x0=x1-w;else if(h.includes('e'))x1=x0+w;else{x0=cxm-w/2;x1=cxm+w/2}
+        if(h.includes('n'))y0=y1-hh;else if(h.includes('s'))y1=y0+hh;else{y0=cym-hh/2;y1=cym+hh/2}
+        if(horiz||vert){/* уже центрировано по второй оси */}
+        x0=Math.max(0,x0);y0=Math.max(0,y0);x1=Math.min(W,x1);y1=Math.min(H,y1)}
+      return{x:Math.round(x0),y:Math.round(y0),w:Math.round(x1-x0),h:Math.round(y1-y0)}}
+    function setRatio(r){ratio=r;if(!r){return}
+      let w=crop.w,h=crop.h;if(w/h>r)w=h*r;else h=w/r;
+      crop={x:Math.round(crop.x+(crop.w-w)/2),y:Math.round(crop.y+(crop.h-h)/2),w:Math.round(w),h:Math.round(h)};dirty=true;place()}
+
+    /* --- поворот (фото) --- */
+    function rotate(){
+      const n=document.createElement('canvas');n.width=H;n.height=W;const c=n.getContext('2d');c.translate(H,0);c.rotate(Math.PI/2);c.drawImage(media,0,0);
+      items.forEach(it=>it.pts=it.pts.map(p=>({x:H-p.y,y:p.x})));
+      media=n;const w=W;W=H;H=w;crop={x:0,y:0,w:W,h:H};rotated=true;dirty=true;layout()}
+
+    /* --- видео: длина --- */
+    let tl=null;
+    function vidTick(){if(!playing)return;if(vid.currentTime>=t1-0.03){vid.currentTime=t0;if(vid.paused)vid.play().catch(()=>{})}updPh();requestAnimationFrame(vidTick)}
+    function play(on){if(!isVid)return;playing=on;const b=pn.querySelector('.ke-pl');if(b)b.innerHTML=on?I.pause:I.play;
+      if(on){if(vid.currentTime<t0||vid.currentTime>=t1-0.05)vid.currentTime=t0;vid.play().catch(()=>{playing=false;if(b)b.innerHTML=I.play});requestAnimationFrame(vidTick)}else vid.pause()}
+    function updPh(){if(!tl)return;const ph=tl.querySelector('.ke-ph');if(ph)ph.style.left=Math.max(0,Math.min(100,vid.currentTime/dur*100))+'%'}
+    function updTl(){if(!tl)return;tl.querySelector('.ke-sel').style.cssText=`left:${t0/dur*100}%;width:${(t1-t0)/dur*100}%`;
+      pn.querySelector('.ke-tt').textContent=fmtT(t0)+' — '+fmtT(t1)+' · '+(t1-t0).toFixed(1)+' с';updPh()}
+    async function strip(el){
+      try{const v=document.createElement('video');v.muted=true;v.preload='auto';v.playsInline=true;v.src=url;await once(v,'loadeddata');
+        const n=Math.min(10,Math.max(5,Math.round(el.clientWidth/46)||8));el.innerHTML='';
+        for(let i=0;i<n&&!closed;i++){const c=document.createElement('canvas');c.width=64;c.height=64;el.appendChild(c);
+          v.currentTime=Math.min(dur-0.05,dur*(i+.5)/n);await once(v,'seeked');const q=Math.min(v.videoWidth,v.videoHeight);
+          c.getContext('2d').drawImage(v,(v.videoWidth-q)/2,(v.videoHeight-q)/2,q,q,0,0,64,64)}
+        v.removeAttribute('src');v.load()}catch(e){}}
+    function trimUI(){
+      pn.innerHTML=`<div class="ke-tlw"><div class="ke-tl"><div class="ke-ts"></div><div class="ke-sel"><i class="ke-hl" data-d="a"></i><i class="ke-hl r" data-d="b"></i></div><i class="ke-ph"></i></div></div>
+      <div class="ke-trow"><button class="ke-pl" type="button" aria-label="Воспроизвести">${I.play}</button><span class="ke-tt"></span><span class="ke-sp"></span><button class="ke-rs" type="button">Сбросить</button></div>`;
+      tl=pn.querySelector('.ke-tl');strip(tl.querySelector('.ke-ts'));updTl();
+      const track=tl.getBoundingClientRect.bind(tl);let drag=null;
+      tl.addEventListener('pointerdown',e=>{const d=e.target.dataset&&e.target.dataset.d;
+        const r=track(),t=(e.clientX-r.left)/r.width*dur;
+        if(d){drag=d;try{tl.setPointerCapture(e.pointerId)}catch(x){}play(false);e.preventDefault()}
+        else{vid.currentTime=Math.max(t0,Math.min(t1,t));updPh()}});
+      tl.addEventListener('pointermove',e=>{if(!drag)return;const r=track(),t=Math.max(0,Math.min(dur,(e.clientX-r.left)/r.width*dur)),gap=Math.min(0.5,dur/2);
+        if(drag==='a'){t0=Math.min(t,t1-gap);vid.currentTime=t0}else{t1=Math.max(t,t0+gap);vid.currentTime=Math.max(0,t1-0.05)}dirty=true;updTl()});
+      const end=()=>{if(drag){drag=null;vid.currentTime=t0;updTl()}};tl.addEventListener('pointerup',end);tl.addEventListener('pointercancel',end);
+      pn.querySelector('.ke-pl').onclick=()=>play(!playing);
+      pn.querySelector('.ke-rs').onclick=()=>{t0=0;t1=dur;vid.currentTime=0.01;updTl()}}
+
+    /* --- панели --- */
+    function panel(){
+      play(false);tl=null;
+      if(mode==='draw'){
+        pn.innerHTML=`<div class="ke-row">${[['pen',I.pen],['marker',I.mark],['arrow',I.arrow],['rect',I.rect],['text',I.text]].map(([k,s])=>`<button class="ke-t${k===tool?' on':''}" data-t="${k}" type="button">${s}</button>`).join('')}<span class="ke-sp2"></span>${COLORS.map(c=>`<button class="ke-c${c===color?' on':''}" data-c="${c}" style="background:${c}" type="button" aria-label="Цвет"></button>`).join('')}</div><div class="ke-row"><input type="range" class="ke-rg" min="2" max="24" value="${size}" aria-label="Толщина"></div>`;
+        pn.querySelector('.ke-rg').oninput=e=>{size=+e.target.value}}
+      else if(mode==='crop'){
+        pn.innerHTML=`<div class="ke-row ke-rt">${RATIOS.map(([k,n,v])=>`<button class="ke-r${(v||0)===(ratio||0)?' on':''}" data-r="${v}" type="button">${n}</button>`).join('')}</div><div class="ke-row"><button class="ke-rs" data-a="creset" type="button">Сбросить рамку</button></div>`}
+      else trimUI();
+      root.querySelectorAll('.ke-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode))}
+    function setMode(m){if(m===mode)return;
+      if(mode==='crop'&&cropEl){cropEl.remove();cropEl=null}
+      mode=m;panel();layout();if(m==='trim')play(false)}
+    pn.addEventListener('click',e=>{
+      const t=e.target.closest('[data-t]'),c=e.target.closest('[data-c]'),r=e.target.closest('[data-r]');
+      if(t){tool=t.dataset.t;pn.querySelectorAll('.ke-t').forEach(b=>b.classList.toggle('on',b===t))}
+      if(c){color=c.dataset.c;pn.querySelectorAll('.ke-c').forEach(b=>b.classList.toggle('on',b===c))}
+      if(r){const v=+r.dataset.r;pn.querySelectorAll('.ke-r').forEach(b=>b.classList.toggle('on',b===r));setRatio(v)}
+      if(e.target.closest('[data-a=creset]')){crop={x:0,y:0,w:W,h:H};ratio=0;panel();place()}});
+    root.querySelector('.ke-tabs').addEventListener('click',e=>{const b=e.target.closest('[data-m]');if(b)setMode(b.dataset.m)});
+    root.querySelector('.ke-top').addEventListener('click',async e=>{const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a;
+      if(a==='x')done(null);
+      else if(a==='undo'){if(items.length){items.pop();render()}}
+      else if(a==='rot')rotate();
+      else if(a==='ok'){b.disabled=true;try{await finish()}catch(er){toast((er&&er.message)||'Не удалось обработать');b.disabled=false}}});
+
+    /* --- экспорт --- */
+    const cropped=()=>crop.x||crop.y||crop.w!==W||crop.h!==H;
+    async function finish(){
+      if(!isVid){
+        if(!dirty&&!rotated&&!items.length&&!cropped()&&file.size<=(opt.limit||1e12))return done({file,changed:false});
+        const r=crop,k=Math.min(1,MAXIMG/Math.max(r.w,r.h)),o=document.createElement('canvas');o.width=Math.round(r.w*k);o.height=Math.round(r.h*k);
+        const c=o.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,o.width,o.height);c.setTransform(k,0,0,k,-r.x*k,-r.y*k);c.drawImage(media,0,0);items.forEach(it=>drawItem(c,it));
+        const b=await new Promise(res=>o.toBlob(res,'image/jpeg',.9));if(!b)throw new Error('Не удалось сохранить фото');
+        return done({file:new File([b],'photo.jpg',{type:'image/jpeg'}),changed:true})}
+      /* видео */
+      const trimmed=t0>0.05||t1<dur-0.05,need=trimmed||cropped()||items.length||file.size>(opt.limit||1e12);
+      if(!need)return done({file,changed:false});
+      play(false);
+      const out=await encode();if(!out)return;done({file:out,changed:true})}
+    function pickMime(){if(typeof MediaRecorder==='undefined')return '';
+      for(const m of ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']){try{if(MediaRecorder.isTypeSupported(m))return m}catch(e){}}return ''}
+    async function encode(){
+      const mime=pickMime(),r=crop;
+      if(!mime||!HTMLCanvasElement.prototype.captureStream){throw new Error('Этот браузер не умеет обрабатывать видео. Отправьте без правок')}
+      const k=Math.min(1,MAXVID/Math.max(r.w,r.h)),ow=Math.max(2,Math.round(r.w*k/2)*2),oh=Math.max(2,Math.round(r.h*k/2)*2);
+      const o=document.createElement('canvas');o.width=ow;o.height=oh;const c=o.getContext('2d');
+      const ov=document.createElement('canvas');ov.width=W;ov.height=H;const oc=ov.getContext('2d');items.forEach(it=>drawItem(oc,it));
+      const hasOv=items.length>0;
+      const len=t1-t0,limit=opt.limit||20*1048576,vbps=Math.max(250000,Math.min(3000000,Math.floor(limit*0.85*8/len)-96000));
+      const prog=document.createElement('div');prog.className='ke-prog';prog.innerHTML='<div class="ke-pc"><i class="ke-spin"></i><b>Обработка видео…</b><span id="kePp">0%</span><small>Не сворачивайте приложение</small><button type="button" class="ke-pcx">Отмена</button></div>';root.appendChild(prog);
+      let rec,ac,cancelled=false,chunks=[];
+      const stream=o.captureStream(30);
+      try{
+        const AC=window.AudioContext||window.webkitAudioContext;
+        if(AC){ac=new AC();const src=ac.createMediaElementSource(vid),dst=ac.createMediaStreamDestination();src.connect(dst);dst.stream.getAudioTracks().forEach(t=>stream.addTrack(t));if(ac.state==='suspended')await ac.resume()}
+      }catch(e){}
+      rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:vbps,audioBitsPerSecond:96000});
+      rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+      const stopped=new Promise(res=>rec.onstop=res);
+      prog.querySelector('.ke-pcx').onclick=()=>{cancelled=true};
+      vid.muted=false;vid.currentTime=t0;await Promise.race([once(vid,'seeked').catch(()=>{}),new Promise(r=>setTimeout(r,1500))]);
+      const frame=()=>{c.drawImage(vid,r.x,r.y,r.w,r.h,0,0,ow,oh);if(hasOv)c.drawImage(ov,r.x,r.y,r.w,r.h,0,0,ow,oh)};
+      frame();rec.start(500);
+      let ok=true;try{await vid.play()}catch(e){vid.muted=true;try{await vid.play()}catch(x){ok=false}}
+      if(ok){
+        await new Promise(res=>{
+          const step=()=>{if(cancelled||closed)return res();frame();const p=Math.max(0,Math.min(1,(vid.currentTime-t0)/len));
+            const pp=prog.querySelector('#kePp');if(pp)pp.textContent=Math.round(p*100)+'%';
+            if(vid.currentTime>=t1-0.04||vid.ended)return res();
+            if(vid.requestVideoFrameCallback)vid.requestVideoFrameCallback(step);else requestAnimationFrame(step)};
+          step()})}
+      try{vid.pause()}catch(e){}
+      await new Promise(r=>setTimeout(r,120));
+      try{rec.state!=='inactive'&&rec.stop()}catch(e){}await stopped;
+      try{stream.getTracks().forEach(t=>t.stop());ac&&ac.close()}catch(e){}
+      prog.remove();
+      if(cancelled||closed)return null;
+      if(!ok)throw new Error('Не удалось обработать видео');
+      const blob=new Blob(chunks,{type:mime.split(';')[0]});
+      if(!blob.size)throw new Error('Не удалось обработать видео');
+      if(blob.size>limit)throw new Error('Видео всё ещё больше '+Math.round(limit/1048576)+' МБ — обрежьте длину');
+      return new File([blob],'video.'+(/mp4/.test(mime)?'mp4':'webm'),{type:blob.type})}
+
+    panel();layout();
+    if(isVid){vid.addEventListener('ended',()=>{play(false)})}
+    requestAnimationFrame(layout);
+  });
+}
+return{edit,toast:null}
+})();
+KE.toast=(t,e)=>toast(t,e);
+/* ---------- вложения в чате: фото / видео / файл ---------- */
+const ATT_MAX=20*1024*1024;
+const sleep_=ms=>new Promise(r=>setTimeout(r,ms));
+function fsize(n){n=+n||0;return n<1024?n+' Б':n<1048576?Math.round(n/1024)+' КБ':(n/1048576).toFixed(n<1.05e7?1:0)+' МБ'}
+function kindOf(f){const t=(f.type||'').toLowerCase(),n=(f.name||'').toLowerCase();
+  if(/^image\/(jpeg|png|webp|gif)$/.test(t)||(!t&&/\.(jpe?g|png|webp|gif)$/.test(n)))return 'image';
+  if(/^video\/(mp4|webm|quicktime|x-m4v)$/.test(t)||(!t&&/\.(mp4|m4v|webm|mov)$/.test(n)))return 'video';return 'file'}
+/* accept: 'image/*' откроет галерею фото, 'video/*' — галерею видео, без accept — файловый менеджер */
+function pickFiles(accept,cb){const i=document.createElement('input');i.type='file';i.multiple=true;if(accept)i.accept=accept;i.style.display='none';document.body.appendChild(i);
+  i.addEventListener('change',()=>{const fs=[...i.files];i.remove();if(fs.length)cb(fs)});i.addEventListener('cancel',()=>i.remove());i.click()}
+function attachMenu(onFiles){
+  const bg=document.createElement('div');bg.className='sheet-bg';
+  bg.innerHTML=`<div class="sheet"><div class="sh-t">Прикрепить</div>
+  <button class="am-row" data-a="p" type="button"><span class="am-i p">${IC.img}</span><span><b>Фото</b><small>Открыть галерею</small></span></button>
+  <button class="am-row" data-a="v" type="button"><span class="am-i v">${IC.video}</span><span><b>Видео</b><small>Галерея с видео</small></span></button>
+  <button class="am-row" data-a="f" type="button"><span class="am-i f">${IC.file}</span><span><b>Файл</b><small>Файловый менеджер · до ${ATT_MAX/1048576} МБ</small></span></button></div>`;
+  bg.onclick=e=>{const b=e.target.closest('[data-a]');if(!b){if(e.target===bg)bg.remove();return}
+    const a=b.dataset.a;bg.remove();pickFiles(a==='p'?'image/*':a==='v'?'video/*':'',onFiles)};
+  document.body.appendChild(bg)}
+/* окно подтверждения: превью, подпись, отправка по очереди */
+const canEdit=f=>{const k=kindOf(f);return (k==='image'&&!/gif/i.test((f.type||'')+(f.name||'')))||k==='video'};
+function sendSheet(files,sendOne){
+  let items=files.filter(f=>{if(!f.size){toast('Файл «'+f.name+'» пустой',1);return false}if(f.size>ATT_MAX&&!canEdit(f)){toast('«'+f.name+'» больше '+ATT_MAX/1048576+' МБ',1);return false}return true}).slice(0,10);
+  if(!items.length)return;
+  const bg=document.createElement('div');bg.className='sheet-bg';const urls=[];
+  bg.innerHTML=`<div class="sheet rep"><div class="sh-t" id="sxT"></div><div class="sx-grid" id="sxG"></div><div class="sx-h" id="sxH" hidden>Нажмите на фото или видео, чтобы нарисовать, обрезать кадр или длину</div><input class="inp" id="sxC" placeholder="Подпись (необязательно)" maxlength="1000" autocomplete="off" style="margin-bottom:12px"><div style="display:flex;gap:10px"><button class="btn ghost" id="sxN" type="button" style="flex:1">Отмена</button><button class="btn" id="sxS" type="button" style="flex:1.4">${IC.send}Отправить</button></div></div>`;
+  const G=bg.querySelector('#sxG'),H=bg.querySelector('#sxH'),T=bg.querySelector('#sxT'),S=bg.querySelector('#sxS'),N=bg.querySelector('#sxN'),C=bg.querySelector('#sxC');let busy=false;
+  const done=()=>{urls.forEach(u=>URL.revokeObjectURL(u));bg.remove()};
+  const draw=()=>{T.textContent=items.length===1?'Отправить файл':'Отправить: '+items.length;
+    G.innerHTML=items.map((f,i)=>{const k=kindOf(f);let u='';if(k!=='file'){u=URL.createObjectURL(f);urls.push(u)}
+      const big=f.size>ATT_MAX;return `<div class="sx-it${canEdit(f)?' ed':''}" data-i="${i}">${k==='image'?`<img src="${u}" alt="">`:k==='video'?`<video src="${u}#t=0.1" muted playsinline preload="metadata"></video><span class="sx-vb">${IC.play}</span>`:`<span class="sx-ic">${IC.file}</span><span class="sx-n">${esc(f.name)}</span><span>${fsize(f.size)}</span>`}${canEdit(f)?`<i class="sx-pe${big?' big':''}">${big?fsize(f.size):(f._ed?'изм.':IC.pencil)}</i>`:''}<button class="sx-x" data-x="${i}" type="button" aria-label="Убрать">${IC.close}</button></div>`}).join('');
+    H.hidden=!items.some(canEdit);if(!items.length)done()};
+  G.onclick=async e=>{const x=e.target.closest('[data-x]');if(x&&!busy){items.splice(+x.dataset.x,1);draw();return}
+    const t=e.target.closest('.sx-it.ed');if(!t||busy)return;const i=+t.dataset.i,f=items[i];
+    const r=await KE.edit(f,{limit:ATT_MAX});if(r&&r.file&&items[i]===f){if(r.changed)r.file._ed=1;items[i]=r.file;draw()}};
+  N.onclick=()=>{if(!busy)done()};bg.onclick=e=>{if(e.target===bg&&!busy)done()};
+  S.onclick=async()=>{if(busy||!items.length)return;if(items.some(f=>f.size>ATT_MAX)){toast('Файл больше '+ATT_MAX/1048576+' МБ — нажмите на него и обрежьте длину или кадр',1);return}busy=true;S.disabled=N.disabled=true;let cap=C.value.trim(),n=items.length,k=0;
+    try{while(items.length){S.innerHTML='Отправка '+(k+1)+' из '+n+'…';await sendOne(items[0],k===0?cap:'');items.shift();k++}done()}
+    catch(e){toast(e.message,1);busy=false;S.disabled=N.disabled=false;S.innerHTML=IC.send+'Отправить';if(k)cap='';draw()}};
+  document.body.appendChild(bg);draw()}
+/* бабл с вложением в чате */
+function attBubble(m,tk){
+  const f=m.file,u=f.url,me=m.mine?' me':'',cap=m.body?`<div class="mc">${fmt(m.body)}</div>`:'';
+  if(f.kind==='image')return `<div class="msg mm${me}"><div class="mi" data-gal="image" data-u="${esc(u)}" data-n="${esc(f.name)}"><img data-bsrc="${esc(u)}" alt=""></div>${cap}<small>${tk}</small></div>`;
+  if(f.kind==='video')return `<div class="msg mm${me}"><div class="mi" data-gal="video" data-u="${esc(u)}" data-n="${esc(f.name)}"><video muted playsinline preload="metadata"${f.size<=6291456?` data-bsrc="${esc(u)}"`:''}></video><span class="mplay">${IC.play}</span>${f.size>6291456?`<span class="mvs">${fsize(f.size)}</span>`:''}</div>${cap}<small>${tk}</small></div>`;
+  return `<div class="msg mf-b${me}"><button class="mf" type="button" data-dl="${esc(u)}" data-n="${esc(f.name)}"><span class="mf-i">${IC.file}</span><span class="mf-t"><b>${esc(f.name)}</b><span>${fsize(f.size)}</span></span></button>${cap}<small>${tk}</small></div>`}
+/* просмотрщик: фото и видео чата одной лентой, свайп / стрелки / Esc */
+function openGal(log,startEl){
+  const els=[...log.querySelectorAll('[data-gal]')];if(!els.length)return;
+  const items=els.map(e=>({k:e.dataset.gal,u:e.dataset.u,n:e.dataset.n||''}));let i=Math.max(0,els.indexOf(startEl));
+  const g=document.createElement('div');g.className='gal';
+  g.innerHTML=`<div class="gal-top"><span class="gal-n"></span><span class="gal-sp"></span><button class="ib gal-dl" type="button" aria-label="Скачать">${IC.download}</button><button class="ib gal-x" type="button" aria-label="Закрыть">${IC.close}</button></div><div class="gal-st"></div><button class="gal-p" type="button" aria-label="Назад">${IC.back}</button><button class="gal-nx" type="button" aria-label="Вперёд">${IC.chev}</button>`;
+  const st=g.querySelector('.gal-st'),nn=g.querySelector('.gal-n'),dl=g.querySelector('.gal-dl'),bp=g.querySelector('.gal-p'),bn=g.querySelector('.gal-nx');
+  let tok=0;
+  const show=()=>{const it=items[i],my=++tok;st.innerHTML='<i class="ke-spin gal-ld"></i>';nn.textContent=(i+1)+' / '+items.length;bp.hidden=i===0;bn.hidden=i===items.length-1;
+    blobOf(it.u).then(u=>{if(my!==tok||!g.isConnected)return;st.innerHTML='';let el;
+      if(it.k==='video'){el=document.createElement('video');el.controls=true;el.autoplay=true;el.playsInline=true;el.setAttribute('playsinline','');el.src=u;el.onerror=()=>toast('Не удалось воспроизвести видео',1)}
+      else{el=document.createElement('img');el.src=u;el.alt='';el.draggable=false}
+      st.appendChild(el)}).catch(()=>{if(my===tok)st.innerHTML='<span style="color:#fff;opacity:.7">Не удалось загрузить</span>'})};
+  dl.onclick=()=>saveBlob(items[i].u,items[i].n);
+  const go=d=>{const j=i+d;if(j<0||j>=items.length)return;const v=st.querySelector('video');if(v)try{v.pause()}catch(e){}i=j;show()};
+  const close=()=>{const v=st.querySelector('video');if(v){try{v.pause();v.removeAttribute('src');v.load()}catch(e){}}document.removeEventListener('keydown',key);g.remove()};
+  const key=e=>{if(e.key==='Escape')close();else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)};
+  g.querySelector('.gal-x').onclick=close;bp.onclick=()=>go(-1);bn.onclick=()=>go(1);
+  let sx=0,sy=0,sid=-1;
+  st.addEventListener('pointerdown',e=>{if(e.target.tagName==='VIDEO'&&e.offsetY>e.target.clientHeight-70)return;sx=e.clientX;sy=e.clientY;sid=e.pointerId});
+  st.addEventListener('pointerup',e=>{if(e.pointerId!==sid)return;sid=-1;const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.4)go(dx<0?1:-1);else if(dy>90&&Math.abs(dy)>Math.abs(dx)*1.4)close();
+    else if(Math.abs(dx)<8&&Math.abs(dy)<8&&e.target===st)close()});
+  document.addEventListener('keydown',key);document.body.appendChild(g);show()}
+
 /* ---------- чаты ---------- */
 let chatT=null;
 async function viewChats(el){
@@ -1393,7 +1900,7 @@ async function viewChats(el){
 async function viewChat(el,peer){
   KV.stop();
   let last=0,sup=null,typedAt=0,isSup=false;
-  el.innerHTML=`<div class="chat"><div class="chat-h"><button class="ib round" onclick="history.back()">${IC.back}</button><div id="chH" style="flex:1;display:flex;align-items:center;gap:12px;min-width:0"></div></div><div id="supBar" class="supbar" hidden></div><div class="chat-log" id="log"></div><div class="cform"><textarea id="mTxt" rows="1" maxlength="3000" placeholder="Сообщение…"></textarea><button class="send" id="mSend" disabled>${IC.send}</button></div></div>`;
+  el.innerHTML=`<div class="chat"><div class="chat-h"><button class="ib round" onclick="history.back()">${IC.back}</button><div id="chH" style="flex:1;display:flex;align-items:center;gap:12px;min-width:0"></div></div><div id="supBar" class="supbar" hidden></div><div class="chat-log" id="log"></div><div class="cform"><button class="attb" id="mAtt" type="button" aria-label="Прикрепить фото, видео или файл">${IC.clip}</button><textarea id="mTxt" rows="1" maxlength="3000" placeholder="Сообщение…"></textarea><button class="send" id="mSend" disabled>${IC.send}</button></div></div>`;
   const log=$('#log',el),ta=$('#mTxt',el),sb=$('#mSend',el);
   const draw=async(first)=>{const d=await api('/messages?peer='+peer);
     $('#chH',el).innerHTML=`${av(d.peer,'m')}<div style="min-width:0"><b data-href="#/u/${d.peer.id}" style="font-size:16.5px">${esc(d.peer.name)}</b><small style="display:block;color:var(--dim);font-size:12.5px">${d.recording==='video'?'записывает видеосообщение…':d.recording?'записывает голосовое…':d.typing?'печатает…':(d.peer.username?'@'+esc(d.peer.username):'')}</small></div>`;
@@ -1404,10 +1911,18 @@ async function viewChat(el,peer){
       const c=$('#opC',bar);if(c)c.onclick=async()=>{try{await post_('/support/cancel');draw()}catch(e){toast(e.message,1)}}}}
     const lastId=d.messages.length?d.messages[d.messages.length-1].id:0;
     if(first||lastId!==last){const near=log.scrollHeight-log.scrollTop-log.clientHeight<140;last=lastId;log.innerHTML=d.messages.map(m=>{const tk=clock(m.ts)+(m.mine?(m.read?' ✓✓':' ✓'):'');
-      if(m.note)return KV.knBubble(m.mine?'me':'',{id:m.id,url:BASE+m.note.url,dur:m.note.dur,heard:m.note.heard||m.mine,mine:m.mine,meta:tk});
-      if(m.voice)return KV.bubble('msg'+(m.mine?' me':''),{id:m.id,url:BASE+m.voice.url,dur:m.voice.dur,wave:m.voice.wave,heard:m.voice.heard||m.mine,mine:m.mine,meta:tk});
+      if(m.note)return KV.knBubble(m.mine?'me':'',{id:m.id,url:m.note.url,dur:m.note.dur,heard:m.note.heard||m.mine,mine:m.mine,meta:tk});
+      if(m.voice)return KV.bubble('msg'+(m.mine?' me':''),{id:m.id,url:m.voice.url,dur:m.voice.dur,wave:m.voice.wave,heard:m.voice.heard||m.mine,mine:m.mine,meta:tk});
+      if(m.file)return attBubble(m,tk);
       return `<div class="msg ${m.mine?'me':''}">${fmt(m.body)}<small>${tk}</small></div>`}).join('');KV.bind(log);if(first||near)log.scrollTop=log.scrollHeight}};
   await draw(true);
+  const attB=$('#mAtt',el);
+  if(isSup)attB.remove();
+  else{log.addEventListener('click',e=>{const t=e.target.closest('[data-gal]');if(t){e.preventDefault();openGal(log,t);return}const d=e.target.closest('[data-dl]');if(d)saveBlob(d.dataset.dl,d.dataset.n)});
+    attB.onclick=()=>attachMenu(fs=>sendSheet(fs,async(f,cap)=>{
+      for(let t=0;;t++){const fd=new FormData();fd.append('peer',peer);if(cap)fd.append('text',cap);fd.append('file',f,f.name||'file');
+        try{await api('/messages',{method:'POST',form:fd});break}catch(e){if(e.code==='too_fast'&&t<5){await sleep_(800);continue}throw e}}
+      await draw(true)}))}
   if(!isSup)KV.attach({form:$('.cform',el),ta,sendBtn:sb,log,cls:'msg me',clsN:'me',nowMeta:()=>clock(Date.now()/1000),
     typing:k=>post_('/typing',{peer,kind:k==='video'?'vid':'rec'}).catch(()=>{}),
     send:async r=>{const fd=new FormData();fd.append('peer',peer);if(r.kind==='video'){fd.append('note_dur',r.dur);fd.append('file',r.blob,'circle.'+r.ext)}else{fd.append('voice_dur',r.dur);fd.append('voice_wave',r.wave);fd.append('file',r.blob,'voice.'+r.ext)}await api('/messages',{method:'POST',form:fd});await draw(true)}});

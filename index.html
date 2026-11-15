@@ -1510,6 +1510,19 @@ body.is-more #main{padding-top:8px!important}
 .kv-circ .fg{stroke:#ff4d5e;stroke-dasharray:301.6;stroke-dashoffset:301.6}
 .kv-mic.kv-swap svg{animation:kvSwap .4s cubic-bezier(.34,1.56,.64,1)}
 @keyframes kvSwap{from{transform:scale(.35) rotate(-70deg);opacity:0}to{transform:none;opacity:1}}
+/* подсказка у кнопки записи (как в Telegram) */
+.kv-tip{position:absolute;z-index:8;bottom:calc(100% + 10px);max-width:calc(100% - 16px);padding:10px 14px;border-radius:14px;pointer-events:none;
+  display:flex;flex-direction:column;gap:2px;text-align:left;font-size:13px;line-height:1.3;color:#f4f2fb;
+  background:rgba(28,25,42,.96);border:1px solid rgba(255,255,255,.14);box-shadow:0 14px 34px -10px rgba(0,0,0,.7);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);opacity:0;transform:translateY(6px) scale(.96);transform-origin:calc(100% - var(--ax,24px)) 100%;
+  transition:opacity .22s,transform .3s cubic-bezier(.34,1.56,.64,1)}
+.kv-tip.in{opacity:1;transform:none}
+.kv-tip[hidden]{display:none}
+.kv-tip b{font-weight:650;font-size:13.5px;white-space:nowrap}
+.kv-tip span{opacity:.72;white-space:nowrap}
+.kv-tip::after{content:"";position:absolute;right:calc(var(--ax,24px) - 6px);bottom:-6px;width:12px;height:12px;background:inherit;border:inherit;border-width:0 1px 1px 0;border-radius:0 0 4px 0;transform:rotate(45deg)}
+[data-theme=light] .kv-tip{background:rgba(32,28,44,.95)}
+@media (prefers-reduced-motion:reduce){.kv-tip{transition:opacity .15s;transform:none}}
 /* подгонка под пузыри мини-аппа */
 .cv-msg .vm{padding:0!important;width:min(268px,68vw);min-width:200px}
 .cv-msg.mine .vm{--kv-mine-ink:var(--acc)}
@@ -1612,9 +1625,11 @@ function begin(el,r){
   if(cur&&cur.el!==el)reset(cur.el);
   cur={id:el.dataset.id,el,dur:durOf(el)};
   const seek=(r||0)*cur.dur/1000;
-  A.src=el.dataset.url;A.defaultPlaybackRate=speed;
-  if(seek>0.05)A.addEventListener('loadedmetadata',()=>{try{A.currentTime=seek}catch(e){}},{once:true});
-  const p=A.play();if(p&&p.catch)p.catch(()=>{cfg.toast('Не удалось воспроизвести запись',1);if(cur&&cur.el===el){paint(el,false);cur=null}});
+  const fail=()=>{cfg.toast('Не удалось воспроизвести запись',1);if(cur&&cur.el===el){paint(el,false);cur=null}};
+  const go=u=>{if(!cur||cur.el!==el)return;A.src=u;A.defaultPlaybackRate=speed;
+    if(seek>0.05)A.addEventListener('loadedmetadata',()=>{try{A.currentTime=seek}catch(e){}},{once:true});
+    const p=A.play();if(p&&p.catch)p.catch(fail)};
+  if(cfg.res)cfg.res(el.dataset.url).then(go).catch(fail);else go(el.dataset.url); // cfg.res: форум отдаёт blob, адрес сервера не светится
   markHeard(el)}
 function markHeard(el){if(el.dataset.mine!=='1'&&el.dataset.heard==='0'){el.dataset.heard='1';try{cfg.heard(el.dataset.id)}catch(e){}}}
 function toggle(el){
@@ -1648,7 +1663,7 @@ function listen(root){
     w.addEventListener('pointermove',mv);w.addEventListener('pointerup',up);w.addEventListener('pointercancel',cn)})}
 
 /* ---------- кружки: разметка и плеер ---------- */
-function knInner(v){return `<div class="kn-c"><video class="kn-v" playsinline webkit-playsinline muted preload="metadata" disablepictureinpicture${v.url?` src="${esc(v.url)}#t=0.1"`:''}${v.poster?` poster="${esc(v.poster)}"`:''}></video><svg class="kn-r" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg><span class="kn-t">${fmtT(v.dur)}</span><span class="kn-pl">${IC_PLAY}</span>${v.meta?`<span class="kn-tm">${v.meta}</span>`:''}</div>`}
+function knInner(v){return `<div class="kn-c"><video class="kn-v" playsinline webkit-playsinline muted preload="metadata" disablepictureinpicture${v.url?(cfg.res?` data-bsrc="${esc(v.url)}"`:` src="${esc(v.url)}#t=0.1"`):''}${v.poster?` poster="${esc(v.poster)}"`:''}></video><svg class="kn-r" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg><span class="kn-t">${fmtT(v.dur)}</span><span class="kn-pl">${IC_PLAY}</span>${v.meta?`<span class="kn-tm">${v.meta}</span>`:''}</div>`}
 function knBubble(cls,v){return `<div class="${esc(cls)} kn" data-id="${esc(v.id)}" data-url="${esc(v.url||'')}" data-dur="${v.dur|0}" data-heard="${v.heard?1:0}" data-mine="${v.mine?1:0}"${v.pending?' data-pending="1"':''}>${knInner(v)}</div>`}
 let curN=null,rafN=0;
 const nP=(el,p)=>{const c=el.querySelector('.kn-c');if(c)c.style.setProperty('--p',p)};
@@ -1659,6 +1674,7 @@ function stopAll(){stop();nStop()}
 function nToggle(el){
   if(!el||el.dataset.pending||!el.dataset.url)return;
   const v=el.querySelector('.kn-v');if(!v)return;
+  if(cfg.res&&!v.getAttribute('src')){cfg.res(el.dataset.url).then(u=>{v.src=u;nToggle(el)}).catch(()=>cfg.toast('Не удалось воспроизвести видео',1));return}
   if(curN&&curN.el===el){if(v.paused){const p=v.play();if(p&&p.catch)p.catch(()=>{})}else v.pause();return}
   stop();nStop();
   curN={id:el.dataset.id,el,v,dur:durOf(el)};
@@ -1692,14 +1708,32 @@ function attach(o){
   const mic=sb.cloneNode(false);['id','disabled','data-busy','title'].forEach(a=>mic.removeAttribute(a));
   let mode='voice',recMode='voice';try{if(localStorage.getItem('kv_mode')==='video')mode='video'}catch(e){}
   const modeIcon=()=>mode==='video'?IC_CAM:IC_MIC,modeLbl=()=>mode==='video'?'Записать видеосообщение (кружок)':'Записать голосовое сообщение';
-  mic.type='button';mic.classList.add('kv-mic');mic.classList.remove('kv-sb');mic.innerHTML=modeIcon();mic.dataset.mode=mode;mic.setAttribute('aria-label',modeLbl());
+  mic.type='button';mic.classList.add('kv-mic');mic.classList.remove('kv-sb');mic.innerHTML=modeIcon();mic.dataset.mode=mode;mic.setAttribute('aria-label',modeLbl());mic.title=mode==='video'?'Удерживайте — кружок, нажмите — голосовое':'Удерживайте — голосовое, нажмите — кружок';
   sb.after(mic);
+  // первые разы показываем подсказку сами, потом — по тапу
+  try{const n=+localStorage.getItem('kv_tip')||0;if(n<3){localStorage.setItem('kv_tip',String(n+1));setTimeout(()=>{if(form.isConnected)showTip(5200)},900)}}catch(e){}
   const ov=document.createElement('div');ov.className='kv-rec';ov.hidden=true;
   ov.innerHTML=`<button class="kv-x" type="button" aria-label="Удалить запись">${IC_TRASH}</button><i class="kv-dot"></i><b class="kv-t">0:00,0</b><canvas class="kv-cv"></canvas><span class="kv-hint">‹ Влево — отмена</span>`;
   const lock=document.createElement('div');lock.className='kv-lock';lock.hidden=true;lock.innerHTML=IC_LOCK;
   const circ=document.createElement('div');circ.className='kv-circ';circ.hidden=true;
   circ.innerHTML='<video muted playsinline></video><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="48"/><circle class="fg" cx="50" cy="50" r="48"/></svg>';
-  form.appendChild(ov);form.appendChild(lock);form.appendChild(circ);
+  const tip=document.createElement('div');tip.className='kv-tip';tip.hidden=true;tip.setAttribute('role','status');
+  form.appendChild(ov);form.appendChild(lock);form.appendChild(circ);form.appendChild(tip);
+  let tipT=0;
+  /* подсказка у кнопки, как в Telegram: что делает тап и что — удержание */
+  function tipText(){return mode==='video'
+    ?'<b>Удерживайте — запись кружка</b><span>Нажмите — переключить на голосовое</span>'
+    :'<b>Удерживайте — голосовое</b><span>Нажмите — переключить на кружок</span>'}
+  function showTip(ms){
+    if(state!=='idle'||form.classList.contains('kv-txt'))return;
+    const f=form.getBoundingClientRect(),m=mic.getBoundingClientRect();if(!m.width)return;
+    tip.innerHTML=tipText();tip.hidden=false;tip.classList.remove('in');
+    const w=Math.min(tip.offsetWidth||230,f.width-16);
+    tip.style.right=(f.right-m.right)+'px';
+    // стрелка — ровно над центром кнопки
+    tip.style.setProperty('--ax',Math.max(14,Math.min(w-14,m.width/2))+'px');
+    void tip.offsetWidth;tip.classList.add('in');clearTimeout(tipT);tipT=setTimeout(hideTip,ms||3800)}
+  function hideTip(){clearTimeout(tipT);tip.classList.remove('in');tip.hidden=true}
   const cvid=circ.querySelector('video'),ringFg=circ.querySelector('.fg');
   const $x=ov.querySelector('.kv-x'),$t=ov.querySelector('.kv-t'),cv=ov.querySelector('.kv-cv'),hint=ov.querySelector('.kv-hint');
 
@@ -1781,7 +1815,7 @@ function attach(o){
   function toggleMode(){
     mode=mode==='video'?'voice':'video';try{localStorage.setItem('kv_mode',mode)}catch(e){}
     mic.dataset.mode=mode;mic.innerHTML=modeIcon();mic.setAttribute('aria-label',modeLbl());mic.classList.remove('kv-swap');void mic.offsetWidth;mic.classList.add('kv-swap');vib(8);
-    cfg.toast(mode==='video'?'Удерживайте, чтобы записать видеосообщение':'Удерживайте, чтобы записать голосовое сообщение')}
+    mic.title=mode==='video'?'Удерживайте — кружок, нажмите — голосовое':'Удерживайте — голосовое, нажмите — кружок';showTip(3800)}
   mic.addEventListener('pointerdown',e=>{
     if(state!=='idle')return;
     e.preventDefault();state='pending';holding=true;gesture=true;pid=e.pointerId;downAt=performance.now();sx=e.clientX;sy=e.clientY;
@@ -1789,7 +1823,7 @@ function attach(o){
     holdT=setTimeout(()=>{if(state==='pending')begin()},HOLD_MS)});
   async function begin(){
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||typeof MediaRecorder==='undefined'){state='idle';holding=false;cfg.toast('Запись здесь недоступна. Откройте в браузере или в Telegram',1);return}
-    state='starting';stopAll();
+    state='starting';hideTip();stopAll();
     {
     try{
       const ok=await start();if(!ok)return;
