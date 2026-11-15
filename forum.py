@@ -13,13 +13,20 @@ KMBP FORUM — вторая часть проекта: форум / соцсет
 from __future__ import annotations
 
 import asyncio
+import html as _html
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import socket
 import time
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlsplit
+from datetime import datetime, timezone
 
+import aiohttp
 from aiohttp import web
 
 try:
@@ -68,6 +75,14 @@ CREATE TABLE IF NOT EXISTS forum_likes(user_id BIGINT NOT NULL, kind CHAR(1) NOT
 CREATE INDEX IF NOT EXISTS forum_likes_target_idx ON forum_likes(kind, target_id);
 CREATE TABLE IF NOT EXISTS forum_follows(follower_id BIGINT NOT NULL, followee_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(follower_id, followee_id));
 CREATE INDEX IF NOT EXISTS forum_follows_followee_idx ON forum_follows(followee_id);
+CREATE TABLE IF NOT EXISTS forum_chat_prefs(
+    user_id BIGINT NOT NULL, peer_id BIGINT NOT NULL, pinned_at TIMESTAMPTZ, muted BOOLEAN NOT NULL DEFAULT FALSE, archived BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY(user_id, peer_id));
+CREATE TABLE IF NOT EXISTS forum_msg_reactions(
+    msg_id BIGINT NOT NULL REFERENCES direct_messages(id) ON DELETE CASCADE, user_id BIGINT NOT NULL, emoji TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(msg_id, user_id));
+CREATE TABLE IF NOT EXISTS forum_msg_posts(
+    msg_id BIGINT PRIMARY KEY REFERENCES direct_messages(id) ON DELETE CASCADE, post_id INT NOT NULL);
 CREATE TABLE IF NOT EXISTS forum_bookmarks(user_id BIGINT NOT NULL, post_id INT NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(user_id, post_id));
 CREATE TABLE IF NOT EXISTS forum_notifs(
     id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, kind TEXT NOT NULL, actor_id BIGINT NOT NULL, post_id INT, comment_id INT,
@@ -476,7 +491,8 @@ async def a_ping(request):
     from support import ensure_chat
     await ensure_chat(uid)
     m = await P().fetchval(
-        "SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)", uid)
+        "SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id) "
+        "AND NOT EXISTS(SELECT 1 FROM forum_chat_prefs p WHERE p.user_id=$1 AND p.peer_id=direct_messages.sender_id AND p.muted)", uid)
     out = {"notifs": n, "msgs": m, "last": await P().fetchval("SELECT COALESCE(max(id),0) FROM forum_notifs WHERE user_id=$1", uid), "new": [], "dm": None}
     after = request.query.get("after")
     if after is not None and after.lstrip("-").isdigit():     # новые непрочитанные с момента прошлой проверки — для баннера/звука на устройстве
@@ -487,7 +503,8 @@ async def a_ping(request):
         out["new"] = [{"id": r["id"], "kind": r["kind"], "actor": (um.get(r["actor_id"]) or ghost(r["actor_id"]))["name"], "actor_id": r["actor_id"],
                        "post_id": r["post_id"], "snippet": r["snippet"] or ""} for r in rows]
     if m and (await get_prefs(uid))["dms"]:
-        sid = await P().fetchval("SELECT sender_id FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL ORDER BY id DESC LIMIT 1", uid)
+        sid = await P().fetchval("SELECT sender_id FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL "
+            "AND NOT EXISTS(SELECT 1 FROM forum_chat_prefs p WHERE p.user_id=$1 AND p.peer_id=direct_messages.sender_id AND p.muted) ORDER BY id DESC LIMIT 1", uid)
         if sid:
             sm = (await users_map([sid])).get(sid) or ghost(sid)
             out["dm"] = {"id": sid, "name": sm["name"]}
@@ -847,10 +864,92 @@ async def a_chats(request):
     unread = {r["sender_id"]: r["c"] for r in await P().fetch(
         "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1", me)}
     um = await users_map([r["peer"] for r in rows])
-    out = [{"user": um[r["peer"]], "last": last_preview(r)[:120], "ts": r["created_at"].timestamp(),
-            "mine": r["sender_id"] == me, "unread": unread.get(r["peer"], 0), "support": r["peer"] == SUPPORT_ID} for r in rows if r["peer"] in um]
-    out.sort(key=lambda x: (not x["support"], -x["ts"]))
+    prefs = {q["peer_id"]: q for q in await P().fetch("SELECT peer_id,pinned_at,muted,archived FROM forum_chat_prefs WHERE user_id=$1", me)}
+    out = []
+    for r in rows:
+        if r["peer"] not in um:
+            continue
+        pf = prefs.get(r["peer"])
+        n = unread.get(r["peer"], 0)
+        muted = bool(pf and pf["muted"])
+        # архив: новое входящее в чате не «без звука» возвращает его в список (как в Telegram)
+        arch = bool(pf and pf["archived"]) and not (n and not muted) and r["peer"] != SUPPORT_ID
+        out.append({"user": um[r["peer"]], "last": last_preview(r)[:120], "ts": r["created_at"].timestamp(),
+                    "mine": r["sender_id"] == me, "unread": n, "support": r["peer"] == SUPPORT_ID,
+                    "pin": pf["pinned_at"].timestamp() if pf and pf["pinned_at"] else 0, "muted": muted, "arch": arch})
+    out.sort(key=lambda x: (not x["support"], -x["pin"], -x["ts"]))
     return J({"chats": out})
+
+
+MAX_PINNED_CHATS = 5
+
+
+@api
+async def a_chat_pref(request):
+    """Закрепить / «без звука» / в архив для диалога. Передаются только меняемые поля: pinned, muted, archived (bool)."""
+    me = request["fuid"]
+    d = await jbody(request)
+    peer = to_int(d.get("peer"))
+    from support import SUPPORT_ID
+    if not peer or peer == me or peer == SUPPORT_ID:
+        raise FErr(400, "bad_peer", "Для этого чата это недоступно")
+    if not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", peer):
+        raise FErr(404, "not_found", "Пользователь не найден")
+    cur = await P().fetchrow("SELECT pinned_at,muted,archived FROM forum_chat_prefs WHERE user_id=$1 AND peer_id=$2", me, peer)
+    pinned_at = cur["pinned_at"] if cur else None
+    muted = bool(cur and cur["muted"])
+    archived = bool(cur and cur["archived"])
+    if "muted" in d:
+        muted = bool(d["muted"])
+    if "archived" in d:
+        archived = bool(d["archived"])
+        if archived:
+            pinned_at = None
+    if "pinned" in d:
+        if d["pinned"]:
+            if pinned_at is None:
+                if await P().fetchval("SELECT count(*) FROM forum_chat_prefs WHERE user_id=$1 AND pinned_at IS NOT NULL", me) >= MAX_PINNED_CHATS:
+                    raise FErr(400, "too_many_pins", "Можно закрепить не больше %d чатов" % MAX_PINNED_CHATS)
+                pinned_at = datetime.now(timezone.utc)
+            archived = False
+        else:
+            pinned_at = None
+    if pinned_at is None and not muted and not archived:
+        await P().execute("DELETE FROM forum_chat_prefs WHERE user_id=$1 AND peer_id=$2", me, peer)
+    else:
+        await P().execute(
+            """INSERT INTO forum_chat_prefs(user_id,peer_id,pinned_at,muted,archived) VALUES($1,$2,$3,$4,$5)
+               ON CONFLICT(user_id,peer_id) DO UPDATE SET pinned_at=EXCLUDED.pinned_at, muted=EXCLUDED.muted, archived=EXCLUDED.archived""",
+            me, peer, pinned_at, muted, archived)
+    return J({"ok": True, "pin": pinned_at.timestamp() if pinned_at else 0, "muted": muted, "arch": archived})
+
+
+@api
+async def a_chats_search(request):
+    """Поиск по тексту сообщений во всех личных чатах пользователя."""
+    me = request["fuid"]
+    q = (request.query.get("q") or "").strip()[:80]
+    if len(q) < 2:
+        return J({"results": []})
+    like = _like(q)
+    rows = await P().fetch(
+        """SELECT id,sender_id,recipient_id,body,created_at FROM direct_messages
+           WHERE (sender_id=$1 OR recipient_id=$1) AND body ILIKE $2
+           AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
+           ORDER BY id DESC LIMIT 40""", me, like)
+    um = await users_map([r["recipient_id"] if r["sender_id"] == me else r["sender_id"] for r in rows])
+    out = []
+    ql = q.lower()
+    for r in rows:
+        peer = r["recipient_id"] if r["sender_id"] == me else r["sender_id"]
+        if peer not in um:
+            continue
+        body = " ".join((r["body"] or "").split())
+        i = max(body.lower().find(ql), 0)
+        st = max(0, i - 35)
+        out.append({"id": r["id"], "user": um[peer], "mine": r["sender_id"] == me, "ts": r["created_at"].timestamp(),
+                    "text": ("…" if st else "") + body[st:st + 140]})
+    return J({"results": out})
 
 
 @api
@@ -859,12 +958,14 @@ async def a_messages(request):
     peer = to_int(request.query.get("peer"))
     if not peer or peer == me:
         raise FErr(400, "bad_peer")
+    bm._viewing[(me, peer)] = time.monotonic()
     await P().execute("UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2 AND read_at IS NULL", me, peer)
     rows = await P().fetch(
-        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,voice_dur,voice_wave,voice_heard,(file_data IS NOT NULL) has_file FROM direct_messages
+        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,voice_dur,voice_wave,voice_heard,
+            reply_to,edited_at,pinned_at,fwd_from,(file_data IS NOT NULL) has_file FROM direct_messages
             WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
             AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
-            ORDER BY id DESC LIMIT 120) q ORDER BY id""", me, peer)
+            ORDER BY id DESC LIMIT $3) q ORDER BY id""", me, peer, min(max(to_int(request.query.get("limit"), 120), 20), 1000))
     um = await users_map([peer])
     by_me, by_peer = await bm.block_state(me, peer)
     typing = time.monotonic() - bm._typing.get((peer, me, 0), 0) < 5
@@ -872,6 +973,49 @@ async def a_messages(request):
                  else "voice" if time.monotonic() - bm._typing.get((peer, me, 1), 0) < 5 else False)
     from support import SUPPORT_ID, mode_of
     extra = {"support_mode": await mode_of(me)} if peer == SUPPORT_ID else {}
+    seen = await P().fetchval("SELECT last_seen FROM users WHERE user_id=$1", peer)
+    online = bool(seen and (datetime.now(timezone.utc) - seen).total_seconds() < 90)
+    # ответы: оригиналы могут лежать за пределами окна из 120 сообщений
+    rids = list({r["reply_to"] for r in rows if r["reply_to"]})
+    replies = {}
+    if rids:
+        for q in await P().fetch(
+                """SELECT id,sender_id,body,file_name,file_mime,(file_data IS NOT NULL) has_file FROM direct_messages
+                   WHERE id=ANY($1::bigint[]) AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))""", rids, me, peer):
+            replies[q["id"]] = {"id": q["id"], "mine": q["sender_id"] == me,
+                                "text": bm.dm_preview(q["body"], q["file_name"], q["file_mime"])[:120] or ("📎 Файл" if q["has_file"] else "")}
+    fwd_names = {}
+    fids = list({r["fwd_from"] for r in rows if r["fwd_from"]})
+    if fids:
+        for q in await P().fetch("SELECT user_id,username,first_name,last_name FROM users WHERE user_id=ANY($1::bigint[])", fids):
+            fwd_names[q["user_id"]] = " ".join(x for x in [q["first_name"], q["last_name"]] if x) or q["username"] or "Пользователь"
+    pins = [{"id": q["id"], "text": bm.dm_preview(q["body"], q["file_name"], q["file_mime"])[:120] or "Сообщение"} for q in await P().fetch(
+        """SELECT id,body,file_name,file_mime FROM direct_messages
+           WHERE pinned_at IS NOT NULL AND ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
+           AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
+           ORDER BY pinned_at DESC LIMIT 20""", me, peer)]
+    rx = {}
+    if rows:
+        for q in await P().fetch(
+                "SELECT msg_id,emoji,count(*) n,bool_or(user_id=$2) mine FROM forum_msg_reactions WHERE msg_id=ANY($1::bigint[]) GROUP BY msg_id,emoji ORDER BY min(created_at)",
+                [r["id"] for r in rows], me):
+            rx.setdefault(q["msg_id"], []).append({"e": q["emoji"], "n": q["n"], "mine": q["mine"]})
+    # ответы на посты ленты: карточка поста внутри пузыря (пост мог быть удалён)
+    pposts = {}
+    if rows:
+        prs = await P().fetch(
+            """SELECT mp.msg_id, mp.post_id, p.user_id, p.title, p.body, p.deleted,
+               (SELECT i.id FROM forum_images i WHERE i.post_id=p.id ORDER BY i.id LIMIT 1) img
+               FROM forum_msg_posts mp LEFT JOIN forum_posts p ON p.id=mp.post_id WHERE mp.msg_id=ANY($1::bigint[])""",
+            [r["id"] for r in rows])
+        pum = await users_map([q["user_id"] for q in prs if q["user_id"]]) if prs else {}
+        for q in prs:
+            if q["user_id"] is None or q["deleted"]:
+                pposts[q["msg_id"]] = {"id": q["post_id"], "gone": True, "title": "", "text": "", "author": "", "img": None}
+            else:
+                pposts[q["msg_id"]] = {"id": q["post_id"], "gone": False, "title": (q["title"] or "")[:120],
+                                       "text": " ".join((q["body"] or "").split())[:140],
+                                       "author": (pum.get(q["user_id"]) or ghost(q["user_id"]))["name"], "img": q["img"]}
     def one(r):
         voice = note = None
         if r["voice_dur"] and r["has_file"]:
@@ -884,7 +1028,20 @@ async def a_messages(request):
         if r["has_file"] and not voice and not note:
             kind, _ = attach_info(r["file_name"] or "", r["file_mime"])
             att = {"url": bm.img_url("dm", r["id"]), "name": r["file_name"] or "Файл", "size": r["file_size"] or 0, "kind": kind}
-        m = {"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or "", "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None}
+        m = {"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or "", "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None,
+             "rts": r["read_at"].timestamp() if r["read_at"] else None}
+        if rx.get(r["id"]):
+            m["rx"] = rx[r["id"]]
+        if r["edited_at"] is not None:
+            m["edited"] = True
+        if r["pinned_at"] is not None:
+            m["pinned"] = True
+        if r["reply_to"]:
+            m["reply"] = replies.get(r["reply_to"]) or {"id": r["reply_to"], "text": "Сообщение удалено", "gone": True}
+        if r["fwd_from"]:
+            m["fwd"] = fwd_names.get(r["fwd_from"], "Пользователь")
+        if pposts.get(r["id"]):
+            m["post"] = pposts[r["id"]]
         if att:
             m["file"] = att
         if voice:
@@ -892,7 +1049,8 @@ async def a_messages(request):
         if note:
             m["note"] = note
         return m
-    return J({"peer": um.get(peer) or ghost(peer), "typing": typing, "recording": recording, "blocked": bool(by_me or by_peer), **extra,
+    return J({"peer": um.get(peer) or ghost(peer), "typing": typing, "recording": recording, "blocked": bool(by_me or by_peer),
+              "blocked_by_me": bool(by_me), "online": online, "seen": seen.timestamp() if seen else None, "pins": pins, **extra,
               "messages": [one(r) for r in rows]})
 
 
@@ -902,7 +1060,7 @@ async def a_message_send(request):
     fdata = fmime = fname = None
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
-        d = {k: form.get(k) for k in ("peer", "text", "voice_dur", "voice_wave", "note_dur")}
+        d = {k: form.get(k) for k in ("peer", "text", "reply_to", "post_id", "voice_dur", "voice_wave", "note_dur")}
         f = form.get("file")
         if f is not None and hasattr(f, "file"):
             fdata = f.file.read() or None
@@ -939,6 +1097,22 @@ async def a_message_send(request):
         raise FErr(403, "blocked", "Сообщения недоступны (блокировка)")
     if not bm.rate_ok(("fdm", me), 0.6):
         raise FErr(429, "too_fast", "Не так быстро")
+    ref_post = None   # ответ на пост ленты: только текст, адресат — автор поста
+    pid = to_int(d.get("post_id"))
+    if pid:
+        if not text or voice or note or attach:
+            raise FErr(400, "bad_message", "Напишите текст ответа")
+        pr = await P().fetchrow("SELECT user_id,title,body FROM forum_posts WHERE id=$1 AND NOT deleted", pid)
+        if not pr:
+            raise FErr(404, "not_found", "Пост не найден или удалён")
+        if pr["user_id"] != peer:
+            raise FErr(400, "bad_message")
+        ref_post = (pid, (pr["title"] or "").strip() or " ".join((pr["body"] or "").split()))
+    reply_to = None
+    rt = to_int(d.get("reply_to"))
+    if rt and await P().fetchval(
+            "SELECT 1 FROM direct_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))", rt, me, peer):
+        reply_to = rt
     from support import SUPPORT_ID, on_user_message
     if (voice or note or attach) and peer == SUPPORT_ID:
         raise FErr(400, "voice_to_support", "Поддержка принимает только текст")
@@ -946,22 +1120,261 @@ async def a_message_send(request):
         vmime, vname, vdur = (voice or note)[:3] if voice else note
         vwave = voice[3] if voice else None
         mid = await P().fetchval(
-            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,voice_dur,voice_wave)
-               VALUES($1,$2,'',$3,$4,$5,$6,$7,$8) RETURNING id""", me, peer, fdata, vmime, vname, len(fdata), vdur, vwave)
+            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,voice_dur,voice_wave,reply_to)
+               VALUES($1,$2,'',$3,$4,$5,$6,$7,$8,$9) RETURNING id""", me, peer, fdata, vmime, vname, len(fdata), vdur, vwave, reply_to)
         asyncio.create_task(bm.push_dm(me, peer, None, "", vname, vmime))
         return J({"ok": True, "id": mid})
     if attach:
         mid = await P().fetchval(
-            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size)
-               VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id""", me, peer, text, fdata, attach[0], attach[1], len(fdata))
+            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,reply_to)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""", me, peer, text, fdata, attach[0], attach[1], len(fdata), reply_to)
         asyncio.create_task(bm.push_dm(me, peer, None, text, attach[1], attach[0]))
         return J({"ok": True, "id": mid})
-    mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id", me, peer, text)
+    mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body,reply_to) VALUES($1,$2,$3,$4) RETURNING id", me, peer, text, reply_to)
+    if ref_post:
+        await P().execute("INSERT INTO forum_msg_posts(msg_id,post_id) VALUES($1,$2) ON CONFLICT DO NOTHING", mid, ref_post[0])
+        asyncio.create_task(bm.push_dm(me, peer, None, "↩ Пост «%s»: %s" % (ref_post[1][:40], text), None, None))
+        return J({"ok": True, "id": mid})
     if peer == SUPPORT_ID:
         asyncio.create_task(on_user_message(me, text, mid))
     else:
         asyncio.create_task(bm.push_dm(me, peer, None, text, None, None))
     return J({"ok": True, "id": mid})
+
+
+# ============================================================================ предпросмотр ссылок в чате
+# Сервер сам скачивает страницу (адрес пользователя сайту не виден), достаёт Open Graph и отдаёт карточку.
+# Защита от SSRF: только http/https на 80/443/8080/8443, адрес проверяется при КАЖДОМ подключении (в т.ч. редиректы),
+# внутренние/локальные/служебные IP запрещены. Лимиты: 6 с, 512 КБ HTML, 800 КБ картинка, 4 загрузки одновременно.
+LP_UA = "Mozilla/5.0 (compatible; KMBPForumLinkPreview/1.0; +preview)"
+LP_PORTS = (None, 80, 443, 8080, 8443)
+LP_HTML_MAX, LP_IMG_MAX = 512 * 1024, 800 * 1024
+LP_TTL, LP_TTL_BAD = 6 * 3600, 600
+LP_IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+_lp_cache: dict = {}      # url -> (ts, dict | None)
+_lp_imgs: dict = {}       # token -> (bytes, mime)
+_lp_busy: dict = {}       # url -> Future (одинаковые запросы не дублируем)
+_lp_rate: dict = {}       # uid -> [ts...]
+_lp_sem = None
+
+
+def lp_ip_ok(ip) -> bool:
+    try:
+        a = ipaddress.ip_address(str(ip).split("%")[0])
+    except ValueError:
+        return False
+    if getattr(a, "ipv4_mapped", None):
+        a = a.ipv4_mapped
+    return a.is_global and not a.is_multicast
+
+
+class _SafeResolver(aiohttp.abc.AbstractResolver):
+    """Резолвит имя и выбрасывает нерезрешённые адреса — проверка ровно там, где идёт подключение (защита от DNS rebinding)."""
+
+    def __init__(self):
+        self._r = aiohttp.ThreadedResolver()
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        res = await self._r.resolve(host, port, family)
+        ok = [a for a in res if lp_ip_ok(a["host"])]
+        if not ok:
+            raise OSError("blocked address")
+        return ok
+
+    async def close(self):
+        await self._r.close()
+
+
+def lp_url_ok(url: str):
+    """Нормализует ссылку и отсекает всё, кроме обычных внешних http(s). Возвращает url или None."""
+    url = (url or "").strip()
+    if not url or len(url) > 2000 or any(c in url for c in " \r\n\t\x00"):
+        return None
+    try:
+        u = urlsplit(url)
+        host, port = u.hostname, u.port
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not host or u.username or u.password or port not in LP_PORTS:
+        return None
+    if host.lower().rstrip(".") in ("localhost", "localhost.localdomain") or host.lower().endswith((".local", ".internal", ".localhost")):
+        return None
+    try:
+        ipaddress.ip_address(host)           # IP-литерал aiohttp не резолвит — проверяем сами
+        if not lp_ip_ok(host):
+            return None
+    except ValueError:
+        pass
+    return url
+
+
+class _OG(HTMLParser):
+    """Достаёт title / description / image / site_name. Останавливается на </head>."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.m, self.title, self._in_title, self.done = {}, "", False, False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title" and not self.title:
+            self._in_title = True
+        elif tag == "meta":
+            a = {k.lower(): (v or "") for k, v in attrs}
+            key = (a.get("property") or a.get("name") or "").lower()
+            if key and a.get("content") and key not in self.m:
+                self.m[key] = a["content"]
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        elif tag == "head":
+            self.done = True
+
+    def handle_data(self, data):
+        if self._in_title and len(self.title) < 300:
+            self.title += data
+
+
+def lp_parse(html_text: str, base: str) -> dict:
+    p = _OG()
+    try:
+        p.feed(html_text)
+        p.close()
+    except Exception:
+        pass
+    m = p.m
+    clean = lambda t, n: " ".join(_html.unescape(str(t or "")).split())[:n]
+    img = m.get("og:image") or m.get("og:image:url") or m.get("twitter:image") or m.get("twitter:image:src") or ""
+    img = urljoin(base, img.strip()) if img.strip() else ""
+    return {"title": clean(m.get("og:title") or m.get("twitter:title") or p.title, 140),
+            "desc": clean(m.get("og:description") or m.get("twitter:description") or m.get("description"), 220),
+            "site": clean(m.get("og:site_name"), 60), "image_src": img}
+
+
+async def _lp_read(resp, limit):
+    buf = bytearray()
+    async for chunk in resp.content.iter_chunked(16384):
+        buf += chunk
+        if len(buf) >= limit:
+            break
+    return bytes(buf[:limit])
+
+
+async def lp_fetch(url: str):
+    """Скачивает страницу и (по возможности) картинку. Возвращает dict-карточку или None."""
+    global _lp_sem
+    if _lp_sem is None:
+        _lp_sem = asyncio.Semaphore(4)
+    async with _lp_sem:
+        conn = aiohttp.TCPConnector(resolver=_SafeResolver(), force_close=True, limit=2)
+        tmo = aiohttp.ClientTimeout(total=6, connect=3)
+        async with aiohttp.ClientSession(connector=conn, timeout=tmo, trust_env=False, headers={"User-Agent": LP_UA, "Accept-Language": "ru,en;q=0.8"}) as ses:
+            async with ses.get(url, max_redirects=3, headers={"Accept": "text/html,application/xhtml+xml"}) as r:
+                final = str(r.url)
+                if r.status != 200 or not lp_url_ok(final):
+                    return None
+                ct = (r.headers.get("Content-Type") or "").lower()
+                if "html" not in ct:
+                    return None
+                raw = await _lp_read(r, LP_HTML_MAX)
+                enc = r.charset or "utf-8"
+            try:
+                text = raw.decode(enc or "utf-8", "replace")
+            except LookupError:
+                text = raw.decode("utf-8", "replace")
+            info = lp_parse(text, final)
+            host = (urlsplit(final).hostname or "").removeprefix("www.")
+            if not info["title"] and not info["desc"]:
+                return None
+            img_url = None
+            src = lp_url_ok(info.pop("image_src"))
+            if src:
+                try:
+                    async with ses.get(src, max_redirects=3, headers={"Accept": "image/*", "Referer": final}) as ir:
+                        mime = (ir.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                        clen = int(ir.headers.get("Content-Length") or 0)
+                        if ir.status == 200 and mime in LP_IMG_MIMES and clen <= LP_IMG_MAX:
+                            data = await _lp_read(ir, LP_IMG_MAX + 1)
+                            if 200 < len(data) <= LP_IMG_MAX:
+                                tok = secrets.token_urlsafe(12)
+                                _lp_imgs[tok] = (data, mime)
+                                while len(_lp_imgs) > 80:
+                                    _lp_imgs.pop(next(iter(_lp_imgs)))
+                                img_url = "/forum/api/lpimg/" + tok
+                except Exception:
+                    pass
+            info.update({"ok": True, "host": host, "img": img_url})
+            return info
+
+
+@api
+async def a_linkpreview(request):
+    me = request["fuid"]
+    now = time.monotonic()
+    hist = [t for t in _lp_rate.get(me, []) if now - t < 60]
+    if len(hist) >= 60:
+        raise FErr(429, "too_fast", "Не так быстро")
+    hist.append(now)
+    _lp_rate[me] = hist
+    if len(_lp_rate) > 3000:
+        _lp_rate.clear()
+    url = lp_url_ok(request.query.get("url"))
+    if not url:
+        return J({"ok": False})
+    hit = _lp_cache.get(url)
+    if hit and now - hit[0] < (LP_TTL if hit[1] else LP_TTL_BAD):
+        if hit[1] and hit[1].get("img") and hit[1]["img"].rsplit("/", 1)[-1] not in _lp_imgs:
+            hit[1]["img"] = None          # картинка вытеснена из кэша — карточка без неё
+        return J(hit[1] or {"ok": False})
+    fut = _lp_busy.get(url)
+    if fut is None:
+        fut = _lp_busy[url] = asyncio.ensure_future(lp_fetch(url))
+    try:
+        res = await asyncio.shield(fut)
+    except Exception:
+        res = None
+    finally:
+        if fut.done():
+            _lp_busy.pop(url, None)
+    _lp_cache[url] = (time.monotonic(), res)
+    while len(_lp_cache) > 500:
+        _lp_cache.pop(next(iter(_lp_cache)))
+    return J(res or {"ok": False})
+
+
+async def a_lpimg(request):
+    hit = _lp_imgs.get(request.match_info.get("tok", ""))
+    if not hit:
+        raise web.HTTPNotFound()
+    return web.Response(body=hit[0], content_type=hit[1], headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+MSG_REACTIONS = ("👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👎")
+
+
+@api
+async def a_message_react(request):
+    """Реакция на сообщение личного чата. Одна реакция на человека: та же — снимает, другая — заменяет. emoji пустой — снять."""
+    me = request["fuid"]
+    d = await jbody(request)
+    mid = to_int(d.get("id"))
+    emoji = str(d.get("emoji") or "").strip()
+    if emoji and emoji not in MSG_REACTIONS:
+        raise FErr(400, "bad_emoji", "Такой реакции нет")
+    if not mid or not await P().fetchval("SELECT 1 FROM direct_messages WHERE id=$1 AND (sender_id=$2 OR recipient_id=$2)", mid, me):
+        raise FErr(404, "not_found", "Сообщение не найдено")
+    if not bm.rate_ok(("frx", me), 0.25):
+        raise FErr(429, "too_fast", "Не так быстро")
+    cur = await P().fetchval("SELECT emoji FROM forum_msg_reactions WHERE msg_id=$1 AND user_id=$2", mid, me)
+    if not emoji or emoji == cur:
+        await P().execute("DELETE FROM forum_msg_reactions WHERE msg_id=$1 AND user_id=$2", mid, me)
+        mine = None
+    else:
+        await P().execute(
+            "INSERT INTO forum_msg_reactions(msg_id,user_id,emoji) VALUES($1,$2,$3) ON CONFLICT(msg_id,user_id) DO UPDATE SET emoji=EXCLUDED.emoji, created_at=now()",
+            mid, me, emoji)
+        mine = emoji
+    return J({"ok": True, "mine": mine})
 
 
 @api
@@ -1028,6 +1441,8 @@ ERR_RU = {
     "bad_image": "Нужна картинка до 5 МБ (JPEG, PNG, WebP)", "too_many_photos": "Не больше 5 скриншотов",
     "slow": "Слишком часто — подождите немного", "forbidden": "Недостаточно прав", "user_not_found": "Пользователь не найден",
     "review_not_found": "Отзыв не найден", "bad_review": "Нельзя оценить себя или оценка неверная", "bad_input": "Неверные данные",
+    "message_not_found": "Сообщение не найдено", "too_long": "Слишком длинное сообщение", "empty": "Сообщение не может быть пустым",
+    "blocked_by_peer": "Пользователь ограничил вам сообщения", "bad_id": "Неверное сообщение",
     "bad_theme": "Неизвестная тема", "bad_accent": "Неверный цвет", "blocked_peer": "Вы заблокировали этого пользователя",
 }
 
@@ -1077,6 +1492,8 @@ def install(app, bot_module):
     r.add_get(A + "/avatar/{uid}", a_avatar)
     r.add_get(A + "/banner/{uid}", a_banner)
     r.add_get(A + "/img/{iid}", a_img)
+    r.add_get(A + "/linkpreview", a_linkpreview)
+    r.add_get(A + "/lpimg/{tok}", a_lpimg)
     r.add_get(A + "/user", a_user)
     r.add_get(A + "/user/list", a_user_list)
     r.add_post(A + "/follow", a_follow)
@@ -1100,9 +1517,17 @@ def install(app, bot_module):
     r.add_get(A + "/ping", a_ping)
     r.add_get(A + "/search", a_search)
     r.add_get(A + "/chats", a_chats)
+    r.add_get(A + "/chats/search", a_chats_search)
+    r.add_post(A + "/chats/pref", a_chat_pref)
     r.add_get(A + "/messages", a_messages)
     r.add_post(A + "/messages", a_message_send)
     r.add_post(A + "/messages/heard", a_voice_heard)
+    r.add_post(A + "/messages/react", a_message_react)
+    # действия с сообщениями — те же обработчики, что и в мини-аппе (изменить, удалить, закрепить, переслать)
+    r.add_post(A + "/messages/edit", bridge("api_message_edit"))
+    r.add_post(A + "/messages/delete", bridge("api_message_delete"))
+    r.add_post(A + "/messages/pin", bridge("api_message_pin"))
+    r.add_post(A + "/messages/forward", bridge("api_message_forward"))
     r.add_post(A + "/typing", a_typing)
     r.add_post(A + "/support/{act}", a_support_act)
     X = A + "/x"

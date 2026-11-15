@@ -4223,6 +4223,11 @@ async def push_dm(sender_id, peer, post_id, body_txt, fname, fmime):
         return
     if time.monotonic() - _viewing.get((peer, sender_id), 0) < 8:
         return
+    try:   # чат «без звука» (форум) — пуш в Telegram не шлём
+        if await pool.fetchval("SELECT 1 FROM forum_chat_prefs WHERE user_id=$1 AND peer_id=$2 AND muted", peer, sender_id):
+            return
+    except Exception:
+        pass
     if not rate_ok(("dmpush", peer, sender_id), 40):
         return
     name = await user_name(sender_id)
