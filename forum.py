@@ -123,7 +123,7 @@ def api(fn=None, *, auth=True):
                 raise
             except Exception:
                 log.exception("forum api failed: %s", request.path)
-                return J({"error": "server", "message": "Ошибка сервера"}, 500)
+                return J({"error": "server", "message": "Что-то пошло не так, попробуйте позже"}, 500)
         return wrapper
     return deco(fn) if fn else deco
 

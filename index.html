@@ -1607,7 +1607,7 @@ const ERR = {
   unauthorized: 'Откройте мини-апп из Telegram', forbidden: 'Нет доступа', slow: 'Не так быстро, подождите пару секунд',
   closed: 'Приём сейчас закрыт', exists: 'Анкета уже на рассмотрении', already_admin: 'Вы уже админ', empty: 'Заполните все поля',
   too_long: 'Слишком длинный текст', stale: 'Это уже неактуально', limit: 'Достигнут лимит', bad_id: 'Неверный ID',
-  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', too_many_photos: 'Можно приложить не больше 5 скриншотов', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_video: 'Видео не подошло: нужен MP4 или WebM до 8 МБ', bad_size: 'Файл пустой или больше 8 МБ', server: 'Ошибка сервера, попробуйте позже',
+  blocked_peer: 'Вы заблокировали этого пользователя', blocked_by_peer: 'Пользователь ограничил вам сообщения', bad_file: 'Такой тип файла отправлять нельзя', too_many: 'Слишком много сохранённых поисков (максимум 20)', too_many_photos: 'Можно приложить не больше 5 скриншотов', bad_image: 'Не удалось принять картинку — попробуйте другую или без неё', bad_video: 'Видео не подошло: нужен MP4 или WebM до 8 МБ', bad_size: 'Файл пустой или больше 8 МБ', server: 'Что-то пошло не так, попробуйте позже',
   project_not_found: 'Проект не найден', too_many_projects: 'Слишком много проектов (максимум 10)', bad_name: 'Название проекта — от 2 символов', bad_link: 'Некорректная ссылка на сайт', user_not_found: 'Пользователь не найден — он должен хотя бы раз открыть приложение', no_owner: 'Укажите владельца (ID или @username)'
 };
 let toastT;
@@ -1930,7 +1930,7 @@ function setUnread(n) {
 async function refreshUnread() { try { const d = await api('/api/unread'); setUnread(d.count); } catch (e) {} }
 async function fail(e) {
   if (e.code === 'subscribe') { await loadMe(); return go('gate', {}, { replace: true }); }
-  toast(ERR[e.code] || (e.code === 'network' ? 'Нет связи с сервером' : 'Не удалось выполнить действие'), 'err');
+  toast(ERR[e.code] || (e.code === 'network' ? 'Нет связи. Проверьте интернет' : 'Не удалось выполнить действие'), 'err');
 }
 const confirmBox = msg => new Promise(res => { if (tg && tg.showConfirm) tg.showConfirm(msg, res); else res(confirm(msg)); });
 function openLink(u) { if (!u) return; if ((/^https:\/\/t\.me\//.test(u) || /^tg:\/\//.test(u)) && tg && tg.openTelegramLink) tg.openTelegramLink(u); else if (tg && tg.openLink) tg.openLink(u); else window.open(u, '_blank'); }

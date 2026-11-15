@@ -594,6 +594,11 @@ nav.bar .plus.on{transform:rotate(135deg)}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
 </style>
+
+<!-- Yandex.RTB -->
+<script>window.yaContextCb=window.yaContextCb||[]</script>
+<script src="https://yandex.ru/ads/system/context.js" async></script>
+
 </head>
 <body>
 <div id="app"></div>
@@ -676,7 +681,7 @@ const BADGE={
 function tags(sb){return (sb||'').split('').map(c=>BADGE[c]||({b:'<span class="tag bad">BAD REP</span>',s:'<span class="tag bad">SCAM</span>'}[c]||'')).join('')}
 function av(u,cls=''){const l=esc((u.name||'?').trim().charAt(0).toUpperCase());return `<span class="av ${cls}" data-href="#/u/${u.id}">${l}${u.av?`<img loading="lazy" src="${BASE}/forum/api/avatar/${u.id}${S.avv?'?v='+S.avv:''}" onerror="this.remove()" alt="">`:''}</span>`}
 async function api(path,o={}){const h={};if(S.token)h.Authorization='Bearer '+S.token;const opt={method:o.method||'GET',headers:h};if(o.form)opt.body=o.form;else if(o.body){h['Content-Type']='application/json';opt.body=JSON.stringify(o.body)}
-  let r;try{r=await fetch(BASE+'/forum/api'+path,opt)}catch(e){throw new Error('Нет соединения с сервером')}
+  let r;try{r=await fetch(BASE+'/forum/api'+path,opt)}catch(e){throw new Error('Нет соединения. Проверьте интернет')}
   let d={};try{d=await r.json()}catch(e){}
   if(r.status===401&&S.token){logout(true);throw new Error('Нужно войти заново')}
   if(!r.ok)throw new Error(d.message||d.error||('Ошибка '+r.status));return d}
@@ -694,9 +699,8 @@ function applyTheme(){const t=ls.get('theme')||'dark';document.documentElement.d
 function logout(silent){if(!silent)api('/auth/logout',{method:'POST'}).catch(()=>{});S.token='';S.me=null;ls.del('token');location.hash='#/login';render()}
 let pollT=null;
 async function viewLogin(el){
-  if(!BASE){el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:var(--dim)">Укажите адрес вашего сервера (например, https://ваш-проект.onrender.com)</p><input class="inp" id="srv" placeholder="https://..." autocapitalize="off"><button class="btn" id="srvOk">Продолжить</button></div>`;$('#srvOk').onclick=()=>{const v=$('#srv').value.trim();if(!/^https?:\/\//.test(v))return toast('Адрес должен начинаться с https://',1);ls.set('base',v);location.reload()};return}
-  el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:#b5b0cf;max-width:320px;margin:0">Форум и соцсеть сообщества. Аккаунт общий с ботом и мини-аппом KMBP EXCHANGE — вход через Telegram, без паролей.</p><button class="btn" id="lgBtn" style="width:100%;max-width:320px;margin-top:10px;height:50px;border-radius:25px">Войти через Telegram</button><div id="lgBox"></div><small style="color:var(--dim);margin-top:14px" id="srvInfo"></small></div>`;
-  $('#srvInfo').innerHTML=`Сервер: ${esc(BASE)} · <a href="#" id="chSrv">сменить</a>`;$('#chSrv').onclick=e=>{e.preventDefault();ls.del('base');const v=prompt('Адрес сервера',BASE);if(v){ls.set('base',v.trim());location.reload()}};
+  if(!BASE){el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:var(--dim);max-width:320px">Приложение собрано неправильно. Скачайте актуальную версию и установите её заново.</p></div>`;return}
+  el.innerHTML=`<div class="login"><div class="logo">KMBP <b>FORUM</b></div><p style="color:#b5b0cf;max-width:320px;margin:0">Форум и соцсеть сообщества. Аккаунт общий с ботом и мини-аппом KMBP EXCHANGE — вход через Telegram, без паролей.</p><button class="btn" id="lgBtn" style="width:100%;max-width:320px;margin-top:10px;height:50px;border-radius:25px">Войти через Telegram</button><div id="lgBox"></div></div>`;
   $('#lgBtn').onclick=async()=>{const b=$('#lgBtn');b.disabled=true;try{const d=await post_('/auth/start');
     $('#lgBox').innerHTML=`<p style="color:var(--dim);margin:14px 0 8px">Нажмите «Открыть Telegram» и подтвердите вход в боте. Если бот не открылся — отправьте ему вручную:</p><div class="code" id="cmd">/start forum_${d.code}</div><div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap"><a class="btn" href="${d.tg}" id="oTg">Открыть Telegram</a><a class="btn ghost" href="${d.link}" target="_blank" rel="noopener">Через браузер</a></div><div class="spin"></div><small style="color:var(--dim)">Жду подтверждения…</small>`;
     $('#cmd').onclick=()=>{try{navigator.clipboard.writeText('/start forum_'+d.code);toast('Скопировано')}catch(e){}};
@@ -718,6 +722,19 @@ function postCard(p,full){
 function mast(big){return `<div class="mast ${big?'':'sm'}"><div class="st"></div><div class="mh"><div class="brand">${big?IC.star:''}<h1>KMBP<b>FORUM</b></h1></div><button class="ib" data-href="#/search/">${IC.search}</button><button class="ib" data-href="#/notif">${IC.bell}<span class="badge bellB" hidden></span></button>${big?'<span class="av" id="hdrAv2"></span>':''}</div></div>`}
 const PILLS=[['feed','#/','home','Главная'],['boards','#/boards','grid','Разделы'],['chats','#/chats','chat','Чаты'],['me','#/me','user','Профиль']];
 
+/* ---------- реклама Яндекс РСЯ ---------- */
+function renderYandexAd(root=document){
+  const slot=root.querySelector('#yandex_rtb_R-A-20422758-2');
+  if(!slot||!slot.isConnected||slot.dataset.rendered==='1')return;
+  if(!window.Ya?.Context?.AdvManager)return;
+  slot.dataset.rendered='1';
+  window.yaContextCb=window.yaContextCb||[];
+  window.yaContextCb.push(()=>{
+    if(!slot.isConnected)return;
+    Ya.Context.AdvManager.render({blockId:'R-A-20422758-2',renderTo:'yandex_rtb_R-A-20422758-2'});
+  });
+}
+
 /* ---------- лента ---------- */
 async function loadPosts(box,params,state){
   const q=new URLSearchParams({...params,offset:state.off});const d=await api('/feed?'+q);
@@ -734,6 +751,7 @@ async function viewFeed(el,p){
   <div class="compose-row glass" data-href="#/new">${IC.pencil}<span>Создать пост…</span>${IC.img}</div>
   <div class="pills">${PILLS.map(([k,h,ic,n])=>`<div class="pill ${k==='feed'?'on':''}" data-href="${h}">${IC[ic]}${n}${k==='chats'?'<span class="badge msgB" hidden></span>':''}</div>`).join('')}</div>
   <div class="hero glass" data-href="#/boards"><div class="bgph"></div><div class="hc"><div class="k"><i>✦</i>KMBP Forum</div><div class="t">Общайся. Делись.<br>Найди своё комьюнити.</div></div><span class="go">${IC.chev}</span></div>
+  <div class="yandex-ad" style="margin:14px 16px;padding:12px;border:1px solid var(--line);border-radius:18px;background:var(--card);overflow:hidden"><div id="yandex_rtb_R-A-20422758-2"></div></div>
   <div class="trend" id="trend" hidden><div class="th"><b>${IC.crown}Актуальное</b><a href="#" data-tab2="top">Смотреть всё ${IC.chev}</a></div><div class="trend-row" id="trendRow"></div></div>
   <div class="tabs">${[['all','Лента'],['top','Популярное'],['follow','Подписки']].map(([k,n])=>`<button class="tab ${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</div><div id="fl"><div class="spin"></div></div>`;
   $$('.tab',el).forEach(b=>b.onclick=()=>{ls.set('tab',b.dataset.tab);viewFeed(el,p)});
@@ -741,7 +759,7 @@ async function viewFeed(el,p){
   api('/feed?tab=top&offset=0').then(d=>{if(!d.posts.length)return;const tr=$('#trend',el);if(tr){tr.hidden=false;$('#trendRow',el).innerHTML=d.posts.slice(0,6).map(tcard).join('')}}).catch(()=>{});
   const box=$('#fl',el);box.innerHTML='';
   const st={off:0,empty:tab==='follow'?'Подпишитесь на авторов — их посты появятся здесь':'Постов пока нет. Напишите первый!'};
-  await loadPosts(box,{tab},st)}
+  await loadPosts(box,{tab},st);renderYandexAd(el)}
 
 /* ---------- разделы ---------- */
 function bIcon(b){const k=BIC[(b.name||'').trim().toLowerCase()];return k?IC[k]:`<span style="font-size:23px;line-height:1">${esc(b.emoji)}</span>`}
@@ -1025,7 +1043,6 @@ function viewSettings(el){
   el.innerHTML=`${head('Настройки')}<div style="padding:0 16px">
   <label class="lbl">Тема</label><div style="display:flex;gap:8px;flex-wrap:wrap">${[['dark','Тёмная'],['amoled','AMOLED'],['light','Светлая']].map(([k,n])=>`<button class="tab ${th===k?'on':''}" data-th="${k}">${n}</button>`).join('')}</div>
   <label class="lbl">Акцентный цвет</label><div class="pal">${PAL.map(c=>`<i style="background:${c}" class="${c.toLowerCase()===ac.toLowerCase()?'on':''}" data-ac="${c}"></i>`).join('')}</div>
-  <label class="lbl">Сервер</label><div style="color:var(--dim);font-size:13px;word-break:break-all">${esc(BASE)}</div>
   <div style="margin-top:26px;display:flex;flex-direction:column;gap:10px"><button class="btn ghost" data-href="#/edit-profile">${sm('pencil',19)}Редактировать профиль</button><button class="btn ghost" data-href="#/blocks">${sm('ban',19)}Чёрный список</button><button class="btn ghost" data-href="#/c/-777">${sm('chat',19)}Поддержка</button><button class="btn bad" id="out">Выйти из аккаунта</button></div>
   <p style="color:var(--dim);font-size:12px;margin-top:22px">KMBP FORUM · аккаунты, профили и личные сообщения общие с ботом KMBP EXCHANGE.</p></div>`;
   $$('[data-th]',el).forEach(b=>b.onclick=()=>{ls.set('theme',b.dataset.th);applyTheme();viewSettings(el)});
@@ -1121,6 +1138,7 @@ async function render(){
     await fn();
     if(my!==rid)return;
     v.innerHTML='';v.classList.remove('enter');void v.offsetWidth;v.classList.add('enter');v.appendChild(t);
+    renderYandexAd(v);
     paintAv('#hdrAv2');chrome();
     if(r==='c'){v.style.overflow='hidden';t.style.height='100%';const lg=$('#log',t);if(lg)lg.scrollTop=lg.scrollHeight}else v.style.overflow='';
   }catch(e){if(my===rid)v.innerHTML=`<div class="empty"><div class="big">${IC.bellbig}</div>${esc(e.message)}<br><br><button class="btn ghost" onclick="render()">Повторить</button></div>`}
