@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS forum_comments(
     id SERIAL PRIMARY KEY, post_id INT NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE, user_id BIGINT NOT NULL, parent_id INT,
     body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), deleted BOOLEAN NOT NULL DEFAULT FALSE);
 CREATE INDEX IF NOT EXISTS forum_comments_post_idx ON forum_comments(post_id, id);
+ALTER TABLE forum_comments ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS forum_likes(user_id BIGINT NOT NULL, kind CHAR(1) NOT NULL, target_id INT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(user_id, kind, target_id));
 CREATE INDEX IF NOT EXISTS forum_likes_target_idx ON forum_likes(kind, target_id);
 CREATE TABLE IF NOT EXISTS forum_follows(follower_id BIGINT NOT NULL, followee_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(follower_id, followee_id));
@@ -99,7 +100,11 @@ CREATE TABLE IF NOT EXISTS forum_reports(
 SEED_BOARDS = [("Новости", "📰", 1, True), ("Общий", "💬", 2, False), ("Вопросы", "❓", 3, False), ("Пиар", "📣", 4, False),
                ("Проекты", "🧩", 5, False), ("Флуд", "🎲", 6, False)]
 
-TITLE_MAX, BODY_MAX, COMMENT_MAX, BIO_MAX, IMG_MAX, IMG_COUNT = 120, 8000, 2000, 500, 4 * 1024 * 1024, 4
+TITLE_MAX, BODY_MAX, COMMENT_MAX, BIO_MAX, IMG_MAX = 120, 8000, 2000, 500, 4 * 1024 * 1024
+# Медиа в постах: альбом до MEDIA_COUNT файлов (фото + видео), видео до VID_MAX, всего на пост до MEDIA_TOTAL
+MEDIA_COUNT, VID_MAX, MEDIA_TOTAL = 10, 20 * 1024 * 1024, 40 * 1024 * 1024
+POST_BODY_MAX = MEDIA_TOTAL + 4 * 1024 * 1024        # лимит тела запроса поста (глобальный client_max_size меньше)
+_VIDEO_BAD_BRANDS = (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif", b"avis")
 IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 _seen_views = {}
 _seen_touch = {}
@@ -348,7 +353,7 @@ async def a_img(request):
     r = await P().fetchrow("SELECT data,mime FROM forum_images WHERE id=$1", to_int(request.match_info.get("iid")))
     if not r:
         raise web.HTTPNotFound()
-    return web.Response(body=bytes(r["data"]), content_type=r["mime"], headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    return _ranged(request, bytes(r["data"]), r["mime"], {"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @api
@@ -517,20 +522,24 @@ POST_SQL = """SELECT p.id,p.user_id,p.board_id,p.title,p.body,p.created_at,p.edi
   (SELECT count(*) FROM forum_comments c WHERE c.post_id=p.id AND NOT c.deleted)::int comments,
   EXISTS(SELECT 1 FROM forum_likes l WHERE l.kind='p' AND l.target_id=p.id AND l.user_id=$1) liked,
   EXISTS(SELECT 1 FROM forum_bookmarks b WHERE b.post_id=p.id AND b.user_id=$1) saved,
-  ARRAY(SELECT i.id FROM forum_images i WHERE i.post_id=p.id ORDER BY i.id) imgs
+  ARRAY(SELECT i.id FROM forum_images i WHERE i.post_id=p.id AND i.mime LIKE 'image/%' ORDER BY i.id) imgs
   FROM forum_posts p"""
 
 
 async def posts_json(rows, viewer, staff=False):
     um = await users_map([r["user_id"] for r in rows])
     boards = {b["id"]: b for b in await P().fetch("SELECT id,name,emoji FROM forum_boards")}
+    media = {}
+    if rows:
+        for m in await P().fetch("SELECT id,post_id,mime,octet_length(data) sz FROM forum_images WHERE post_id=ANY($1::int[]) ORDER BY id", [r["id"] for r in rows]):
+            media.setdefault(m["post_id"], []).append({"id": m["id"], "k": "video" if m["mime"].startswith("video/") else "image", "size": m["sz"]})
     out = []
     for r in rows:
         b = boards.get(r["board_id"])
         out.append({"id": r["id"], "user": um.get(r["user_id"]) or ghost(r["user_id"]), "board": ({"id": b["id"], "name": b["name"], "emoji": b["emoji"]} if b else None),
                     "title": r["title"], "body": r["body"], "ts": r["created_at"].timestamp(), "edited": r["edited_at"] is not None, "pinned": r["pinned"],
                     "views": r["views"], "likes": r["likes"], "comments": r["comments"], "liked": r["liked"], "saved": r["saved"],
-                    "imgs": list(r["imgs"] or []), "mine": r["user_id"] == viewer, "can_edit": r["user_id"] == viewer or staff})
+                    "imgs": list(r["imgs"] or []), "media": media.get(r["id"], []), "mine": r["user_id"] == viewer, "can_edit": r["user_id"] == viewer or staff})
     return out
 
 
@@ -582,31 +591,51 @@ async def a_post_get(request):
         await P().execute("UPDATE forum_posts SET views=views+1 WHERE id=$1", pid)
     post = (await posts_json([r], me, staff))[0]
     crow = await P().fetch(
-        "SELECT c.id,c.user_id,c.parent_id,c.body,c.created_at,c.deleted,"
+        "SELECT c.id,c.user_id,c.parent_id,c.body,c.created_at,c.edited_at,c.deleted,"
         "(SELECT count(*) FROM forum_likes l WHERE l.kind='c' AND l.target_id=c.id)::int likes,"
         "EXISTS(SELECT 1 FROM forum_likes l WHERE l.kind='c' AND l.target_id=c.id AND l.user_id=$2) liked "
         "FROM forum_comments c WHERE c.post_id=$1 ORDER BY c.id LIMIT 600", pid, me)
     um = await users_map([c["user_id"] for c in crow])
     comments = [{"id": c["id"], "user": um.get(c["user_id"]) or ghost(c["user_id"]), "parent": c["parent_id"], "body": "" if c["deleted"] else c["body"],
                  "deleted": c["deleted"], "ts": c["created_at"].timestamp(), "likes": c["likes"], "liked": c["liked"],
-                 "mine": c["user_id"] == me, "can_delete": c["user_id"] == me or staff} for c in crow]
+                 "mine": c["user_id"] == me, "can_delete": c["user_id"] == me or staff,
+                 "edited": c["edited_at"] is not None and not c["deleted"], "can_edit": c["user_id"] == me and not c["deleted"]} for c in crow]
     return J({"post": post, "comments": comments})
 
 
-async def _images_from_form(form):
-    files = []
+def _sniff_media(data, mime):
+    """Тип определяем по содержимому, а не по заголовку клиента. -> (mime, is_video) или None."""
+    if data[4:8] == b"ftyp" and data[8:12] not in _VIDEO_BAD_BRANDS:
+        return "video/mp4", True                      # MP4 / MOV (H.264)
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return "video/webm", True                     # WebM
+    if mime in IMG_MIMES:
+        return mime, False
+    return None
+
+
+async def _images_from_form(form, already=0, already_bytes=0):
+    """Файлы поста (поле img): фото и видео. already / already_bytes — сколько медиа уже есть у поста (при правке)."""
+    files, total = [], already_bytes
     for f in form.getall("img", []):
         if not hasattr(f, "file"):
             continue
         data = f.file.read()
-        mime = getattr(f, "content_type", "") or ""
         if not data:
             continue
-        if len(data) > IMG_MAX or mime not in IMG_MIMES:
-            raise FErr(400, "bad_image", "Картинки: JPEG/PNG/WebP/GIF до 4 МБ")
+        kind = _sniff_media(data, getattr(f, "content_type", "") or "")
+        if not kind:
+            raise FErr(400, "bad_image", "Фото: JPEG/PNG/WebP/GIF до 4 МБ, видео: MP4/WebM до 20 МБ")
+        mime, is_vid = kind
+        if len(data) > (VID_MAX if is_vid else IMG_MAX):
+            raise FErr(400, "bad_video" if is_vid else "bad_image",
+                       "Видео больше 20 МБ — обрежьте длину в редакторе" if is_vid else "Фото больше 4 МБ")
+        total += len(data)
         files.append((data, mime))
-    if len(files) > IMG_COUNT:
-        raise FErr(400, "too_many_images", f"Не больше {IMG_COUNT} картинок")
+    if len(files) + already > MEDIA_COUNT:
+        raise FErr(400, "too_many_images", f"В посте не больше {MEDIA_COUNT} фото и видео")
+    if total > MEDIA_TOTAL:
+        raise FErr(400, "media_too_big", f"Все вложения поста вместе — не больше {MEDIA_TOTAL // 1048576} МБ")
     return files
 
 
@@ -615,13 +644,13 @@ async def a_post_create(request):
     me = request["fuid"]
     if not bm.rate_ok(("fpost", me), 12):
         raise FErr(429, "too_fast", "Не так быстро — подождите несколько секунд")
-    form = await request.post()
+    form = await request.clone(client_max_size=POST_BODY_MAX).post()
     title = str(form.get("title") or "").strip()[:TITLE_MAX]
     body = str(form.get("body") or "").strip()[:BODY_MAX]
     board = to_int(form.get("board_id")) or None
     files = await _images_from_form(form)
     if not body and not files:
-        raise FErr(400, "empty", "Напишите текст или добавьте картинку")
+        raise FErr(400, "empty", "Напишите текст или добавьте фото или видео")
     if board:
         b = await P().fetchrow("SELECT admin_only FROM forum_boards WHERE id=$1", board)
         if not b:
@@ -646,15 +675,28 @@ async def _own_post(me, pid):
 
 @api
 async def a_post_edit(request):
+    """Правка поста. JSON {id,title,body} — только текст; multipart (id,title,body,remove=1,2,3 + img-файлы) — ещё и медиа."""
     me = request["fuid"]
-    d = await jbody(request)
+    if (request.content_type or "").startswith("multipart/"):
+        d = await request.clone(client_max_size=POST_BODY_MAX).post()
+        remove = [to_int(x) for x in str(d.get("remove") or "").split(",") if x.strip()]
+        multipart = True
+    else:
+        d, remove, multipart = await jbody(request), [], False
     pid = to_int(d.get("id"))
     await _own_post(me, pid)
     title = str(d.get("title") or "").strip()[:TITLE_MAX]
     body = str(d.get("body") or "").strip()[:BODY_MAX]
-    if not body and not await P().fetchval("SELECT 1 FROM forum_images WHERE post_id=$1", pid):
+    # сначала проверяем всё, и только потом удаляем/вставляем — при ошибке пост остаётся как был
+    cnt, sz = await P().fetchrow("SELECT count(*)::int, coalesce(sum(octet_length(data)),0)::bigint FROM forum_images WHERE post_id=$1 AND NOT (id=ANY($2::int[]))", pid, remove)
+    files = await _images_from_form(d, cnt, sz) if multipart else []
+    if not body and not files and not cnt:
         raise FErr(400, "empty", "Пост не может быть пустым")
+    if remove:
+        await P().execute("DELETE FROM forum_images WHERE post_id=$1 AND id=ANY($2::int[])", pid, remove)
     await P().execute("UPDATE forum_posts SET title=$2,body=$3,edited_at=now() WHERE id=$1", pid, title, body)
+    for data, mime in files:
+        await P().execute("INSERT INTO forum_images(post_id,data,mime) VALUES($1,$2,$3)", pid, data, mime)
     return J({"ok": True})
 
 
@@ -737,6 +779,31 @@ async def a_comment(request):
     if post["user_id"] != me and post["user_id"] not in got and not (par and par["user_id"] == post["user_id"]):
         await notify(post["user_id"], "comment", me, pid, cid)
     return J({"ok": True, "id": cid})
+
+
+@api
+async def a_comment_edit(request):
+    """Редактирование своего комментария. Ставит edited_at → в ленте «изм.»."""
+    me = request["fuid"]
+    if not bm.rate_ok(("fcomedit", me), 2):
+        raise FErr(429, "too_fast", "Не так быстро")
+    d = await jbody(request)
+    cid = to_int(d.get("id"))
+    body = str(d.get("body") or "").strip()[:COMMENT_MAX]
+    if not body:
+        raise FErr(400, "empty", "Пустой комментарий")
+    r = await P().fetchrow("SELECT user_id,post_id,body FROM forum_comments WHERE id=$1 AND NOT deleted", cid)
+    if not r:
+        raise FErr(404, "not_found", "Комментарий не найден или удалён")
+    if r["user_id"] != me:
+        raise FErr(403, "forbidden", "Можно изменять только свои комментарии")
+    if body != r["body"]:
+        await P().execute("UPDATE forum_comments SET body=$2,edited_at=now() WHERE id=$1", cid, body)
+        _m = lambda t: {m.lower() for m in re.findall(r"@([A-Za-z0-9_]{4,32})", t or "")}
+        fresh = _m(body) - _m(r["body"])               # уведомляем только о НОВЫХ упоминаниях, чтобы не спамить повторно
+        if fresh:
+            await mentions(" ".join("@" + n for n in fresh), me, r["post_id"], cid)
+    return J({"ok": True, "edited": body != r["body"]})
 
 
 @api
@@ -1005,7 +1072,7 @@ async def a_messages(request):
     if rows:
         prs = await P().fetch(
             """SELECT mp.msg_id, mp.post_id, p.user_id, p.title, p.body, p.deleted,
-               (SELECT i.id FROM forum_images i WHERE i.post_id=p.id ORDER BY i.id LIMIT 1) img
+               (SELECT i.id FROM forum_images i WHERE i.post_id=p.id AND i.mime LIKE 'image/%' ORDER BY i.id LIMIT 1) img
                FROM forum_msg_posts mp LEFT JOIN forum_posts p ON p.id=mp.post_id WHERE mp.msg_id=ANY($1::bigint[])""",
             [r["id"] for r in rows])
         pum = await users_map([q["user_id"] for q in prs if q["user_id"]]) if prs else {}
@@ -1506,6 +1573,7 @@ def install(app, bot_module):
     r.add_post(A + "/like", a_like)
     r.add_post(A + "/bookmark", a_bookmark)
     r.add_post(A + "/comment", a_comment)
+    r.add_post(A + "/comment/edit", a_comment_edit)
     r.add_post(A + "/comment/delete", a_comment_delete)
     r.add_post(A + "/report", a_report)
     r.add_post(A + "/board", a_board_save)
