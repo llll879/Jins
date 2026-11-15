@@ -802,15 +802,15 @@ async def a_chats(request):
     from support import SUPPORT_ID, ensure_chat
     await ensure_chat(me)
     rows = await P().fetch(
-        """SELECT DISTINCT ON (peer) peer,body,created_at,sender_id,read_at,file_name FROM (
-            SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,body,created_at,id,sender_id,read_at,file_name
+        """SELECT DISTINCT ON (peer) peer,body,created_at,sender_id,read_at,file_name,voice_dur,file_mime FROM (
+            SELECT CASE WHEN sender_id=$1 THEN recipient_id ELSE sender_id END peer,body,created_at,id,sender_id,read_at,file_name,voice_dur,file_mime
             FROM direct_messages WHERE (sender_id=$1 OR recipient_id=$1)
             AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)) x
             ORDER BY peer,created_at DESC,id DESC LIMIT 150""", me)
     unread = {r["sender_id"]: r["c"] for r in await P().fetch(
         "SELECT sender_id,count(*)::int c FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL GROUP BY 1", me)}
     um = await users_map([r["peer"] for r in rows])
-    out = [{"user": um[r["peer"]], "last": (r["body"] or ("📎 " + (r["file_name"] or "Файл")))[:120], "ts": r["created_at"].timestamp(),
+    out = [{"user": um[r["peer"]], "last": (r["body"] or (("📹 Видеосообщение" if bm.note_mime(r["file_mime"]) else "🎤 Голосовое сообщение") if r["voice_dur"] else "📎 " + (r["file_name"] or "Файл")))[:120], "ts": r["created_at"].timestamp(),
             "mine": r["sender_id"] == me, "unread": unread.get(r["peer"], 0), "support": r["peer"] == SUPPORT_ID} for r in rows if r["peer"] in um]
     out.sort(key=lambda x: (not x["support"], -x["ts"]))
     return J({"chats": out})
@@ -824,27 +824,61 @@ async def a_messages(request):
         raise FErr(400, "bad_peer")
     await P().execute("UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2 AND read_at IS NULL", me, peer)
     rows = await P().fetch(
-        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,(file_data IS NOT NULL) has_file FROM direct_messages
+        """SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,voice_dur,voice_wave,voice_heard,(file_data IS NOT NULL) has_file FROM direct_messages
             WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
             AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
             ORDER BY id DESC LIMIT 120) q ORDER BY id""", me, peer)
     um = await users_map([peer])
     by_me, by_peer = await bm.block_state(me, peer)
     typing = time.monotonic() - bm._typing.get((peer, me, 0), 0) < 5
+    recording = ("video" if time.monotonic() - bm._typing.get((peer, me, 2), 0) < 5
+                 else "voice" if time.monotonic() - bm._typing.get((peer, me, 1), 0) < 5 else False)
     from support import SUPPORT_ID, mode_of
     extra = {"support_mode": await mode_of(me)} if peer == SUPPORT_ID else {}
-    return J({"peer": um.get(peer) or ghost(peer), "typing": typing, "blocked": bool(by_me or by_peer), **extra,
-              "messages": [{"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or ("📎 " + (r["file_name"] or "Вложение") + " (откройте в мини-аппе)" if r["has_file"] else ""),
-                            "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None} for r in rows]})
+    def one(r):
+        voice = note = None
+        if r["voice_dur"] and r["has_file"]:
+            if bm.note_mime(r["file_mime"]):
+                note = {"url": bm.img_url("dm", r["id"]), "dur": r["voice_dur"], "heard": r["voice_heard"] is not None}
+            else:
+                voice = {"url": bm.img_url("dm", r["id"]), "dur": r["voice_dur"], "wave": r["voice_wave"] or "",
+                         "heard": r["voice_heard"] is not None}
+        body = r["body"] or ("" if voice or note else ("📎 " + (r["file_name"] or "Вложение") + " (откройте в мини-аппе)" if r["has_file"] else ""))
+        m = {"id": r["id"], "mine": r["sender_id"] == me, "body": body, "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None}
+        if voice:
+            m["voice"] = voice
+        if note:
+            m["note"] = note
+        return m
+    return J({"peer": um.get(peer) or ghost(peer), "typing": typing, "recording": recording, "blocked": bool(by_me or by_peer), **extra,
+              "messages": [one(r) for r in rows]})
 
 
 @api
 async def a_message_send(request):
     me = request["fuid"]
-    d = await jbody(request)
+    fdata = fmime = None
+    if (request.content_type or "").startswith("multipart/"):
+        form = await request.post()
+        d = {k: form.get(k) for k in ("peer", "text", "voice_dur", "voice_wave", "note_dur")}
+        f = form.get("file")
+        if f is not None and hasattr(f, "file"):
+            fdata = f.file.read() or None
+            fmime = str(getattr(f, "content_type", "") or "")[:100]
+            if fdata and len(fdata) > bm.MAX_FILE:
+                raise FErr(400, "bad_size", "Запись слишком большая")
+    else:
+        d = await jbody(request)
     peer = to_int(d.get("peer"))
     text = str(d.get("text") or "").strip()[:3000]
-    if not peer or peer == me or not text:
+    try:
+        voice = bm.parse_voice(d, fdata, fmime)
+        note = None if voice else bm.parse_note(d, fdata, fmime)
+    except bm.ApiError:
+        raise FErr(400, "bad_voice", "Не удалось отправить запись")
+    if voice or note:
+        text = ""
+    if not peer or peer == me or (not text and not voice and not note):
         raise FErr(400, "bad_message")
     if not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", peer):
         raise FErr(404, "not_found", "Пользователь не найден")
@@ -853,13 +887,33 @@ async def a_message_send(request):
         raise FErr(403, "blocked", "Сообщения недоступны (блокировка)")
     if not bm.rate_ok(("fdm", me), 0.6):
         raise FErr(429, "too_fast")
-    mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id", me, peer, text)
     from support import SUPPORT_ID, on_user_message
+    if (voice or note) and peer == SUPPORT_ID:
+        raise FErr(400, "voice_to_support", "Поддержка принимает только текст")
+    if voice or note:
+        vmime, vname, vdur = (voice or note)[:3] if voice else note
+        vwave = voice[3] if voice else None
+        mid = await P().fetchval(
+            """INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,voice_dur,voice_wave)
+               VALUES($1,$2,'',$3,$4,$5,$6,$7,$8) RETURNING id""", me, peer, fdata, vmime, vname, len(fdata), vdur, vwave)
+        asyncio.create_task(bm.push_dm(me, peer, None, "", vname, vmime))
+        return J({"ok": True, "id": mid})
+    mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body) VALUES($1,$2,$3) RETURNING id", me, peer, text)
     if peer == SUPPORT_ID:
         asyncio.create_task(on_user_message(me, text, mid))
     else:
         asyncio.create_task(bm.push_dm(me, peer, None, text, None, None))
     return J({"ok": True, "id": mid})
+
+
+@api
+async def a_voice_heard(request):
+    """Получатель начал слушать голосовое — снимаем «непрослушано»."""
+    mid = to_int((await jbody(request)).get("id"))
+    if mid:
+        await P().execute("UPDATE direct_messages SET voice_heard=now() WHERE id=$1 AND recipient_id=$2 AND voice_dur IS NOT NULL AND voice_heard IS NULL",
+                          mid, request["fuid"])
+    return J({"ok": True})
 
 
 @api
@@ -886,9 +940,10 @@ async def a_support_act(request):
 
 @api
 async def a_typing(request):
-    peer = to_int((await jbody(request)).get("peer"))
+    d = await jbody(request)
+    peer = to_int(d.get("peer"))
     if peer:
-        bm._typing[(request["fuid"], peer, 0)] = time.monotonic()
+        bm._typing[(request["fuid"], peer, {"rec": 1, "vid": 2}.get(d.get("kind"), 0))] = time.monotonic()
     return J({"ok": True})
 
 
@@ -989,6 +1044,7 @@ def install(app, bot_module):
     r.add_get(A + "/chats", a_chats)
     r.add_get(A + "/messages", a_messages)
     r.add_post(A + "/messages", a_message_send)
+    r.add_post(A + "/messages/heard", a_voice_heard)
     r.add_post(A + "/typing", a_typing)
     r.add_post(A + "/support/{act}", a_support_act)
     X = A + "/x"

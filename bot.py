@@ -656,6 +656,9 @@ async def init_db():
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_mime TEXT;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_name TEXT;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS file_size INT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS voice_dur INT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS voice_wave TEXT;
+        ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS voice_heard TIMESTAMPTZ;
         CREATE INDEX IF NOT EXISTS direct_messages_unread_idx ON direct_messages(recipient_id) WHERE read_at IS NULL;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS reply_to BIGINT;
         ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
@@ -3755,6 +3758,10 @@ async def api_img(request):
         if not row or not row["file_data"]:
             raise web.HTTPNotFound()
         hdr = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+        if voice_mime(row["file_mime"]) and (row["file_name"] or "").startswith("voice."):
+            return ranged_audio(request, bytes(row["file_data"]), voice_mime(row["file_mime"]), hdr)
+        if note_mime(row["file_mime"]) and (row["file_name"] or "").startswith("circle."):
+            return ranged_audio(request, bytes(row["file_data"]), note_mime(row["file_mime"]), hdr)
         if row["file_mime"] in IMG_MIMES:
             ctype = row["file_mime"]
         else:
@@ -4004,6 +4011,73 @@ async def posts_by_ids(ids):
 IMG_MIMES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 BAD_EXT = {"exe", "apk", "bat", "cmd", "scr", "msi", "jar", "com", "vbs", "ps1", "sh", "dmg", "lnk", "pif", "js"}
 MAX_FILE = 8 * 1024 * 1024
+# голосовые сообщения: формат/длина/волна. Волна — 8..128 символов 0-9a-v (32 уровня громкости на столбик)
+VOICE_MIMES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3",
+               "audio/aac": "aac", "audio/wav": "wav", "audio/x-m4a": "m4a"}
+MAX_VOICE_MS = 10 * 60 * 1000
+MIN_VOICE_MS = 500
+_VOICE_WAVE_RE = re.compile(r"[0-9a-v]{8,128}")
+
+
+def voice_mime(m):
+    """Нормализует mime записи (убирает ;codecs=…); None — не наш формат."""
+    m = str(m or "").split(";")[0].strip().lower()
+    return m if m in VOICE_MIMES else None
+
+
+# «кружки» (видеосообщения): mp4/webm до минуты, лежат в тех же колонках (voice_dur — длительность)
+NOTE_MIMES = {"video/mp4": "mp4", "video/webm": "webm"}
+MAX_NOTE_MS = 61 * 1000
+MIN_NOTE_MS = 800
+
+
+def note_mime(m):
+    m = str(m or "").split(";")[0].strip().lower()
+    return m if m in NOTE_MIMES else None
+
+
+def parse_note(d, fdata, fmime):
+    """Если приложен кружок — проверяет и возвращает (mime, имя, мс), иначе None."""
+    if not fdata or not d.get("note_dur"):
+        return None
+    nm = note_mime(fmime)
+    try:
+        dur = int(float(d.get("note_dur")))
+    except (TypeError, ValueError):
+        dur = 0
+    if not nm or dur < MIN_NOTE_MS or dur > MAX_NOTE_MS:
+        raise ApiError(400, "bad_note")
+    return nm, "circle." + NOTE_MIMES[nm], dur
+
+
+def parse_voice(d, fdata, fmime):
+    """Если к сообщению приложена голосовая запись — проверяет поля и возвращает (mime, имя, мс, волна), иначе None."""
+    if not fdata or not d.get("voice_dur"):
+        return None
+    vm = voice_mime(fmime)
+    try:
+        dur = int(float(d.get("voice_dur")))
+    except (TypeError, ValueError):
+        dur = 0
+    wave = str(d.get("voice_wave") or "")
+    if not vm or dur < MIN_VOICE_MS or dur > MAX_VOICE_MS or not _VOICE_WAVE_RE.fullmatch(wave):
+        raise ApiError(400, "bad_voice")
+    return vm, "voice." + VOICE_MIMES[vm], dur, wave
+
+
+def ranged_audio(request, data, mime, headers):
+    """Аудио с поддержкой Range — без него Safari/iOS не играют и не перематывают голосовые."""
+    h = dict(headers, **{"Accept-Ranges": "bytes", "X-Content-Type-Options": "nosniff"})
+    size = len(data)
+    m = re.match(r"bytes=(\d*)-(\d*)$", (request.headers.get("Range") or "").strip())
+    if m and (m.group(1) or m.group(2)):
+        a, b = m.groups()
+        start, end = (max(size - int(b), 0), size - 1) if not a else (int(a), min(int(b), size - 1) if b else size - 1)
+        if start > end or start >= size:
+            return web.Response(status=416, headers={"Content-Range": "bytes */%d" % size})
+        h["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+        return web.Response(status=206, body=data[start:end + 1], content_type=mime, headers=h)
+    return web.Response(body=data, content_type=mime, headers=h)
 
 
 def safe_mime(m, allowed):
@@ -4092,6 +4166,10 @@ def dm_preview(body, fname, fmime):
     if body:
         return body
     if fname:
+        if fname.startswith("voice.") and voice_mime(fmime):
+            return "🎤 Голосовое сообщение"
+        if fname.startswith("circle.") and note_mime(fmime):
+            return "📹 Видеосообщение"
         return "📷 Фото" if fmime in IMG_MIMES else "📎 " + fname
     return ""
 
@@ -4778,7 +4856,7 @@ async def api_messages(request):
     await pool.execute("""UPDATE direct_messages SET read_at=now() WHERE recipient_id=$1 AND sender_id=$2
         AND read_at IS NULL""",uid,peer)
     rows=await pool.fetch("""SELECT * FROM (SELECT id,sender_id,body,created_at,read_at,file_name,file_mime,file_size,deal_id,post_id,
-        reply_to,edited_at,pinned_at,fwd_from,
+        reply_to,edited_at,pinned_at,fwd_from,voice_dur,voice_wave,voice_heard,
         (file_data IS NOT NULL) has_file FROM direct_messages
         WHERE ((sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1))
         AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id)
@@ -4787,6 +4865,7 @@ async def api_messages(request):
     seen=await pool.fetchval("SELECT last_seen FROM users WHERE user_id=$1",peer)
     online=bool(seen and (datetime.now(timezone.utc)-seen).total_seconds()<90)
     typing=time.monotonic()-_typing.get((peer,uid,0),0)<5
+    recording=("video" if time.monotonic()-_typing.get((peer,uid,2),0)<5 else "voice" if time.monotonic()-_typing.get((peer,uid,1),0)<5 else False)
     deals={}
     dids=[r["deal_id"] for r in rows if r["deal_id"]]
     if dids:
@@ -4815,13 +4894,17 @@ async def api_messages(request):
         f=None
         if r["has_file"]:
             f={"url":img_url("dm",r["id"]),"name":r["file_name"] or "file","size":r["file_size"] or 0,"image":r["file_mime"] in IMG_MIMES}
+            if r["voice_dur"] and note_mime(r["file_mime"]):
+                f["note"]={"dur":r["voice_dur"],"heard":r["voice_heard"] is not None}
+            elif r["voice_dur"]:
+                f["voice"]={"dur":r["voice_dur"],"wave":r["voice_wave"] or "","heard":r["voice_heard"] is not None}
         msgs.append({"id":r["id"],"sender":r["sender_id"],"body":r["body"],"created":fmt_dt(r["created_at"]),
             "ts":r["created_at"].timestamp(),"rts":r["read_at"].timestamp() if r["read_at"] else None,
             "read":r["read_at"] is not None,"file":f,"post_id":r["post_id"],"deal":deals.get(r["deal_id"]) if r["deal_id"] else None,
             "edited":r["edited_at"] is not None,"pinned":r["pinned_at"] is not None,
             "reply":(replies.get(r["reply_to"]) or {"id":r["reply_to"],"sender":None,"text":"Сообщение удалено","gone":True}) if r["reply_to"] else None,
             "fwd":fwd_names.get(r["fwd_from"],"Пользователь") if r["fwd_from"] else None})
-    res={"messages":msgs,"pins":pins,"peer_typing":typing,"peer_online":online,"peer_seen":seen.timestamp() if seen else None,"blocked_by_me":by_me,"blocked_me":by_peer}
+    res={"messages":msgs,"pins":pins,"peer_typing":typing,"peer_recording":recording,"peer_online":online,"peer_seen":seen.timestamp() if seen else None,"blocked_by_me":by_me,"blocked_me":by_peer}
     if peer==support.SUPPORT_ID:
         res["support"]=True; res["support_mode"]=await support.mode_of(uid)
     return jr(res)
@@ -4831,7 +4914,7 @@ async def api_typing(request):
     uid=request["u"]["id"]; d=await body(request)
     peer=int(d.get("peer") or 0); post_id=int(d.get("post_id") or 0)
     if peer and peer!=uid:
-        _typing[(uid,peer,0)]=time.monotonic()
+        _typing[(uid,peer,{"rec":1,"vid":2}.get(d.get("kind"),0))]=time.monotonic()   # 1 — «записывает голосовое», 2 — «записывает видеосообщение»
         if len(_typing)>5000: _typing.clear()
     return jr({"ok":True})
 
@@ -4841,7 +4924,7 @@ async def api_message_send(request):
     fdata=fname=fmime=None
     if (request.content_type or "").startswith("multipart/"):
         form=await request.post()
-        d={k:form.get(k) for k in ("peer","text","post_id","reply_to")}
+        d={k:form.get(k) for k in ("peer","text","post_id","reply_to","voice_dur","voice_wave","note_dur")}
         f=form.get("file")
         if f is not None and hasattr(f,"file"):
             fdata=f.file.read()
@@ -4858,6 +4941,17 @@ async def api_message_send(request):
     except (TypeError,ValueError):
         raise ApiError(400,"bad_message")
     msg=str(d.get("text") or "").strip()
+    voice=parse_voice(d,fdata,fmime)
+    note=None if voice else parse_note(d,fdata,fmime)
+    if voice or note:
+        if peer==support.SUPPORT_ID: raise ApiError(400,"voice_to_support")
+        msg=""
+    if voice:
+        fmime,fname,vdur,vwave=voice
+    elif note:
+        fmime,fname,vdur=note; vwave=None
+    else:
+        vdur=vwave=None
     if not peer or peer==uid or (not msg and not fdata) or len(msg)>3000: raise ApiError(400,"bad_message")
     exists=await pool.fetchval("SELECT 1 FROM users WHERE user_id=$1",peer)
     if not exists: raise ApiError(404,"user_not_found")
@@ -4873,8 +4967,8 @@ async def api_message_send(request):
     except (TypeError,ValueError): rt=0
     if rt and await pool.fetchval("""SELECT 1 FROM direct_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))""",rt,uid,peer):
         reply_to=rt
-    row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size,reply_to)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None,reply_to)
+    row=await pool.fetchrow("""INSERT INTO direct_messages(sender_id,recipient_id,body,post_id,file_data,file_mime,file_name,file_size,reply_to,voice_dur,voice_wave)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,created_at""",uid,peer,msg,post_id,fdata,fmime,fname,len(fdata) if fdata else None,reply_to,vdur,vwave)
     _typing.pop((uid,peer,0),None)
     if peer==support.SUPPORT_ID:
         asyncio.create_task(support.on_user_message(uid,msg,row["id"]))
@@ -4891,6 +4985,15 @@ async def _dm_get(uid, mid):
         FROM direct_messages WHERE id=$1 AND (sender_id=$2 OR recipient_id=$2)""",mid,uid)
     if not r: raise ApiError(404,"message_not_found")
     return r
+
+
+async def api_message_heard(request):
+    """Получатель начал слушать голосовое — снимаем «непрослушано» (синхронно на всех устройствах)."""
+    uid=request["u"]["id"]; d=await body(request)
+    try: mid=int(d.get("id") or 0)
+    except (TypeError,ValueError): raise ApiError(400,"bad_id")
+    await pool.execute("UPDATE direct_messages SET voice_heard=now() WHERE id=$1 AND recipient_id=$2 AND voice_dur IS NOT NULL AND voice_heard IS NULL",mid,uid)
+    return jr({"ok":True})
 
 
 async def api_message_edit(request):
@@ -4945,8 +5048,8 @@ async def api_message_forward(request):
     for mid in sorted({int(x) for x in ids[:20] if str(x).isdigit()}):
         r=await _dm_get(uid,mid)
         if r["deal_id"]: continue
-        await pool.execute("""INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,fwd_from)
-            SELECT $1,$2,body,file_data,file_mime,file_name,file_size,COALESCE(fwd_from,sender_id) FROM direct_messages WHERE id=$3""",uid,to,r["id"])
+        await pool.execute("""INSERT INTO direct_messages(sender_id,recipient_id,body,file_data,file_mime,file_name,file_size,fwd_from,voice_dur,voice_wave)
+            SELECT $1,$2,body,file_data,file_mime,file_name,file_size,COALESCE(fwd_from,sender_id),voice_dur,voice_wave FROM direct_messages WHERE id=$3""",uid,to,r["id"])
         n+=1; last=r
     if n:
         asyncio.create_task(push_dm(uid,to,None,"↪️ Пересланное сообщение" if n==1 and not (last["body"] or "") else (last["body"] or "↪️ Пересланное сообщение"),None,None))
@@ -6754,6 +6857,7 @@ def build_web(bot: Bot):
     r.add_get("/api/chats", api_chats)
     r.add_get("/api/messages", api_messages)
     r.add_post("/api/messages", api_message_send)
+    r.add_post("/api/messages/heard", api_message_heard)
     r.add_post("/api/messages/edit", api_message_edit)
     r.add_post("/api/messages/delete", api_message_delete)
     r.add_post("/api/messages/pin", api_message_pin)
