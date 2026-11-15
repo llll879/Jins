@@ -402,7 +402,8 @@ async def a_user_list(request):
 
 
 # ============================================================================ уведомления
-NGROUP = {"like_p": "likes", "like_c": "likes", "comment": "comments", "reply": "comments", "mention": "mentions", "follow": "follows"}
+NGROUP = {"like_p": "likes", "like_c": "likes", "comment": "comments", "reply": "comments", "mention": "mentions", "follow": "follows",
+          "gmention": "mentions", "greply": "mentions"}
 PREF_KEYS = ("likes", "comments", "mentions", "follows", "dms", "tg")
 
 
@@ -412,7 +413,7 @@ async def get_prefs(uid):
     return {k: (bool(r[k]) if r else True) for k in PREF_KEYS}
 
 
-async def notify(to, kind, actor, post_id=None, comment_id=None):
+async def notify(to, kind, actor, post_id=None, comment_id=None, group_id=None, msg_id=None):
     if not to or to == actor:
         return
     pr = await get_prefs(to)
@@ -424,14 +425,19 @@ async def notify(to, kind, actor, post_id=None, comment_id=None):
             to, kind, actor, post_id, comment_id)
         if dup:
             return
-    await P().execute("INSERT INTO forum_notifs(user_id,kind,actor_id,post_id,comment_id) VALUES($1,$2,$3,$4,$5)", to, kind, actor, post_id, comment_id)
+    await P().execute("INSERT INTO forum_notifs(user_id,kind,actor_id,post_id,comment_id,group_id,msg_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
+                      to, kind, actor, post_id, comment_id, group_id, msg_id)
     # дублирование в Telegram: работает и когда приложение закрыто (лайки в Telegram не шлём — слишком шумно)
-    if kind in ("comment", "reply", "mention", "follow") and pr["tg"] and bm._BOT and bm.WEBAPP_URL and bm.rate_ok(("forum_push", to, kind), 120):
+    if kind in ("comment", "reply", "mention", "follow", "gmention", "greply") and pr["tg"] and bm._BOT and bm.WEBAPP_URL and bm.rate_ok(("forum_push", to, kind), 120):
         try:
             who = await bm.user_name(actor)
             what = {"comment": "прокомментировал(а) ваш пост", "reply": "ответил(а) на ваш комментарий", "mention": "упомянул(а) вас",
-                    "follow": "подписался(лась) на вас"}[kind]
-            link = f"{bm.WEBAPP_URL}/forum#/p/{post_id}" if post_id else f"{bm.WEBAPP_URL}/forum#/u/{actor}"
+                    "follow": "подписался(лась) на вас", "gmention": "упомянул(а) вас в чате", "greply": "ответил(а) вам в чате"}[kind]
+            if group_id:
+                gt = await P().fetchval("SELECT title FROM forum_groups WHERE id=$1", group_id)
+                what += " «%s»" % bm.esc((gt or "")[:40])
+            link = (f"{bm.WEBAPP_URL}/forum#/g/{group_id}" if group_id else
+                    f"{bm.WEBAPP_URL}/forum#/p/{post_id}" if post_id else f"{bm.WEBAPP_URL}/forum#/u/{actor}")
             # адрес сервера не пишем в тексте — только кнопка «Открыть»
             from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Открыть", web_app=WebAppInfo(url=link))]]) if link.startswith("https://") else None
@@ -457,10 +463,11 @@ async def mentions(text, actor, post_id, comment_id=None):
 async def a_notifs(request):
     uid = request["fuid"]
     rows = await P().fetch(
-        "SELECT n.id,n.kind,n.actor_id,n.post_id,n.comment_id,n.created_at,n.read,left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80) snippet "
+        "SELECT n.id,n.kind,n.actor_id,n.post_id,n.comment_id,n.group_id,n.created_at,n.read,"
+        "COALESCE(left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80), (SELECT g.title FROM forum_groups g WHERE g.id=n.group_id)) snippet "
         "FROM forum_notifs n LEFT JOIN forum_posts p ON p.id=n.post_id WHERE n.user_id=$1 ORDER BY n.id DESC LIMIT 60", uid)
     um = await users_map([r["actor_id"] for r in rows])
-    return J({"items": [{"id": r["id"], "kind": r["kind"], "actor": um.get(r["actor_id"]) or ghost(r["actor_id"]), "post_id": r["post_id"],
+    return J({"items": [{"id": r["id"], "kind": r["kind"], "actor": um.get(r["actor_id"]) or ghost(r["actor_id"]), "post_id": r["post_id"], "group_id": r["group_id"],
                          "comment_id": r["comment_id"], "ts": r["created_at"].timestamp(), "read": r["read"], "snippet": r["snippet"] or ""} for r in rows]})
 
 
@@ -498,21 +505,26 @@ async def a_ping(request):
     m = await P().fetchval(
         "SELECT count(*) FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL AND NOT EXISTS(SELECT 1 FROM dm_hidden h WHERE h.user_id=$1 AND h.msg_id=direct_messages.id) "
         "AND NOT EXISTS(SELECT 1 FROM forum_chat_prefs p WHERE p.user_id=$1 AND p.peer_id=direct_messages.sender_id AND p.muted)", uid)
+    import forum_groups
+    gn, gtop = await forum_groups.unread_summary(uid)
+    m += gn
     out = {"notifs": n, "msgs": m, "last": await P().fetchval("SELECT COALESCE(max(id),0) FROM forum_notifs WHERE user_id=$1", uid), "new": [], "dm": None}
     after = request.query.get("after")
     if after is not None and after.lstrip("-").isdigit():     # новые непрочитанные с момента прошлой проверки — для баннера/звука на устройстве
         rows = await P().fetch(
-            "SELECT n.id,n.kind,n.actor_id,n.post_id,left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80) snippet "
+            "SELECT n.id,n.kind,n.actor_id,n.post_id,n.group_id,left(p.title || CASE WHEN p.title='' THEN p.body ELSE '' END, 80) snippet "
             "FROM forum_notifs n LEFT JOIN forum_posts p ON p.id=n.post_id WHERE n.user_id=$1 AND NOT n.read AND n.id>$2 ORDER BY n.id DESC LIMIT 5", uid, int(after))
         um = await users_map([r["actor_id"] for r in rows])
         out["new"] = [{"id": r["id"], "kind": r["kind"], "actor": (um.get(r["actor_id"]) or ghost(r["actor_id"]))["name"], "actor_id": r["actor_id"],
-                       "post_id": r["post_id"], "snippet": r["snippet"] or ""} for r in rows]
+                       "post_id": r["post_id"], "group_id": r["group_id"], "snippet": r["snippet"] or ""} for r in rows]
     if m and (await get_prefs(uid))["dms"]:
         sid = await P().fetchval("SELECT sender_id FROM direct_messages WHERE recipient_id=$1 AND read_at IS NULL "
             "AND NOT EXISTS(SELECT 1 FROM forum_chat_prefs p WHERE p.user_id=$1 AND p.peer_id=direct_messages.sender_id AND p.muted) ORDER BY id DESC LIMIT 1", uid)
         if sid:
             sm = (await users_map([sid])).get(sid) or ghost(sid)
             out["dm"] = {"id": sid, "name": sm["name"]}
+    if out["dm"] is None and gtop and (await get_prefs(uid))["dms"]:
+        out["dm"] = gtop
     return J(out)
 
 
@@ -879,7 +891,13 @@ async def a_search(request):
     rows = await P().fetch(f"{POST_SQL} WHERE NOT p.deleted AND (p.title ILIKE $2 OR p.body ILIKE $2) ORDER BY p.id DESC LIMIT 30", me, _like(q))
     ur = await P().fetch("SELECT user_id FROM users WHERE user_id>0 AND (username ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1) ORDER BY last_seen DESC NULLS LAST LIMIT 20", _like(q.lstrip("@")))
     um = await users_map([r["user_id"] for r in ur])
-    return J({"posts": await posts_json(rows, me, await is_staff(me)), "users": [um[r["user_id"]] for r in ur if r["user_id"] in um]})
+    gr = await P().fetch(
+        "SELECT g.id,g.kind,g.title,g.descr,g.board_id,(g.avatar_data IS NOT NULL) av,(SELECT count(*) FROM forum_group_members x WHERE x.group_id=g.id)::int n "
+        "FROM forum_groups g WHERE g.is_public AND NOT g.deleted AND (g.title ILIKE $1 OR g.descr ILIKE $1) ORDER BY n DESC LIMIT 10", _like(q.lstrip("@")))
+    import forum_groups
+    mine = {r["group_id"] for r in await P().fetch("SELECT group_id FROM forum_group_members WHERE user_id=$1", me)}
+    return J({"posts": await posts_json(rows, me, await is_staff(me)), "users": [um[r["user_id"]] for r in ur if r["user_id"] in um],
+              "groups": [forum_groups._item(r, mine) for r in gr]})
 
 
 # ============================================================================ личные сообщения (те же чаты, что в мини-аппе)
@@ -905,10 +923,18 @@ def attach_info(fname, mime):
     return "file", "application/octet-stream"
 
 
+EM_RE = re.compile(r":em(\d{1,9}):")
+
+
+def strip_em(s):
+    """Эмодзи из паков в тексте записаны токеном :em123: — в списках и пушах заменяем на обычный смайлик."""
+    return EM_RE.sub("🙂", s or "")
+
+
 def last_preview(r):
     """Подпись последнего сообщения в списке чатов."""
     if r["body"]:
-        return r["body"]
+        return strip_em(r["body"])
     if r["voice_dur"]:
         return "📹 Видеосообщение" if bm.note_mime(r["file_mime"]) else "🎤 Голосовое сообщение"
     if r["file_name"] or r["file_mime"]:
@@ -945,7 +971,8 @@ async def a_chats(request):
                     "mine": r["sender_id"] == me, "unread": n, "support": r["peer"] == SUPPORT_ID,
                     "pin": pf["pinned_at"].timestamp() if pf and pf["pinned_at"] else 0, "muted": muted, "arch": arch})
     out.sort(key=lambda x: (not x["support"], -x["pin"], -x["ts"]))
-    return J({"chats": out})
+    import forum_groups
+    return J({"chats": out, "groups": await forum_groups.my_groups(me)})
 
 
 MAX_PINNED_CHATS = 5
@@ -975,7 +1002,8 @@ async def a_chat_pref(request):
     if "pinned" in d:
         if d["pinned"]:
             if pinned_at is None:
-                if await P().fetchval("SELECT count(*) FROM forum_chat_prefs WHERE user_id=$1 AND pinned_at IS NOT NULL", me) >= MAX_PINNED_CHATS:
+                if await P().fetchval("SELECT count(*) FROM forum_chat_prefs WHERE user_id=$1 AND pinned_at IS NOT NULL", me) + \
+                        await P().fetchval("SELECT count(*) FROM forum_group_members WHERE user_id=$1 AND pinned_at IS NOT NULL", me) >= MAX_PINNED_CHATS:
                     raise FErr(400, "too_many_pins", "Можно закрепить не больше %d чатов" % MAX_PINNED_CHATS)
                 pinned_at = datetime.now(timezone.utc)
             archived = False
@@ -1016,6 +1044,9 @@ async def a_chats_search(request):
         st = max(0, i - 35)
         out.append({"id": r["id"], "user": um[peer], "mine": r["sender_id"] == me, "ts": r["created_at"].timestamp(),
                     "text": ("…" if st else "") + body[st:st + 140]})
+    import forum_groups
+    out += await forum_groups.search_msgs(me, q, like)
+    out.sort(key=lambda x: -x["ts"])
     return J({"results": out})
 
 
@@ -1067,6 +1098,10 @@ async def a_messages(request):
                 "SELECT msg_id,emoji,count(*) n,bool_or(user_id=$2) mine FROM forum_msg_reactions WHERE msg_id=ANY($1::bigint[]) GROUP BY msg_id,emoji ORDER BY min(created_at)",
                 [r["id"] for r in rows], me):
             rx.setdefault(q["msg_id"], []).append({"e": q["emoji"], "n": q["n"], "mine": q["mine"]})
+    stk = {}
+    if rows:
+        stk = {q["msg_id"]: q["sticker_id"] for q in await P().fetch(
+            "SELECT msg_id,sticker_id FROM forum_msg_stickers WHERE msg_id=ANY($1::bigint[])", [r["id"] for r in rows])}
     # ответы на посты ленты: карточка поста внутри пузыря (пост мог быть удалён)
     pposts = {}
     if rows:
@@ -1109,6 +1144,8 @@ async def a_messages(request):
             m["fwd"] = fwd_names.get(r["fwd_from"], "Пользователь")
         if pposts.get(r["id"]):
             m["post"] = pposts[r["id"]]
+        if stk.get(r["id"]):
+            m["sticker"] = {"id": stk[r["id"]]}
         if att:
             m["file"] = att
         if voice:
@@ -1127,7 +1164,7 @@ async def a_message_send(request):
     fdata = fmime = fname = None
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
-        d = {k: form.get(k) for k in ("peer", "text", "reply_to", "post_id", "voice_dur", "voice_wave", "note_dur")}
+        d = {k: form.get(k) for k in ("peer", "text", "reply_to", "post_id", "voice_dur", "voice_wave", "note_dur", "sticker_id")}
         f = form.get("file")
         if f is not None and hasattr(f, "file"):
             fdata = f.file.read() or None
@@ -1155,8 +1192,18 @@ async def a_message_send(request):
             fname = "file_" + fname
         akind, amime = attach_info(fname, fmime)
         attach = (amime, fname)
+    sticker = None
+    sid = to_int(d.get("sticker_id"))
+    if sid:                                  # стикер из набора: обычное сообщение с подписью «🙂 Стикер» + запись в forum_msg_stickers
+        import forum_groups
+        if text or voice or note or attach or to_int(d.get("post_id")):
+            raise FErr(400, "bad_message")
+        sticker = await forum_groups._sticker_for_send(sid)
+        text = ((sticker["emoji"] + " ") if sticker["emoji"] else "") + "Стикер"
     if not peer or peer == me or (not text and not voice and not note and not attach):
         raise FErr(400, "bad_message")
+    if len(EM_RE.findall(text)) > 40:
+        raise FErr(400, "too_many_emoji", "Не больше 40 эмодзи из паков в одном сообщении")
     if not await P().fetchval("SELECT 1 FROM users WHERE user_id=$1", peer):
         raise FErr(404, "not_found", "Пользователь не найден")
     by_me, by_peer = await bm.block_state(me, peer)
@@ -1181,7 +1228,7 @@ async def a_message_send(request):
             "SELECT 1 FROM direct_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))", rt, me, peer):
         reply_to = rt
     from support import SUPPORT_ID, on_user_message
-    if (voice or note or attach) and peer == SUPPORT_ID:
+    if (voice or note or attach or sticker) and peer == SUPPORT_ID:
         raise FErr(400, "voice_to_support", "Поддержка принимает только текст")
     if voice or note:
         vmime, vname, vdur = (voice or note)[:3] if voice else note
@@ -1198,6 +1245,8 @@ async def a_message_send(request):
         asyncio.create_task(bm.push_dm(me, peer, None, text, attach[1], attach[0]))
         return J({"ok": True, "id": mid})
     mid = await P().fetchval("INSERT INTO direct_messages(sender_id,recipient_id,body,reply_to) VALUES($1,$2,$3,$4) RETURNING id", me, peer, text, reply_to)
+    if sticker:
+        await P().execute("INSERT INTO forum_msg_stickers(msg_id,sticker_id) VALUES($1,$2)", mid, sticker["id"])
     if ref_post:
         await P().execute("INSERT INTO forum_msg_posts(msg_id,post_id) VALUES($1,$2) ON CONFLICT DO NOTHING", mid, ref_post[0])
         asyncio.create_task(bm.push_dm(me, peer, None, "↩ Пост «%s»: %s" % (ref_post[1][:40], text), None, None))
@@ -1205,7 +1254,7 @@ async def a_message_send(request):
     if peer == SUPPORT_ID:
         asyncio.create_task(on_user_message(me, text, mid))
     else:
-        asyncio.create_task(bm.push_dm(me, peer, None, text, None, None))
+        asyncio.create_task(bm.push_dm(me, peer, None, strip_em(text), None, None))
     return J({"ok": True, "id": mid})
 
 
@@ -1597,6 +1646,8 @@ def install(app, bot_module):
     r.add_post(A + "/messages/pin", bridge("api_message_pin"))
     r.add_post(A + "/messages/forward", bridge("api_message_forward"))
     r.add_post(A + "/typing", a_typing)
+    import forum_groups
+    forum_groups.install(r, A)
     r.add_post(A + "/support/{act}", a_support_act)
     X = A + "/x"
     r.add_get(X + "/profile", bridge("api_profile"))
@@ -1618,6 +1669,8 @@ async def start(bot_module):
     global bm
     bm = bot_module
     await bm.pool.execute(DDL)
+    import forum_groups
+    await bm.pool.execute(forum_groups.DDL)        # группы, каналы, стикеры (после forum_boards / forum_notifs / direct_messages)
     if not await bm.pool.fetchval("SELECT 1 FROM forum_boards LIMIT 1"):
         for name, emoji, sort, admin_only in SEED_BOARDS:
             await bm.pool.execute("INSERT INTO forum_boards(name,emoji,sort,admin_only) VALUES($1,$2,$3,$4)", name, emoji, sort, admin_only)
