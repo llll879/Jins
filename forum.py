@@ -193,17 +193,20 @@ async def users_map(ids):
         "SELECT user_id,username,first_name,last_name,bio,accent,created_at,(avatar_data IS NOT NULL OR tg_avatar_data IS NOT NULL OR photo_url IS NOT NULL) av,"
         "(banner_data IS NOT NULL) bn,(banner_mime LIKE 'video/%') bnv FROM users WHERE user_id=ANY($1::bigint[])", ids)
     sb = await bm.staff_badges(ids)
+    import forum_names
+    hn = await forum_names.get_many("user", ids)          # внутренний юзернейм (exg/имя) главнее ника из Telegram
     out = {}
     for r in rows:
+        uname = hn.get(r["user_id"]) or r["username"] or ""
         out[r["user_id"]] = {
-            "id": r["user_id"], "username": r["username"] or "",
-            "name": " ".join(x for x in [r["first_name"], r["last_name"]] if x) or r["username"] or "Пользователь",
+            "id": r["user_id"], "username": uname, "own_name": r["user_id"] in hn,
+            "name": " ".join(x for x in [r["first_name"], r["last_name"]] if x) or uname or "Пользователь",
             "av": bool(r["av"]), "bn": bool(r["bn"]), "bnv": bool(r["bnv"]), "sb": sb.get(r["user_id"], ""), "bio": r["bio"] or "", "accent": r["accent"] or ""}
     return out
 
 
 def ghost(uid):
-    return {"id": uid, "username": "", "name": "Пользователь", "av": False, "bn": False, "bnv": False, "sb": "", "bio": "", "accent": ""}
+    return {"id": uid, "username": "", "own_name": False, "name": "Пользователь", "av": False, "bn": False, "bnv": False, "sb": "", "bio": "", "accent": ""}
 
 
 async def me_json(uid):
@@ -275,9 +278,51 @@ if router is not None:
 async def a_me_update(request):
     uid = request["fuid"]
     d = await jbody(request)
+    import forum_names
+    if "username" in d:                      # внутренний юзернейм: ссылка exg/имя; пустой — остаётся ник из Telegram
+        raw = str(d.get("username") or "").strip()
+        if raw:
+            if not bm.rate_ok(("fname", uid), 3):
+                raise FErr(429, "too_fast", "Не так быстро")
+            await forum_names.put("user", uid, await forum_names.check(raw, "user", uid))
+        else:
+            await forum_names.drop("user", uid)
     if "bio" in d:
         await P().execute("UPDATE users SET bio=$2 WHERE user_id=$1", uid, str(d.get("bio") or "").strip()[:BIO_MAX])
     return J({"me": await me_json(uid)})
+
+
+@api
+async def a_name_check(request):
+    """Свободно ли имя: {ok, name} или {ok:false, msg}. kind=user|group|pack, id — чьё имя проверяем (чтобы своё не считалось занятым)."""
+    import forum_names
+    kind = request.query.get("kind")
+    if kind not in forum_names.KINDS:
+        raise FErr(400, "bad_kind", "Неверный тип")
+    ref = request["fuid"] if kind == "user" else to_int(request.query.get("id"))
+    name = forum_names.clean(request.query.get("name"))
+    err = forum_names.valid(name) or await forum_names.taken_error(name, kind, ref)
+    return J({"ok": not err, "name": name, "msg": err or ""})
+
+
+@api
+async def a_resolve(request):
+    """exg/имя, @имя, +приглашение или полная ссылка → что это за объект и как его открыть."""
+    import forum_names
+    r = await forum_names.resolve(request.query.get("name"))
+    if not r:
+        raise FErr(404, "not_found", "Ссылка не найдена")
+    me = request["fuid"]
+    if r["kind"] == "group":
+        r["member"] = bool(await P().fetchval("SELECT 1 FROM forum_group_members WHERE group_id=$1 AND user_id=$2", r["id"], me))
+        r["public"] = bool(await P().fetchval("SELECT is_public FROM forum_groups WHERE id=$1", r["id"]))
+    return J(r)
+
+
+async def exg_redirect(request):
+    """Короткая ссылка из браузера: /exg/имя → приложение форума, экран «открыть по ссылке»."""
+    from urllib.parse import quote
+    raise web.HTTPFound("/forum#/n/" + quote(request.match_info["name"], safe="+_"))
 
 
 async def _read_image(request, field):
@@ -450,7 +495,8 @@ async def mentions(text, actor, post_id, comment_id=None):
     names = list({m.lower() for m in re.findall(r"@([A-Za-z0-9_]{4,32})", text or "")})[:5]
     if not names:
         return set()
-    rows = await P().fetch("SELECT user_id FROM users WHERE lower(username)=ANY($1::text[])", names)
+    rows = await P().fetch(
+        "SELECT user_id FROM users WHERE lower(username)=ANY($1::text[]) UNION SELECT ref FROM forum_names WHERE kind='user' AND name=ANY($1::text[])", names)
     got = set()
     for r in rows:
         if r["user_id"] != actor:
@@ -889,15 +935,18 @@ async def a_search(request):
     if len(q) < 2:
         return J({"posts": [], "users": []})
     rows = await P().fetch(f"{POST_SQL} WHERE NOT p.deleted AND (p.title ILIKE $2 OR p.body ILIKE $2) ORDER BY p.id DESC LIMIT 30", me, _like(q))
-    ur = await P().fetch("SELECT user_id FROM users WHERE user_id>0 AND (username ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1) ORDER BY last_seen DESC NULLS LAST LIMIT 20", _like(q.lstrip("@")))
+    ur = await P().fetch(
+        "SELECT u.user_id FROM users u LEFT JOIN forum_names fn ON fn.kind='user' AND fn.ref=u.user_id "
+        "WHERE u.user_id>0 AND (u.username ILIKE $1 OR fn.name ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1) ORDER BY u.last_seen DESC NULLS LAST LIMIT 20", _like(q.lstrip("@")))
     um = await users_map([r["user_id"] for r in ur])
     gr = await P().fetch(
         "SELECT g.id,g.kind,g.title,g.descr,g.board_id,(g.avatar_data IS NOT NULL) av,(SELECT count(*) FROM forum_group_members x WHERE x.group_id=g.id)::int n "
-        "FROM forum_groups g WHERE g.is_public AND NOT g.deleted AND (g.title ILIKE $1 OR g.descr ILIKE $1) ORDER BY n DESC LIMIT 10", _like(q.lstrip("@")))
+        "FROM forum_groups g WHERE g.is_public AND NOT g.deleted AND (g.title ILIKE $1 OR g.descr ILIKE $1 OR g.id IN "
+        "(SELECT ref FROM forum_names WHERE kind='group' AND name ILIKE $1)) ORDER BY n DESC LIMIT 10", _like(q.lstrip("@")))
     import forum_groups
     mine = {r["group_id"] for r in await P().fetch("SELECT group_id FROM forum_group_members WHERE user_id=$1", me)}
     return J({"posts": await posts_json(rows, me, await is_staff(me)), "users": [um[r["user_id"]] for r in ur if r["user_id"] in um],
-              "groups": [forum_groups._item(r, mine) for r in gr]})
+              "groups": await forum_groups._items(gr, mine)})
 
 
 # ============================================================================ личные сообщения (те же чаты, что в мини-аппе)
@@ -939,7 +988,7 @@ def last_preview(r):
         return "📹 Видеосообщение" if bm.note_mime(r["file_mime"]) else "🎤 Голосовое сообщение"
     if r["file_name"] or r["file_mime"]:
         k, _ = attach_info(r["file_name"] or "", r["file_mime"])
-        return "📷 Фото" if k == "image" else "🎬 Видео" if k == "video" else "📎 " + (r["file_name"] or "Файл")
+        return ("GIF" if r["file_mime"] == "image/gif" else "📷 Фото") if k == "image" else "🎬 Видео" if k == "video" else "📎 " + (r["file_name"] or "Файл")
     return ""
 
 
@@ -1130,6 +1179,8 @@ async def a_messages(request):
         if r["has_file"] and not voice and not note:
             kind, _ = attach_info(r["file_name"] or "", r["file_mime"])
             att = {"url": bm.img_url("dm", r["id"]), "name": r["file_name"] or "Файл", "size": r["file_size"] or 0, "kind": kind}
+            if r["file_mime"] == "image/gif":
+                att["gif"] = True
         m = {"id": r["id"], "mine": r["sender_id"] == me, "body": r["body"] or "", "ts": r["created_at"].timestamp(), "read": r["read_at"] is not None,
              "rts": r["read_at"].timestamp() if r["read_at"] else None}
         if rx.get(r["id"]):
@@ -1164,7 +1215,7 @@ async def a_message_send(request):
     fdata = fmime = fname = None
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
-        d = {k: form.get(k) for k in ("peer", "text", "reply_to", "post_id", "voice_dur", "voice_wave", "note_dur", "sticker_id")}
+        d = {k: form.get(k) for k in ("peer", "text", "reply_to", "post_id", "voice_dur", "voice_wave", "note_dur", "sticker_id", "gif")}
         f = form.get("file")
         if f is not None and hasattr(f, "file"):
             fdata = f.file.read() or None
@@ -1177,6 +1228,9 @@ async def a_message_send(request):
         d = await jbody(request)
     peer = to_int(d.get("peer"))
     text = str(d.get("text") or "").strip()[:3000]
+    if d.get("gif") and not fdata:              # GIF из «Моих GIF» (s<id>) или из поиска (g<id>) — уходит обычным вложением
+        import forum_gifs
+        fdata, fmime, fname = await forum_gifs.for_send(me, d.get("gif"))
     try:
         voice = bm.parse_voice(d, fdata, fmime)
         note = None if voice else bm.parse_note(d, fdata, fmime)
@@ -1596,6 +1650,8 @@ def install(app, bot_module):
     r.add_get("/forum", page)
     r.add_get("/forum/", page)
     r.add_get("/forum/app.html", page)
+    r.add_get("/exg/{name}", exg_redirect)
+    r.add_get("/forum/exg/{name}", exg_redirect)
     A = "/forum/api"
     r.add_get(A + "/boot", a_boot)
     r.add_post(A + "/auth/start", a_auth_start)
@@ -1610,6 +1666,8 @@ def install(app, bot_module):
     r.add_get(A + "/img/{iid}", a_img)
     r.add_get(A + "/linkpreview", a_linkpreview)
     r.add_get(A + "/lpimg/{tok}", a_lpimg)
+    r.add_get(A + "/resolve", a_resolve)
+    r.add_get(A + "/name/check", a_name_check)
     r.add_get(A + "/user", a_user)
     r.add_get(A + "/user/list", a_user_list)
     r.add_post(A + "/follow", a_follow)
@@ -1648,6 +1706,8 @@ def install(app, bot_module):
     r.add_post(A + "/typing", a_typing)
     import forum_groups
     forum_groups.install(r, A)
+    import forum_gifs
+    forum_gifs.install(r, A)
     r.add_post(A + "/support/{act}", a_support_act)
     X = A + "/x"
     r.add_get(X + "/profile", bridge("api_profile"))
@@ -1669,8 +1729,12 @@ async def start(bot_module):
     global bm
     bm = bot_module
     await bm.pool.execute(DDL)
-    import forum_groups
+    import forum_groups, forum_names
+    await bm.pool.execute(forum_names.DDL)         # внутренние юзернеймы и ссылки exg/имя
     await bm.pool.execute(forum_groups.DDL)        # группы, каналы, стикеры (после forum_boards / forum_notifs / direct_messages)
+    await forum_groups.backfill_names()            # старым наборам стикеров — ссылки
+    import forum_gifs
+    await bm.pool.execute(forum_gifs.DDL)          # «Мои GIF»
     if not await bm.pool.fetchval("SELECT 1 FROM forum_boards LIMIT 1"):
         for name, emoji, sort, admin_only in SEED_BOARDS:
             await bm.pool.execute("INSERT INTO forum_boards(name,emoji,sort,admin_only) VALUES($1,$2,$3,$4)", name, emoji, sort, admin_only)

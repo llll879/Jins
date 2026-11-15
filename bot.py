@@ -4172,6 +4172,8 @@ def dm_preview(body, fname, fmime):
             return "🎤 Голосовое сообщение"
         if fname.startswith("circle.") and note_mime(fmime):
             return "📹 Видеосообщение"
+        if fmime == "image/gif":
+            return "GIF"
         if fmime in IMG_MIMES:
             return "📷 Фото"
         if fmime in ("video/mp4", "video/webm", "video/quicktime"):

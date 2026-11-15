@@ -12,6 +12,8 @@ KMBP FORUM — групповые чаты, каналы (в том числе �
   • Упоминания @username: упомянутый (и тот, кому ответили) получает уведомление и метку «@» в списке чатов.
   • Стикеры и эмодзи-паки: любой пользователь создаёт наборы (картинки), добавляет чужие публичные наборы и
     отправляет стикеры в личные чаты и группы; эмодзи из паков вставляются в текст токеном :em123:.
+  • Ссылки exg/имя (forum_names.py): у публичных групп и каналов — юзернейм, у закрытых — приглашение exg/+токен,
+    у наборов — имя, которое создаётся само. Вступить / добавить набор можно, вставив ссылку.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 import forum as F
+import forum_names as N
 from forum import FErr, J, api, ghost, jbody, to_int, users_map
 
 P = F.P
@@ -76,6 +79,7 @@ MAX_MEMBERS, MAX_OWNED, MAX_JOINED = 2000, 20, 200
 MAX_PINNED_CHATS = 5
 MAX_PINS = 20
 STK_MAX, EMO_MAX = 512 * 1024, 160 * 1024            # размер одной картинки стикера / эмодзи
+STK_ANIM_MAX, EMO_ANIM_MAX = 1024 * 1024, 256 * 1024  # то же для анимации (WebM, анимированный WebP / APNG / GIF)
 STK_PER_PACK, EMO_PER_PACK = 60, 120
 PACKS_OWNED, PACKS_ADDED = 20, 100
 EM_RE = re.compile(r":em(\d{1,9}):")
@@ -155,7 +159,7 @@ def preview(r, with_name=None):
         t = "📹 Видеосообщение" if bm().note_mime(r["file_mime"]) else "🎤 Голосовое сообщение"
     elif r["file_name"] or r["file_mime"]:
         k, _ = F.attach_info(r["file_name"] or "", r["file_mime"])
-        t = "📷 Фото" if k == "image" else "🎬 Видео" if k == "video" else "📎 " + (r["file_name"] or "Файл")
+        t = ("GIF" if r["file_mime"] == "image/gif" else "📷 Фото") if k == "image" else "🎬 Видео" if k == "video" else "📎 " + (r["file_name"] or "Файл")
     else:
         t = ""
     return ((with_name + ": ") if with_name and t else "") + t
@@ -229,9 +233,14 @@ async def _can_dm(me, uid):
     return not (by_me or by_peer)
 
 
-def _item(r, mine_ids=()):
+def _item(r, mine_ids=(), names=None):
     return {"id": r["id"], "kind": r["kind"], "title": r["title"], "descr": (r["descr"] or "")[:160], "av": bool(r["av"]),
-            "members": r["n"], "member": r["id"] in mine_ids, "board": r["board_id"]}
+            "members": r["n"], "member": r["id"] in mine_ids, "board": r["board_id"], "username": (names or {}).get(r["id"])}
+
+
+async def _items(rows, mine_ids=()):
+    names = await N.get_many("group", [r["id"] for r in rows])
+    return [_item(r, mine_ids, names) for r in rows]
 
 
 @api
@@ -253,6 +262,11 @@ async def a_gcreate(request):
         if await P().fetchval("SELECT 1 FROM forum_groups WHERE board_id=$1 AND kind=$2 AND NOT deleted", board, kind):
             raise FErr(409, "exists", "У раздела уже есть %s" % ("канал" if kind == "channel" else "чат"))
         public = True
+    uname = str(d.get("username") or "").strip()
+    if uname:
+        if not public:
+            raise FErr(400, "private_name", "Ссылка-имя бывает только у публичных чатов и каналов")
+        uname = await N.check(uname, "group", 0)
     if not bm().rate_ok(("fgcreate", me), 15):
         raise FErr(429, "too_fast", "Не так быстро")
     if await P().fetchval("SELECT count(*) FROM forum_groups WHERE owner_id=$1 AND NOT deleted", me) >= MAX_OWNED:
@@ -261,6 +275,12 @@ async def a_gcreate(request):
         "INSERT INTO forum_groups(kind,title,descr,owner_id,board_id,is_public,invite) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
         kind, title, descr, me, board, public, secrets.token_hex(5))
     await P().execute("INSERT INTO forum_group_members(group_id,user_id,role) VALUES($1,$2,'owner')", gid, me)
+    if uname:
+        try:
+            await N.put("group", gid, uname)
+        except FErr:                                   # имя успели занять между проверкой и созданием
+            await P().execute("DELETE FROM forum_groups WHERE id=$1", gid)
+            raise
     mem = d.get("members") if isinstance(d.get("members"), list) else []
     ids = [i for i in {to_int(x) for x in mem[:100] if isinstance(x, (int, str))} if i and i != me]
     for uid in ids:
@@ -280,11 +300,13 @@ async def a_gfind(request):
     if code:
         rows = await P().fetch(base + "g.invite=$1", code)
     elif q:
-        rows = await P().fetch(base + "g.is_public AND (g.title ILIKE $1 OR g.descr ILIKE $1) ORDER BY n DESC LIMIT 40", F._like(q))
+        rows = await P().fetch(
+            base + "g.is_public AND (g.title ILIKE $1 OR g.descr ILIKE $1 OR g.id IN (SELECT ref FROM forum_names WHERE kind='group' AND name ILIKE $1)) "
+                   "ORDER BY n DESC LIMIT 40", F._like(q.lstrip("@")))
     else:
         rows = await P().fetch(base + "g.is_public ORDER BY n DESC, g.id DESC LIMIT 40")
     mine = {r["group_id"] for r in await P().fetch("SELECT group_id FROM forum_group_members WHERE user_id=$1", me)}
-    return J({"items": [_item(r, mine) for r in rows]})
+    return J({"items": await _items(rows, mine)})
 
 
 @api
@@ -296,7 +318,7 @@ async def a_gboard(request):
         "SELECT g.id,g.kind,g.title,g.descr,g.board_id,(g.avatar_data IS NOT NULL) av,(SELECT count(*) FROM forum_group_members x WHERE x.group_id=g.id)::int n "
         "FROM forum_groups g WHERE g.board_id=$1 AND NOT g.deleted ORDER BY g.kind", bid)
     mine = {r["group_id"] for r in await P().fetch("SELECT group_id FROM forum_group_members WHERE user_id=$1", me)}
-    return J({"items": [_item(r, mine) for r in rows]})
+    return J({"items": await _items(rows, mine)})
 
 
 @api
@@ -337,6 +359,7 @@ async def a_gleave(request):
             await P().execute("UPDATE forum_groups SET owner_id=$2 WHERE id=$1", gid, nxt)
         else:
             await P().execute("DELETE FROM forum_groups WHERE id=$1", gid)
+            await N.drop("group", gid)
     return J({"ok": True})
 
 
@@ -346,6 +369,7 @@ async def a_gdelete(request):
     gid = to_int((await jbody(request)).get("id"))
     await ctx(me, gid, "owner")
     await P().execute("DELETE FROM forum_groups WHERE id=$1", gid)
+    await N.drop("group", gid)
     return J({"ok": True})
 
 
@@ -363,6 +387,7 @@ async def a_ginfo(request):
     return J({"id": gid, "kind": g["kind"], "title": g["title"], "descr": g["descr"], "public": bool(g["is_public"]), "av": bool(g["av"]),
               "members": n, "member": c.member, "role": c.role, "admin": c.admin, "owner": c.owner,
               "can_post": c.can_post, "board": g["board_id"], "board_name": board, "invite": g["invite"] if c.admin else None,
+              "username": await N.get("group", gid),
               "muted": bool(c.m and c.m["muted"]), "created": g["created_at"].timestamp()})
 
 
@@ -376,10 +401,11 @@ async def a_gmembers(request):
     args = [gid, off]
     where = ""
     if q:
-        where = " AND (u.username ILIKE $3 OR u.first_name ILIKE $3 OR u.last_name ILIKE $3)"
+        where = " AND (u.username ILIKE $3 OR fn.name ILIKE $3 OR u.first_name ILIKE $3 OR u.last_name ILIKE $3)"
         args.append(F._like(q))
     rows = await P().fetch(
-        "SELECT gm.user_id,gm.role FROM forum_group_members gm JOIN users u ON u.user_id=gm.user_id WHERE gm.group_id=$1" + where +
+        "SELECT gm.user_id,gm.role FROM forum_group_members gm JOIN users u ON u.user_id=gm.user_id "
+        "LEFT JOIN forum_names fn ON fn.kind='user' AND fn.ref=gm.user_id WHERE gm.group_id=$1" + where +
         " ORDER BY (gm.role='owner') DESC,(gm.role='admin') DESC,gm.joined_at OFFSET $2 LIMIT 100", *args)
     um = await users_map([r["user_id"] for r in rows])
     return J({"members": [{"user": um.get(r["user_id"]) or ghost(r["user_id"]), "role": r["role"]} for r in rows],
@@ -396,8 +422,9 @@ async def a_gmention(request):
     like = F._like(q) if q else "%"
     rows = await P().fetch(
         """SELECT gm.user_id FROM forum_group_members gm JOIN users u ON u.user_id=gm.user_id
-           WHERE gm.group_id=$1 AND gm.user_id<>$2 AND u.username IS NOT NULL AND u.username<>''
-           AND (u.username ILIKE $3 OR u.first_name ILIKE $3 OR u.last_name ILIKE $3)
+           LEFT JOIN forum_names fn ON fn.kind='user' AND fn.ref=gm.user_id
+           WHERE gm.group_id=$1 AND gm.user_id<>$2 AND COALESCE(fn.name,u.username,'')<>''
+           AND (u.username ILIKE $3 OR fn.name ILIKE $3 OR u.first_name ILIKE $3 OR u.last_name ILIKE $3)
            ORDER BY u.last_seen DESC NULLS LAST LIMIT 8""", gid, me, like)
     um = await users_map([r["user_id"] for r in rows])
     return J({"users": [short_user(um[r["user_id"]]) for r in rows if r["user_id"] in um]})
@@ -414,7 +441,16 @@ async def a_gupdate(request):
         raise FErr(400, "empty", "Введите название")
     descr = str(d.get("descr", c.g["descr"]) or "").strip()[:DESCR_MAX]
     public = bool(d["public"]) if "public" in d and not c.g["board_id"] else bool(c.g["is_public"])
+    uname = None                                  # None — не трогаем, "" — снять, иначе новое имя
+    if "username" in d:
+        uname = str(d.get("username") or "").strip()
+        if uname:
+            if not public:
+                raise FErr(400, "private_name", "Ссылка-имя бывает только у публичных чатов и каналов")
+            uname = await N.check(uname, "group", gid)
     await P().execute("UPDATE forum_groups SET title=$2,descr=$3,is_public=$4 WHERE id=$1", gid, title, descr, public)
+    if uname is not None or not public:
+        await N.put("group", gid, uname if public else "")
     if d.get("reset_invite"):
         await P().execute("UPDATE forum_groups SET invite=$2 WHERE id=$1", gid, secrets.token_hex(5))
     return J({"ok": True})
@@ -589,6 +625,8 @@ async def a_gmessages(request):
         elif r["has_file"]:
             kind, _ = F.attach_info(r["file_name"] or "", r["file_mime"])
             att = {"url": file_url(r["id"]), "name": r["file_name"] or "Файл", "size": r["file_size"] or 0, "kind": kind}
+            if r["file_mime"] == "image/gif":
+                att["gif"] = True
         if rx.get(r["id"]):
             m["rx"] = rx[r["id"]]
         if r["edited_at"] is not None:
@@ -624,8 +662,9 @@ async def _mention_targets(gid, me, text, reply_author):
     got = {}
     if names:
         for r in await P().fetch(
-                """SELECT u.user_id FROM users u JOIN forum_group_members gm ON gm.user_id=u.user_id AND gm.group_id=$1
-                   WHERE lower(u.username)=ANY($2::text[])""", gid, names):
+                """SELECT gm.user_id FROM forum_group_members gm WHERE gm.group_id=$1 AND (
+                     EXISTS(SELECT 1 FROM users u WHERE u.user_id=gm.user_id AND lower(u.username)=ANY($2::text[]))
+                     OR EXISTS(SELECT 1 FROM forum_names n WHERE n.kind='user' AND n.ref=gm.user_id AND n.name=ANY($2::text[])))""", gid, names):
             if r["user_id"] != me:
                 got[r["user_id"]] = "gmention"
     if reply_author and reply_author != me and reply_author not in got:
@@ -654,7 +693,7 @@ async def a_gsend(request):
     B = bm()
     if (request.content_type or "").startswith("multipart/"):
         form = await request.post()
-        d = {k: form.get(k) for k in ("id", "text", "reply_to", "voice_dur", "voice_wave", "note_dur", "sticker_id")}
+        d = {k: form.get(k) for k in ("id", "text", "reply_to", "voice_dur", "voice_wave", "note_dur", "sticker_id", "gif")}
         f = form.get("file")
         if f is not None and hasattr(f, "file"):
             import os
@@ -669,6 +708,9 @@ async def a_gsend(request):
     gid = to_int(d.get("id"))
     c = await ctx(me, gid, "post")
     text = str(d.get("text") or "").strip()[:TEXT_MAX]
+    if d.get("gif") and not fdata:              # GIF из «Моих GIF» (s<id>) или из поиска (g<id>) — уходит обычным вложением
+        import forum_gifs
+        fdata, fmime, fname = await forum_gifs.for_send(me, d.get("gif"))
     try:
         voice = B.parse_voice(d, fdata, fmime)
         note = None if voice else B.parse_note(d, fdata, fmime)
@@ -916,7 +958,9 @@ async def a_gfile(request):
 
 # ============================================================================ стикеры и эмодзи-паки
 def _img_mime(data):
-    """Тип картинки по содержимому: PNG / JPEG / GIF / WebP."""
+    """Тип по содержимому: PNG (в т.ч. APNG) / JPEG / GIF / WebP (в т.ч. анимированный) / WebM (видео-стикер)."""
+    if data[:4] == b"\x1a\x45\xdf\xa3" and b"webm" in data[:64]:
+        return "video/webm"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
@@ -926,6 +970,24 @@ def _img_mime(data):
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
+
+
+def _is_anim(data, mime):
+    """Анимация ли это: WebM и GIF — да; WebP — по флагу анимации в VP8X; PNG — по блоку acTL (APNG) до данных."""
+    if mime in ("video/webm", "image/gif"):
+        return True
+    if mime == "image/webp":
+        return data[12:16] == b"VP8X" and len(data) > 20 and bool(data[20] & 2)
+    if mime == "image/png":
+        pos = 8
+        while pos + 8 <= len(data):
+            n, t = int.from_bytes(data[pos:pos + 4], "big"), data[pos + 4:pos + 8]
+            if t == b"acTL":
+                return True
+            if t in (b"IDAT", b"IEND"):
+                return False
+            pos += 12 + n
+    return False
 
 
 async def _sticker_for_send(sid):
@@ -956,13 +1018,14 @@ async def _packs_json(me, rows, items=True):
         for q in await P().fetch("SELECT pack_id,count(*)::int n,(array_agg(id ORDER BY pos,id))[1] cv FROM forum_stickers WHERE pack_id=ANY($1::int[]) GROUP BY pack_id", ids):
             cnt[q["pack_id"]] = (q["n"], q["cv"])
     um = await users_map([r["owner_id"] for r in rows])
+    pn = await N.get_many("pack", ids)
     added = {q["pack_id"] for q in await P().fetch("SELECT pack_id FROM forum_user_packs WHERE user_id=$1 AND pack_id=ANY($2::int[])", me, ids)} if ids else set()
     out = []
     for r in rows:
         lst = its.get(r["id"], [])
         o = {"id": r["id"], "title": r["title"], "kind": r["kind"], "public": bool(r["is_public"]), "mine": r["owner_id"] == me,
              "owner": (um.get(r["owner_id"]) or ghost(r["owner_id"]))["name"], "added": r["id"] in added,
-             "code": r["code"] if r["owner_id"] == me else None}
+             "username": pn.get(r["id"])}
         if items:
             o["items"], o["n"], o["cover"] = lst, len(lst), (lst[0]["id"] if lst else None)
         else:
@@ -983,22 +1046,18 @@ async def a_stk_mine(request):
 @api
 async def a_stk_find(request):
     me = request["fuid"]
-    q = (request.query.get("q") or "").strip()[:40]
-    code = (request.query.get("code") or "").strip().lower()[:20]
+    q = (request.query.get("q") or "").strip().lstrip("@")[:40]
     kind = request.query.get("kind")
     cols = "p.id,p.owner_id,p.title,p.kind,p.is_public,p.code,p.created_at"
-    if code:
-        rows = await P().fetch(f"SELECT {cols} FROM forum_stickerpacks p WHERE p.code=$1 AND NOT p.deleted", code)
-    else:
-        args, where = [], "p.is_public AND NOT p.deleted AND EXISTS(SELECT 1 FROM forum_stickers s WHERE s.pack_id=p.id)"
-        if q:
-            args.append(F._like(q))
-            where += " AND p.title ILIKE $%d" % len(args)
-        if kind in ("sticker", "emoji"):
-            args.append(kind)
-            where += " AND p.kind=$%d" % len(args)
-        rows = await P().fetch(
-            f"SELECT {cols} FROM forum_stickerpacks p WHERE {where} ORDER BY (SELECT count(*) FROM forum_user_packs u WHERE u.pack_id=p.id) DESC, p.id DESC LIMIT 40", *args)
+    args, where = [], "p.is_public AND NOT p.deleted AND EXISTS(SELECT 1 FROM forum_stickers s WHERE s.pack_id=p.id)"
+    if q:
+        args.append(F._like(q))
+        where += " AND (p.title ILIKE $%d OR p.id IN (SELECT ref FROM forum_names WHERE kind='pack' AND name ILIKE $%d))" % (len(args), len(args))
+    if kind in ("sticker", "emoji"):
+        args.append(kind)
+        where += " AND p.kind=$%d" % len(args)
+    rows = await P().fetch(
+        f"SELECT {cols} FROM forum_stickerpacks p WHERE {where} ORDER BY (SELECT count(*) FROM forum_user_packs u WHERE u.pack_id=p.id) DESC, p.id DESC LIMIT 40", *args)
     return J({"packs": await _packs_json(me, rows, items=False)})
 
 
@@ -1007,8 +1066,9 @@ async def a_stk_pack(request):
     me = request["fuid"]
     r = await _pack(me, to_int(request.query.get("id")))
     if not r["is_public"] and r["owner_id"] != me and not await P().fetchval(
-            "SELECT 1 FROM forum_user_packs WHERE user_id=$1 AND pack_id=$2", me, r["id"]) and request.query.get("code") != r["code"]:
-        raise FErr(403, "forbidden", "Набор закрытый")
+            "SELECT 1 FROM forum_user_packs WHERE user_id=$1 AND pack_id=$2", me, r["id"]) and \
+            N.clean(request.query.get("name")) != (await N.get("pack", r["id"]) or "\0"):
+        raise FErr(403, "forbidden", "Набор закрытый — откройте его по ссылке")
     return J({"pack": (await _packs_json(me, [r]))[0]})
 
 
@@ -1016,18 +1076,19 @@ async def a_stk_pack(request):
 async def a_stk_pack_create(request):
     me = request["fuid"]
     d = await jbody(request)
-    title = str(d.get("title") or "").strip()[:40]
-    if not title:
-        raise FErr(400, "empty", "Введите название набора")
     kind = "emoji" if d.get("kind") == "emoji" else "sticker"
-    if await P().fetchval("SELECT count(*) FROM forum_stickerpacks WHERE owner_id=$1 AND NOT deleted", me) >= PACKS_OWNED:
+    n_own = await P().fetchval("SELECT count(*) FROM forum_stickerpacks WHERE owner_id=$1 AND NOT deleted", me)
+    if n_own >= PACKS_OWNED:
         raise FErr(400, "limit", "Можно создать не больше %d наборов" % PACKS_OWNED)
-    if not bm().rate_ok(("fpackc", me), 5):
+    if not bm().rate_ok(("fpackc", me), 2):
         raise FErr(429, "too_fast", "Не так быстро")
+    # название необязательно: «Мои стикеры», «Мои стикеры 2» … — переименовать можно на странице набора
+    title = str(d.get("title") or "").strip()[:40] or ("Мои эмодзи" if kind == "emoji" else "Мои стикеры") + (" %d" % (n_own + 1) if n_own else "")
     pid = await P().fetchval(
         "INSERT INTO forum_stickerpacks(owner_id,title,kind,is_public,code) VALUES($1,$2,$3,$4,$5) RETURNING id",
         me, title, kind, d.get("public", True) is not False, secrets.token_hex(5))
     await P().execute("INSERT INTO forum_user_packs(user_id,pack_id) VALUES($1,$2) ON CONFLICT DO NOTHING", me, pid)
+    await N.auto("pack", pid)                      # ссылка exg/имя появляется сразу
     return J({"ok": True, "id": pid})
 
 
@@ -1039,7 +1100,10 @@ async def a_stk_pack_update(request):
     title = str(d.get("title", r["title"]) or "").strip()[:40]
     if not title:
         raise FErr(400, "empty", "Введите название набора")
+    uname = await N.check(d["username"], "pack", r["id"]) if str(d.get("username") or "").strip() else None
     await P().execute("UPDATE forum_stickerpacks SET title=$2,is_public=$3 WHERE id=$1", r["id"], title, bool(d["public"]) if "public" in d else bool(r["is_public"]))
+    if uname:
+        await N.put("pack", r["id"], uname)
     return J({"ok": True})
 
 
@@ -1048,6 +1112,7 @@ async def a_stk_pack_delete(request):
     me = request["fuid"]
     r = await _pack(me, to_int((await jbody(request)).get("id")), own=True)
     await P().execute("UPDATE forum_stickerpacks SET deleted=TRUE WHERE id=$1", r["id"])   # старые сообщения со стикером остаются
+    await N.drop("pack", r["id"])
     return J({"ok": True})
 
 
@@ -1062,8 +1127,10 @@ async def a_stk_item_add(request):
     data = f.file.read()
     mime = _img_mime(data) if data else None
     emo = r["kind"] == "emoji"
-    if not mime or len(data) > (EMO_MAX if emo else STK_MAX):
-        raise FErr(400, "bad_image", "Нужна картинка (PNG, WebP, GIF, JPEG) до %d КБ" % ((EMO_MAX if emo else STK_MAX) // 1024))
+    anim = bool(mime) and _is_anim(data, mime)
+    cap = (EMO_ANIM_MAX if anim else EMO_MAX) if emo else (STK_ANIM_MAX if anim else STK_MAX)
+    if not mime or len(data) > cap:
+        raise FErr(400, "bad_image", ("Анимация слишком большая — до %d КБ" if anim else "Нужна картинка (PNG, WebP, GIF, JPEG) или анимация (WebM, WebP, GIF) до %d КБ") % (cap // 1024))
     if await P().fetchval("SELECT count(*) FROM forum_stickers WHERE pack_id=$1", r["id"]) >= (EMO_PER_PACK if emo else STK_PER_PACK):
         raise FErr(400, "limit", "В наборе не больше %d картинок" % (EMO_PER_PACK if emo else STK_PER_PACK))
     emoji = str(form.get("emoji") or "").strip()[:8]
@@ -1071,6 +1138,30 @@ async def a_stk_item_add(request):
         "INSERT INTO forum_stickers(pack_id,data,mime,emoji,pos) VALUES($1,$2,$3,$4,(SELECT coalesce(max(pos),0)+1 FROM forum_stickers WHERE pack_id=$1)) RETURNING id",
         r["id"], data, mime, emoji)
     return J({"ok": True, "id": sid})
+
+
+@api
+async def a_stk_of(request):
+    """Тап по стикеру в чате: какому набору он принадлежит (и имя набора — по нему открывается даже закрытый набор)."""
+    sid = to_int(request.query.get("id"))
+    pid = await P().fetchval("SELECT p.id FROM forum_stickers s JOIN forum_stickerpacks p ON p.id=s.pack_id AND NOT p.deleted WHERE s.id=$1", sid)
+    if not pid:
+        raise FErr(404, "not_found", "Набор этого стикера удалён")
+    return J({"pack": pid, "name": await N.get("pack", pid)})
+
+
+@api
+async def a_stk_item_update(request):
+    """Привязать смайлик к стикеру (он подписывает стикер в списке чатов)."""
+    me = request["fuid"]
+    d = await jbody(request)
+    sid = to_int(d.get("id"))
+    pid = await P().fetchval("SELECT pack_id FROM forum_stickers WHERE id=$1", sid)
+    if not pid:
+        raise FErr(404, "not_found", "Не найдено")
+    await _pack(me, pid, own=True)
+    await P().execute("UPDATE forum_stickers SET emoji=$2 WHERE id=$1", sid, str(d.get("emoji") or "").strip()[:8])
+    return J({"ok": True})
 
 
 @api
@@ -1089,13 +1180,16 @@ async def a_stk_item_delete(request):
 async def a_stk_add(request):
     me = request["fuid"]
     d = await jbody(request)
-    code = str(d.get("code") or "").strip().lower()[:20]
+    link = str(d.get("name") or "").strip()
     pid = to_int(d.get("id"))
-    if code:
-        pid = await P().fetchval("SELECT id FROM forum_stickerpacks WHERE code=$1 AND NOT deleted", code) or 0
+    if link:                                       # exg/имя, @имя или полная ссылка; по ссылке можно добавить и закрытый набор
+        found = await N.resolve(link)
+        if not found or found["kind"] != "pack":
+            raise FErr(404, "not_found", "Набор по этой ссылке не найден")
+        pid = found["id"]
     r = await _pack(me, pid)
-    if not r["is_public"] and not code and r["owner_id"] != me:
-        raise FErr(403, "forbidden", "Набор закрытый — нужен код")
+    if not r["is_public"] and not link and r["owner_id"] != me:
+        raise FErr(403, "forbidden", "Набор закрытый — нужна ссылка")
     if await P().fetchval("SELECT count(*) FROM forum_user_packs WHERE user_id=$1", me) >= PACKS_ADDED:
         raise FErr(400, "limit", "Можно добавить не больше %d наборов" % PACKS_ADDED)
     await P().execute("INSERT INTO forum_user_packs(user_id,pack_id) VALUES($1,$2) ON CONFLICT DO NOTHING", me, r["id"])
@@ -1116,6 +1210,14 @@ async def a_stk_img(request):
         raise web.HTTPNotFound()
     return web.Response(body=bytes(r["data"]), content_type=r["mime"],
                         headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+async def backfill_names():
+    """Наборам, созданным до ссылок exg/имя, выдаём имя."""
+    rows = await P().fetch(
+        "SELECT p.id FROM forum_stickerpacks p WHERE NOT p.deleted AND NOT EXISTS(SELECT 1 FROM forum_names n WHERE n.kind='pack' AND n.ref=p.id)")
+    for r in rows:
+        await N.auto("pack", r["id"])
 
 
 # ============================================================================ подключение
@@ -1154,6 +1256,8 @@ def install(r, A):
     r.add_post(A + "/stickers/pack/update", a_stk_pack_update)
     r.add_post(A + "/stickers/pack/delete", a_stk_pack_delete)
     r.add_post(A + "/stickers/item", a_stk_item_add)
+    r.add_get(A + "/stickers/of", a_stk_of)
+    r.add_post(A + "/stickers/item/update", a_stk_item_update)
     r.add_post(A + "/stickers/item/delete", a_stk_item_delete)
     r.add_post(A + "/stickers/add", a_stk_add)
     r.add_post(A + "/stickers/remove", a_stk_remove)
