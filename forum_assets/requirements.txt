@@ -1,6 +1,0 @@
-aiogram>=3.13,<4
-asyncpg>=0.29
-aiohttp>=3.9
-telegram-premium-emojis>=1.0.0
-telethon>=1.42,<2
-reportlab>=4.2,<5
