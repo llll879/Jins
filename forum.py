@@ -1705,6 +1705,8 @@ def install(app, bot_module):
     forum_groups.install(r, A)
     import forum_gifs
     forum_gifs.install(r, A)
+    import forum_calls
+    forum_calls.install(r, A)                  # звонки: личные и групповые (WebRTC, сигнализация через long-poll)
     r.add_post(A + "/support/{act}", a_support_act)
     X = A + "/x"
     r.add_get(X + "/profile", bridge("api_profile"))
@@ -1735,4 +1737,6 @@ async def start(bot_module):
     if not await bm.pool.fetchval("SELECT 1 FROM forum_boards LIMIT 1"):
         for name, emoji, sort, admin_only in SEED_BOARDS:
             await bm.pool.execute("INSERT INTO forum_boards(name,emoji,sort,admin_only) VALUES($1,$2,$3,$4)", name, emoji, sort, admin_only)
+    import forum_calls
+    forum_calls.start()                            # фоновая уборка звонков (таймаут вызова, отвалившиеся участники)
     log.info("forum ready")
